@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Build workspace packages
+        uses: ./.github/actions/build-packages
+
+      - name: Build backend
+        uses: ./.github/actions/build-backend
+
+      - name: Build frontend
+        uses: ./.github/actions/build-frontend
+        with:
+          next_public_api_url: https://api.remorai.solutions
+          next_public_ws_url: wss://api.remorai.solutions/ws
+          node_env: production
+
+      - name: Test Docker builds
+        run: |
+          echo "🧪 Testing Docker builds for release..."
+
+          # Test backend Docker build
+          if [ -f "apps/backend/Dockerfile" ]; then
+            echo "🐳 Testing backend Docker build..."
+            docker build -f apps/backend/Dockerfile -t test-backend-release .
+            docker rmi test-backend-release
+            echo "✅ Backend Docker build successful!"
+          fi
+
+          # Test frontend Docker build
+          echo "🐳 Testing frontend Docker build..."
+          docker build -f apps/frontend/Dockerfile -t test-frontend-release .
+          docker rmi test-frontend-release
+          echo "✅ Frontend Docker build successful!"
+
+      - name: Setup GitHub CLI
+        run: echo "GitHub CLI ready for release creation"
+
+      - name: Create Release
+        id: create_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Attempting to create release for tag ${{ github.ref_name }}..."
+          if gh release create ${{ github.ref_name }} \
+            --title "Release ${{ github.ref_name }}" \
+            --notes "## What's Changed
+
+          This release includes:
+          - Backend updates
+          - Frontend updates
+          - Utils package updates
+
+          ## Installation
+
+          \`\`\`bash
+          pnpm install
+          \`\`\`
+
+          ## Build
+
+          \`\`\`bash
+          pnpm run build
+          \`\`\`" \
+            --draft=false \
+            --prerelease=false; then
+            echo "release_created=true" >> $GITHUB_OUTPUT
+            echo "✅ Release created successfully"
+          else
+            echo "release_created=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ Release creation failed (likely already exists)"
+          fi
+
+      - name: Handle release result
+        run: |
+          if [ "${{ steps.create_release.outputs.release_created }}" == "true" ]; then
+            echo "✅ Release created successfully"
+          else
+            echo "ℹ️ Release creation failed (likely already exists)"
+            echo "Continuing with build artifacts upload..."
+          fi
+
+      - name: Upload Backend Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-build
+          path: apps/backend/dist/
+          retention-days: 30
+
+      - name: Upload Frontend Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: apps/frontend/.next/standalone/
+          retention-days: 30
+
+      - name: Upload Utils Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: utils-build
+          path: packages/utils/dist/
+          retention-days: 30

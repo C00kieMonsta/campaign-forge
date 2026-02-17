@@ -1,0 +1,41 @@
+name: Test Docker Build
+description: Builds and validates Docker image
+
+inputs:
+  dockerfile:
+    description: Path to Dockerfile
+    required: true
+  image-name:
+    description: Docker image name
+    required: true
+  context:
+    description: Docker build context
+    required: false
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Build Docker image
+      run: |
+        echo "🐳 Building Docker image: ${{ inputs.image-name }}"
+        docker build -f ${{ inputs.dockerfile }} -t ${{ inputs.image-name }} ${{ inputs.context }}
+        echo "✅ Docker build successful!"
+      shell: bash
+
+    - name: Verify image
+      run: |
+        if docker images | grep -q ${{ inputs.image-name }}; then
+          echo "✅ Docker image verified"
+          docker images | grep ${{ inputs.image-name }}
+        else
+          echo "❌ Docker image not found"
+          exit 1
+        fi
+      shell: bash
+
+    - name: Cleanup
+      if: always()
+      run: docker rmi ${{ inputs.image-name }} || true
+      shell: bash
+

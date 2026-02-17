@@ -1,0 +1,267 @@
+---
+description: "Simplicity First - The core principle for all code in this project"
+globs:
+  - "**/*.ts"
+  - "**/*.tsx"
+alwaysApply: true
+---
+
+# 🎯 Simplicity First
+
+**The most important rule: Keep code simple and readable.**
+
+## The Simplicity Test
+
+Before writing code, ask yourself:
+
+1. **Can I explain this in one sentence?**
+   - If not, it's probably too complex
+   - Break it into smaller pieces
+
+2. **Will someone else understand this immediately?**
+   - If you need to explain it, add a comment
+   - Better: refactor to make it obvious
+
+3. **Am I doing this the simplest way?**
+   - Avoid clever solutions
+   - Prefer straightforward code
+
+4. **Could a junior developer maintain this?**
+   - If not, simplify
+   - Good code is obvious code
+
+---
+
+## Avoid Over-Engineering
+
+### Pattern 1: Don't Create Abstractions for "Reuse"
+
+```typescript
+// ❌ Over-engineered factory pattern for "flexibility"
+class DataSourceFactory {
+  static create(type: "api" | "db" | "cache"): IDataSource {
+    const strategies = { api: APIStrategy, db: DBStrategy, cache: CacheStrategy };
+    return new strategies[type]();
+  }
+}
+
+// ✅ Simple: Just call what you need
+const apiData = await fetchFromAPI(url);
+const dbData = await fetchFromDatabase(query);
+```
+
+### Pattern 2: Don't Use Generics When Simple Types Work
+
+```typescript
+// ❌ Over-generic
+function processData<T, K extends keyof T, R extends T[K]>(
+  data: T,
+  key: K,
+  transformer: (value: R) => R
+): R { }
+
+// ✅ Simple and clear
+function formatJobName(job: TJob): string {
+  return job.name.toUpperCase();
+}
+```
+
+### Pattern 3: Don't Create Wrapper Functions for Single Use
+
+```typescript
+// ❌ Unnecessary wrapper
+function useFetchData(url: string) {
+  const [data, setData] = useState(null);
+  useEffect(() => { fetch(url).then(r => r.json()).then(setData); }, [url]);
+  return data;
+}
+
+// ✅ Just fetch at page level
+const data = await repository.getData(url);
+```
+
+### Pattern 4: Don't Over-Parameterize
+
+```typescript
+// ❌ Way too flexible
+function createButton(
+  label?: string,
+  variant?: "primary" | "secondary",
+  size?: "sm" | "md" | "lg",
+  isLoading?: boolean,
+  disabled?: boolean,
+  onClick?: () => void,
+  className?: string,
+  style?: CSSProperties
+) { }
+
+// ✅ Simple - only what's needed
+function Button({ label, onClick }) {
+  return <button onClick={onClick}>{label}</button>;
+}
+```
+
+---
+
+## Simplicity Patterns
+
+### ✅ Good: Small, Focused Functions
+
+```typescript
+// Clear, single responsibility
+function formatDate(date: Date): string {
+  return date.toISOString().split('T')[0];
+}
+
+function isOverdue(date: Date): boolean {
+  return date < new Date();
+}
+
+function formatJob(job: TJob): FormattedJob {
+  return {
+    ...job,
+    dueDate: formatDate(job.dueDate),
+    isOverdue: isOverdue(job.dueDate)
+  };
+}
+```
+
+### ✅ Good: One Thing Per Component
+
+```typescript
+// Component that renders. Nothing else.
+function JobCard({ job }: { job: TJob }) {
+  return (
+    <div>
+      <h3>{job.name}</h3>
+      <p>{formatDate(job.dueDate)}</p>
+    </div>
+  );
+}
+```
+
+### ✅ Good: Guard Clauses
+
+```typescript
+// Early returns make logic obvious
+function processJob(job: TJob | null, userId: string) {
+  if (!job) throw new Error("Job not found");
+  if (job.userId !== userId) throw new Error("Not authorized");
+  if (job.status !== "pending") throw new Error("Job not pending");
+  
+  // Now we know it's safe to proceed
+  return doWork(job);
+}
+```
+
+### ✅ Good: Names That Explain Intent
+
+```typescript
+// What does this do? Obviously.
+function validateEmail(email: string): boolean { }
+function hasUnreadMessages(userId: string): boolean { }
+function formatCurrency(amount: number): string { }
+
+// vs.
+
+function v(e: string): boolean { }  // ❌ What?
+function h(u: string): boolean { }  // ❌ What?
+function f(a: number): string { }   // ❌ What?
+```
+
+---
+
+## Common Over-Engineering Mistakes
+
+| ❌ Over-Engineered | ✅ Simple | Issue |
+|---|---|---|
+| Factory pattern for one use | Direct call | Unnecessary abstraction |
+| Middleware for validation | Direct validate | Extra layer |
+| Custom context for state | Redux hook | Over-complicated |
+| Builder pattern | Direct constructor | Unnecessary complexity |
+| Multiple decorator levels | Single decorator | Hard to understand |
+| Complex HOC wrapper | Simple hook | Confusion |
+| 15-parameter function | 2-3 essential params | Hard to use |
+| Custom error hierarchy | Standard Error types | Overkill |
+| Custom logger wrapper | console.error (or Winston) | Reinventing wheel |
+
+---
+
+## The 50-Line Rule
+
+If a function exceeds 50 lines, it probably does too much. Consider:
+
+```typescript
+// ❌ 150 lines - too much
+async function processJobAndSaveResults(jobId) {
+  // Fetch job
+  // Validate job
+  // Process data
+  // Transform results
+  // Save to DB
+  // Send emails
+  // Update cache
+  // Log events
+  // Handle errors
+  // ... more
+}
+
+// ✅ Simple breakdown
+async function processJob(jobId) {
+  const job = await repository.getJob(jobId);
+  validateJob(job);
+  
+  const results = await doWork(job);
+  await repository.saveResults(jobId, results);
+  
+  return results;
+}
+
+// Each helper is focused
+function validateJob(job): void { }
+async function doWork(job): Promise<Results> { }
+```
+
+---
+
+## Questions to Catch Over-Engineering
+
+Before submitting code, ask:
+
+- ❓ Does this need a class or just a function?
+- ❓ Does this need an interface or just a type?
+- ❓ Does this need a pattern or just straightforward code?
+- ❓ Am I solving today's problem or tomorrow's hypothetical?
+- ❓ Could a junior developer understand this without asking?
+- ❓ Is there duplicate code I could simplify?
+- ❓ Am I using the framework features correctly or inventing my own?
+
+---
+
+## Refactoring for Simplicity
+
+When code feels complex:
+
+1. **Extract to smaller functions** - Break into focused pieces
+2. **Remove conditionals** - Use guard clauses
+3. **Rename for clarity** - Use descriptive names
+4. **Remove comments** - If code needs comments to understand, refactor it
+5. **Test individual pieces** - Each function should be testable in isolation
+6. **Ask: Can this be one level of abstraction?** - Often the answer is yes
+
+---
+
+## Remember
+
+> "The best code is no code. The second-best code is simple code."
+
+- **Simple beats clever** - Every single time
+- **Obvious beats smart** - Your teammates will thank you
+- **Straightforward beats flexible** - Build what you need, not what you might need
+- **Readable beats compact** - Code is read more than written
+
+When you're tempted to be clever, remember: **keep it simple**.
+
+---
+
+**Before you commit:** Does your code pass the simplicity test?

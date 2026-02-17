@@ -1,0 +1,88 @@
+{
+  "name": "material-extractor",
+  "private": true,
+  "packageManager": "pnpm@10.8.0",
+  "engines": {
+    "node": ">=20.0.0 <21.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "prepare": "husky install",
+    "type-check": "pnpm --filter @packages/utils run type-check && pnpm --filter @apps/backend run type-check && pnpm --filter @apps/frontend-vite run type-check",
+    "test": "jest && pnpm --filter @packages/core-client test",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:backend": "pnpm --filter @apps/backend test",
+    "test:frontend": "pnpm --filter @apps/frontend-vite test",
+    "test:packages": "pnpm --filter @packages/utils test && pnpm --filter @packages/types test && pnpm --filter @packages/core-client test",
+    "test:schema-sync": "node scripts/check-schema-sync.js",
+    "ci-test": "pnpm test:coverage && pnpm test:schema-sync",
+    "build:utils": "pnpm --filter @packages/utils build",
+    "build:types": "pnpm --filter @packages/types build",
+    "build:all": "pnpm build:utils && pnpm build:types && pnpm build:backend && pnpm build:frontend",
+    "build:packages": "pnpm build:types && pnpm build:utils",
+    "dev:backend": "pnpm --filter @apps/backend start:dev",
+    "dev:frontend": "pnpm --filter @apps/frontend-vite dev",
+    "build:frontend": "pnpm --filter @apps/frontend-vite build",
+    "build:backend": "pnpm --filter @apps/backend build",
+    "deploy": "bash infrastructure/deploy.sh",
+    "deploy:staging": "STAGE=staging bash infrastructure/deploy.sh",
+    "deploy:production": "STAGE=production bash infrastructure/deploy.sh",
+    "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
+    "lint:fix": "eslint . --ext .ts,.tsx,.js,.jsx --fix",
+    "lint:backend": "pnpm --filter @apps/backend lint",
+    "lint:frontend": "pnpm --filter @apps/frontend-vite lint",
+    "lint:utils": "pnpm --filter @packages/utils lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "clean-install": "find . -name 'node_modules' -type d -prune -exec rm -rf '{}' + && pnpm install"
+  },
+  "lint-staged": {
+    "**/*.{js,ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ]
+  },
+  "pnpm": {
+    "supportedArchitectures": {
+      "libc": [
+        "glibc",
+        "musl"
+      ]
+    },
+    "overrides": {
+      "canvas": "npm:@napi-rs/canvas@0.1.71",
+      "@types/react": "18.3.12",
+      "@types/react-dom": "18.3.1",
+      "@types/node": "20.11.5",
+      "sharp": "0.33.5",
+      "zod": "^3.24.4",
+      "@expo/config-plugins": "~9.0.0",
+      "react": "18.3.1",
+      "react-dom": "18.3.1",
+      "react-test-renderer": "18.3.1"
+    }
+  },
+  "devDependencies": {
+    "@ianvs/prettier-plugin-sort-imports": "^4.4.1",
+    "@types/jest": "^29.5.2",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "concurrently": "^8.2.2",
+    "eslint": "^8.0.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-prettier": "^5.0.0",
+    "husky": "^9.1.7",
+    "identity-obj-proxy": "^3.0.0",
+    "jest": "^29.5.0",
+    "jest-environment-jsdom": "^29.5.0",
+    "jest-transform-stub": "^2.0.0",
+    "lint-staged": "^15.5.0",
+    "prettier": "^3.5.3",
+    "ts-jest": "^29.1.0"
+  },
+  "version": "1.0.0",
+  "dependencies": {
+    "zod-to-json-schema": "^3.24.6"
+  }
+}

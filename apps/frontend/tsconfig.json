@@ -1,0 +1,69 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "types": ["vite/client"],
+    "skipLibCheck": true,
+    "allowJs": false,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+
+    /* Path aliases for clean imports */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@packages/*": ["../../packages/*"],
+      "@utils/*": ["../../packages/utils/src/*"],
+      "@ui/*": ["../../packages/ui/src/*"],
+      "@/components/*": ["./src/components/*"],
+      "@/hooks/*": ["./src/hooks/*"],
+      "@/lib/*": ["./src/lib/*"],
+      "@/config/*": ["./src/config/*"],
+      "@/types/*": ["./src/types/*"]
+    },
+
+    /* Additional type checking */
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*", "vite.config.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
+  ],
+  "references": [
+    {
+      "path": "../../packages/types"
+    },
+    {
+      "path": "../../packages/utils"
+    },
+    {
+      "path": "../../packages/ui"
+    },
+    {
+      "path": "../../packages/core-client"
+    }
+  ]
+}

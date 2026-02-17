@@ -1,0 +1,447 @@
+---
+description: "Monorepo structure, package boundaries, type management, and design patterns for consistent quality and reuse"
+globs:
+  - "**/*.ts"
+  - "**/*.tsx"
+alwaysApply: true
+---
+
+# 🎯 Golden Rule: Keep Code Simple & Readable
+
+**BEFORE WRITING CODE:**
+
+- ❓ Can I do this simpler?
+- ❓ Will someone else understand this?
+- ❓ Am I over-engineering?
+
+**Guidelines:**
+
+- ✅ Prefer simple solutions over clever ones
+- ✅ Make code readable at first glance
+- ✅ Avoid unnecessary abstractions
+- ✅ If it's complex, break it into smaller parts
+- ✅ Comments should explain WHY, not WHAT
+
+---
+
+# Repository Architecture
+
+This is a pnpm monorepo with strict package boundaries:
+
+- **apps/backend** - NestJS backend API
+- **apps/frontend** - Next.js static export (no SSR), Redux state management
+- **packages/types** - Authoritative types from Prisma schema
+- **packages/utils** - Shared utilities, constants, helpers, Zod schemas
+- **packages/core-client** - Client state management (Redux store, hooks, repositories)
+- **packages/ui** - Shared UI components (Radix UI-based, Tailwind styled)
+
+## Strict Package Boundaries & Dependencies
+
+### Type Management (CRITICAL)
+
+**RULE: Do NOT create types locally in apps.** All types come from `@packages/types` only.
+
+- `@packages/types` is the **single source of truth** for all entity types (User, Project, ExtractionJob, etc.)
+- Import types from `@packages/types`, never create new types in `/apps/backend/src` or `/apps/frontend/src`
+- If a type is needed, it goes in `@packages/types` following Prisma schema structure
+
+**Example:**
+
+```typescript
+// ✅ CORRECT - import from types package
+import { TExtractionJob, TProject } from "@packages/types";
+
+// ❌ WRONG - defining types locally in apps
+interface ExtractionJob {
+  /* ... */
+} // Don't do this
+type TProject = {
+  /* ... */
+}; // Don't do this
+```
+
+### Import Hierarchy (CRITICAL)
+
+Enforce this import order strictly:
+
+1. **Frontend imports:**
+   - `@packages/types` → DTOs, entities, constants
+   - `@packages/utils` → helpers, formatters, validators
+   - `@packages/core-client` → hooks (useCollection, useAppData), Redux store access
+   - `@packages/ui` → UI components
+
+2. **Backend imports:**
+   - `@packages/types` → DTOs, repository interfaces, service interfaces
+   - `@packages/utils` → shared helpers, validators, constants
+   - Local modules in `src/`
+
+3. **Packages import order:**
+   - `@packages/types` → base types, entities
+   - `@packages/utils` → helpers (depends on types)
+   - `@packages/core-client` → state management (depends on types, utils)
+   - `@packages/ui` → components (depends on types, utils)
+
+**Example:**
+
+```typescript
+// ✅ CORRECT order in frontend
+import { useExtractionJobs } from "@packages/core-client"; // 3. Core client
+import { TExtractionJob } from "@packages/types"; // 1. Types first
+
+import { Button, Card } from "@packages/ui"; // 4. UI last
+import { extractIdFromPath, formatDate } from "@packages/utils"; // 2. Utils
+```
+
+### DTOs & Request/Response Schemas
+
+- **DTOs live in `@packages/types/dto`** as Zod schemas (e.g., `StartExtractionJobRequestSchema`)
+- Backend uses `@packages/types` DTOs for validation before database operations
+- Frontend uses DTOs for request/response serialization (ensure JSON serializable types)
+- When a type contains non-serializable fields (Date, Map, Set), create a normalized variant (e.g., `NormalizedExtractionSchema`)
+
+**Example:**
+
+```typescript
+// In @packages/types/dto
+export const CreateProjectSchema = z.object({
+  name: z.string().min(1),
+  organizationId: Uuid,
+  config: z.record(z.any())
+});
+export type TCreateProjectRequest = z.infer<typeof CreateProjectSchema>;
+
+// In @apps/backend
+import { CreateProjectSchema } from "@packages/types";
+async createProject(data: unknown) {
+  const validatedData = CreateProjectSchema.parse(data);
+  return this.projectRepository.create(validatedData);
+}
+```
+
+## Design Patterns
+
+### Store-First Architecture (Frontend)
+
+Frontend follows **store-first** pattern:
+
+1. **Data fetching happens at app/page level** using repository methods
+2. **Repositories automatically dispatch Redux actions** to hydrate the store
+3. **Components read from Redux store** via typed `useCollection()` hooks
+4. **No component-level data fetching** (no useEffect + API calls)
+
+**Flow:**
+
+```
+App Level
+  ↓
+useAppDataOrchestrator() / Repository.fetch() → Dispatches Redux Action
+  ↓
+Redux Store Updated
+  ↓
+Components read via useExtractionJobs(), useCollection("extractionJobs")
+```
+
+**Example:**
+
+```typescript
+// App/Page Level - FETCH & STORE
+import { useExtractionJobRepository } from "@packages/core-client";
+
+export function ExtractionPage({ projectId }) {
+  const repository = useExtractionJobRepository();
+
+  // Fetch at app level, automatically stores in Redux
+  useEffect(() => {
+    repository.getByProject(projectId);
+  }, [projectId, repository]);
+
+  return <ExtractionContent projectId={projectId} />;
+}
+
+// Component Level - READ ONLY
+import { useExtractionJobsForProject } from "@packages/core-client";
+
+function ExtractionContent({ projectId }) {
+  // Read from Redux store (no fetching)
+  const jobs = useExtractionJobsForProject(projectId);
+
+  return (
+    <div>
+      {jobs.map(job => <JobCard key={job.id} job={job} />)}
+    </div>
+  );
+}
+```
+
+### Repository Pattern (Data Access)
+
+- All database/API calls go through **repository classes** (in `@packages/core-client` for frontend, backend services for API)
+- Repositories handle:
+  - API calls / database queries
+  - Redux dispatch (frontend only)
+  - Error handling & normalization
+- Repository methods should be **single-purpose** and **composable**
+
+**Example:**
+
+```typescript
+// @packages/core-client/repositories/ExtractionJobRepository.ts
+export class ExtractionJobRepository {
+  async getByProject(projectId: string): Promise<TExtractionJob[]> {
+    const response = await fetch(`/api/extraction/project/${projectId}/jobs`);
+    const jobs = await response.json();
+
+    // Dispatch to store
+    dispatch(setExtractionJobs(jobs));
+
+    return jobs;
+  }
+
+  async updateStatus(jobId: string, status: TExtractionJobStatus) {
+    // Single concern: update status
+    return fetch(`/api/extraction/jobs/${jobId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status })
+    });
+  }
+}
+```
+
+### Constants & Enums
+
+- **All constants go in `@packages/utils/constants.ts`**
+- Never hardcode magic strings/numbers in app code
+- Use enum-derived constants for consistency: `EXTRACTION_JOB_STATUSES`, `EXTRACTION_JOB_STATUSES_VALUES`
+
+**Example:**
+
+```typescript
+// ✅ CORRECT - @packages/utils/constants.ts
+export const EXTRACTION_JOB_STATUSES = {
+  PENDING: "pending",
+  IN_PROGRESS: "in_progress",
+  COMPLETED: "completed"
+} as const;
+
+export const EXTRACTION_JOB_STATUSES_VALUES = Object.values(
+  EXTRACTION_JOB_STATUSES
+) as const;
+
+// Usage in @packages/types/dto
+export const ExtractionJobStatus = z.enum(EXTRACTION_JOB_STATUSES_VALUES);
+
+// ❌ WRONG - hardcoding in components
+if (job.status === "in_progress") {
+  /* ... */
+} // Don't do this
+```
+
+### Error Handling & Logging
+
+- Use structured logging: **`JSON.stringify()`** all logs for easier parsing
+- Log at service/repository boundaries
+- Frontend: Log API errors to console + dispatch to Redux for UI
+- Backend: Use Winston logger with structured format
+
+**Example:**
+
+```typescript
+// ✅ CORRECT - structured log
+console.log(
+  JSON.stringify({
+    level: "info",
+    action: "extractionJobStarted",
+    jobId: job.id,
+    projectId: job.projectId,
+    timestamp: new Date().toISOString()
+  })
+);
+
+// ❌ WRONG - unstructured log
+console.log("Job started"); // Don't do this
+```
+
+## Code Quality Standards
+
+### DRY (Don't Repeat Yourself)
+
+- Extract repeated logic into **utility functions** (in `@packages/utils`)
+- Shared UI patterns → **`@packages/ui` components**
+- Shared hooks → **`@packages/core-client/hooks`**
+
+### Single Responsibility Principle
+
+- One file/module = one clear job
+- Hook = single data fetching/state concern
+- Repository method = single API call / database query
+- Component = single UI concern
+
+**Example:**
+
+```typescript
+// ❌ WRONG - mixed concerns
+function ExtractionDashboard() {
+  const [jobs, setJobs] = useState([]);
+  const [filter, setFilter] = useState("");
+
+  // Multiple concerns: fetch, filter, render
+  useEffect(() => {
+    fetch("/api/jobs").then(setJobs);
+  }, []);
+
+  const filtered = jobs.filter(j => j.name.includes(filter));
+
+  return (
+    <div>
+      {/* UI rendering mixed with logic */}
+    </div>
+  );
+}
+
+// ✅ CORRECT - separated concerns
+// 1. Repository handles fetching
+// 2. Hook handles filtering
+// 3. Component just renders
+
+function useFilteredJobs(filter: string) {
+  const jobs = useExtractionJobs();
+  return useMemo(() => jobs.filter(j => j.name.includes(filter)), [jobs, filter]);
+}
+
+function ExtractionDashboard() {
+  const [filter, setFilter] = useState("");
+  const jobs = useFilteredJobs(filter);
+
+  return (
+    <div>
+      <input value={filter} onChange={e => setFilter(e.target.value)} />
+      {jobs.map(job => <JobCard key={job.id} job={job} />)}
+    </div>
+  );
+}
+```
+
+### Function & File Size
+
+- **Functions:** Keep under 50 lines (guard clauses, early returns)
+- **Files:** Keep under 300 lines (split into smaller modules)
+- **Comments:** Explain _why_ not _what_ (code shows what)
+
+**Example:**
+
+```typescript
+// ✅ CORRECT - short, focused function with guard clause
+function formatJobStatus(status: TExtractionJobStatus): string {
+  if (!status) return "Unknown";
+  const statusMap: Record<TExtractionJobStatus, string> = {
+    pending: "Waiting",
+    in_progress: "Processing",
+    completed: "Done"
+  };
+  return statusMap[status];
+}
+
+// ❌ WRONG - too many concerns
+function processJobsAndNotifyUsers(jobs: TExtractionJob[]) {
+  jobs.forEach((job) => {
+    if (job.status === "completed" && !job.notified) {
+      sendEmail(job.userId, `Job ${job.id} completed`);
+      updateJobNotificationStatus(job.id);
+      logJobCompletion(job.id);
+      incrementUserCompletedJobCount(job.userId);
+      // ... more mixed logic
+    }
+  });
+}
+```
+
+### No Unnecessary Abstraction
+
+- Don't create wrapper functions for single-use logic
+- Don't over-engineer for hypothetical future changes
+- Solve the problem at hand, refactor when patterns emerge
+
+**Example:**
+
+```typescript
+// ❌ WRONG - over-engineered wrapper
+function useFetchWithErrorHandling(url) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetch(url)
+      .then((r) => r.json())
+      .then(setData)
+      .catch(setError);
+  }, [url]);
+
+  return { data, error };
+}
+
+// ✅ CORRECT - direct API call through repository
+const jobs = await repository.getJobs(projectId);
+// Or use React Query for actual data fetching needs
+```
+
+## File Organization
+
+```
+packages/
+├── types/
+│   └── src/
+│       ├── entities/        # Entity types (User, Project, etc.)
+│       ├── dto/             # Request/response DTOs (Zod schemas)
+│       ├── repositories/    # Repository interface contracts
+│       ├── services/        # Service interface contracts
+│       ├── store/           # Redux store state shapes
+│       ├── constants.ts
+│       └── index.ts         # Central export
+
+├── utils/
+│   └── src/
+│       ├── helpers/         # Utility functions
+│       ├── formatters/      # Data formatting (dates, currency, etc.)
+│       ├── validators/      # Zod schema validators
+│       ├── constants.ts     # Constants & enums
+│       └── index.ts
+
+├── core-client/
+│   └── src/
+│       ├── store/           # Redux slices, actions, selectors
+│       ├── hooks/           # useCollection, useAppData, custom hooks
+│       ├── repositories/    # Client-side repositories (API calls + Redux)
+│       └── index.ts
+
+└── ui/
+    └── src/
+        ├── components/      # Radix UI components
+        ├── hooks/           # UI-specific hooks (form state, etc.)
+        ├── styles/
+        └── index.ts
+```
+
+## Testing Guidelines
+
+- Tests import from same locations as production code
+- Use test factories from `@packages/types/test-factories` for creating test data
+- Mock only at repository/service boundaries
+- Test contracts (DTO validation) in `@packages/utils`
+
+**Example:**
+
+```typescript
+// ✅ CORRECT - test DTOs directly
+import { CreateProjectSchema } from "@packages/types";
+
+test("CreateProjectSchema validates required fields", () => {
+  expect(() => CreateProjectSchema.parse({})).toThrow();
+
+  expect(
+    CreateProjectSchema.parse({
+      name: "My Project",
+      organizationId: "123e4567-e89b-12d3-a456-426614174000"
+    })
+  ).toBeDefined();
+});
+```

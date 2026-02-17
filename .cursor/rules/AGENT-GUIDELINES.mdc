@@ -1,0 +1,152 @@
+# 🤖 Agent Mode Guidelines
+
+**These rules apply whenever running in Agent Mode.**
+
+## Core Principles
+
+1. **Never make irreversible decisions**
+   - Don't commit code without user review
+   - Don't push to remote repositories
+   - Don't delete branches or tags
+   - Don't force-push history
+
+2. **Always preserve user control**
+   - User should review all changes before they go to git
+   - User decides when/what to commit
+   - User decides when/where to push
+
+3. **Document your work**
+   - Show what changed
+   - Explain why changes were made
+   - Provide clear commit messages (user will type them)
+
+## Git Operations Rules
+
+### ❌ PROHIBITED
+
+- `git commit` - Never commit automatically
+- `git push` - Never push automatically
+- `git force-push` - Never force push
+- `git reset --hard` - Never hard reset
+- `git branch -D` - Never delete branches
+
+### ✅ ALLOWED (Read-Only)
+
+- `git status` - Check current state
+- `git diff` - Show changes
+- `git log` - View history
+- `git branch` - List branches
+- `git remote -v` - View remotes
+
+### ✅ ALLOWED (User-Initiated Only)
+
+- `git restore` - Only if user explicitly requests
+- `git stash` - Only if user explicitly requests
+- `git checkout` - Only if user explicitly requests
+
+## When User Asks: "Commit This"
+
+**❌ Wrong approach:**
+
+```typescript
+// User: "Commit this change"
+// Agent runs:
+$ git add -A
+$ git commit -m "Some commit message"
+$ git push
+// ← WRONG!
+```
+
+**✅ Right approach:**
+
+```typescript
+// User: "Commit this change"
+// Agent shows:
+Here's what changed:
+  • Modified src/file.ts
+  • Added new function doSomething()
+
+To commit, run:
+  $ git add -A
+  $ git commit -m "feat: Add doSomething function"
+  $ git push
+
+// User then runs these commands
+```
+
+## File Modification Rules
+
+### ✅ OK to modify:
+
+- Source code files (.ts, .tsx, .js, etc.)
+- Configuration files (tsconfig.json, package.json, etc.)
+- Documentation (.md files)
+- Tests
+
+### ⚠️ Be careful with:
+
+- Environment files (.env, .env.production)
+- Build configuration (webpack, tsconfig)
+- CI/CD configuration (.github/workflows)
+
+### ❌ Don't modify:
+
+- Git hooks without explicit request
+- .gitignore without understanding implications
+- Other agents' or users' work without consent
+
+## Commit Message Format
+
+When suggesting commit messages, use conventional commits:
+
+```
+type(scope): description
+
+feat(auth): add JWT token refresh
+fix(ui): resolve button alignment issue
+docs(readme): update installation steps
+refactor(api): simplify error handling
+test(utils): add edge case tests
+chore(deps): update dependencies
+```
+
+## Pull Request Guidelines
+
+If you need to create a PR:
+
+1. Always push to a branch first (user does this)
+2. Never auto-merge
+3. Provide clear PR description
+4. List all changes made
+5. Explain testing approach
+
+## Transparency
+
+Always tell the user:
+
+- What you're about to do
+- Why you're doing it
+- What could go wrong
+- How to undo it if needed
+
+---
+
+## Remember
+
+**You're a helper, not a gatekeeper.**
+
+Your job is to:
+
+- Suggest changes
+- Implement features
+- Explain decisions
+- Provide commit messages
+
+User's job is to:
+
+- Review changes
+- Approve commits
+- Push to remote
+- Control timeline
+
+**Keep this balance and everyone wins.** ✨

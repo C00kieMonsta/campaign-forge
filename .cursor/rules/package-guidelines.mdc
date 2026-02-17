@@ -1,0 +1,587 @@
+---
+description: "Detailed guidelines for maintaining quality within each package"
+globs:
+  - "packages/**/*.ts"
+  - "packages/**/*.tsx"
+alwaysApply: true
+---
+
+# Package-Specific Guidelines
+
+## 🎯 Simplicity Rule for All Packages
+
+Each package should solve ONE problem clearly:
+
+- `@packages/types` → Define types (nothing else!)
+- `@packages/utils` → Provide helpers (not full systems!)
+- `@packages/core-client` → Manage state (not business logic!)
+- `@packages/ui` → Render components (not contain logic!)
+
+### If a package is getting complex, ask:
+- ❓ Am I mixing concerns?
+- ❓ Should this be split into smaller pieces?
+- ❓ Is there a simpler way?
+
+---
+
+## @packages/types
+
+**Purpose:** Single source of truth for all types. Define entities and contracts here.
+
+### What Goes Here
+
+- ✅ Entity types (TUser, TProject, TExtractionJob, etc.)
+- ✅ DTOs and Zod schemas for API contracts
+- ✅ Repository interface contracts
+- ✅ Service interface contracts
+- ✅ Redux store state shapes
+- ✅ Constants (enums) shared across apps
+- ❌ Helper functions (go to @packages/utils)
+- ❌ UI components (go to @packages/ui)
+
+### Structure
+
+```
+types/src/
+├── constants.ts           # EXTRACTION_JOB_STATUSES, ROLE_SLUGS, etc.
+├── entities/
+│   ├── user.ts           # TUser, TProfile, etc.
+│   ├── project.ts        # TProject, TProjectMember, etc.
+│   ├── extraction.ts     # TExtractionJob, TExtractionResult, etc.
+│   └── index.ts
+├── dto/
+│   ├── auth.ts           # LoginRequest, RegisterRequest, etc.
+│   ├── projects.ts       # CreateProjectRequest, UpdateProjectRequest, etc.
+│   ├── extractions.ts    # StartExtractionJobRequest, etc.
+│   └── index.ts
+├── repositories/
+│   ├── project.repository.ts      # IProjectRepository interface
+│   ├── extraction.repository.ts   # IExtractionJobRepository interface
+│   └── index.ts
+├── services/
+│   ├── auth.service.ts    # IAuthService interface
+│   ├── project.service.ts # IProjectService interface
+│   └── index.ts
+├── store/
+│   ├── auth.state.ts      # AuthState shape
+│   ├── projects.state.ts  # ProjectsState shape
+│   └── index.ts
+├── schemas/               # Complex nested schemas (if needed)
+└── index.ts              # Central export
+```
+
+### Zod Schema Naming Convention
+
+- Schema name: `{Entity}{Purpose}Schema` → `TSchema = z.infer<typeof Schema>`
+- Example: `CreateProjectSchema` → `TCreateProjectRequest`
+- DTOs use full schema pattern: `ZodSchema + z.infer`
+
+```typescript
+// ✅ CORRECT pattern
+export const CreateProjectSchema = z.object({
+  name: z.string().min(1).max(100),
+  organizationId: Uuid,
+  description: z.string().optional()
+});
+
+export type TCreateProjectRequest = z.infer<typeof CreateProjectSchema>;
+
+// In consumers:
+import { CreateProjectSchema, TCreateProjectRequest } from "@packages/types";
+```
+
+### Type Exports
+
+Always provide both schema and type:
+```typescript
+// ✅ CORRECT - export both
+export { CreateProjectSchema };
+export type { TCreateProjectRequest };
+
+// In consumers - they choose what they need:
+const validated = CreateProjectSchema.parse(data); // Runtime validation
+const typedData: TCreateProjectRequest = {...};    // Type checking only
+```
+
+## @packages/utils
+
+**Purpose:** Shared utilities, helpers, formatters, and constants used across apps.
+
+### What Goes Here
+
+- ✅ Helper functions (formatting, parsing, transformation)
+- ✅ Validators and validation utilities
+- ✅ Constants and enums (business logic constants)
+- ✅ Date/time utilities
+- ✅ String utilities (slugify, camelCase, etc.)
+- ✅ Collection utilities (groupBy, sortBy, etc.)
+- ❌ Types/interfaces (go to @packages/types)
+- ❌ UI components (go to @packages/ui)
+- ❌ Redux logic (go to @packages/core-client)
+
+### File Organization
+
+```
+utils/src/
+├── constants.ts
+├── helpers/
+│   ├── date.ts       # formatDate, parseDate, getRelativeTime
+│   ├── string.ts     # slugify, camelCase, truncate
+│   ├── array.ts      # groupBy, sortBy, unique, etc.
+│   └── index.ts
+├── formatters/
+│   ├── job.ts        # formatJobStatus, formatJobProgress
+│   ├── project.ts    # formatProjectStatus
+│   └── index.ts
+├── validators/
+│   ├── email.ts      # validateEmail
+│   ├── uuid.ts       # validateUuid
+│   └── index.ts
+├── errors/
+│   ├── custom-errors.ts  # AppError, ValidationError
+│   └── index.ts
+└── index.ts         # Central export
+```
+
+### Helper Function Style
+
+- **Pure functions** when possible (no side effects)
+- **Descriptive names** that start with verb: `formatDate`, `parseJobType`, `isValidUuid`
+- **Guard clauses** for input validation
+
+```typescript
+// ✅ CORRECT
+export function formatJobStatus(status: TExtractionJobStatus): string {
+  if (!status) return "Unknown";
+  
+  const statusLabels: Record<TExtractionJobStatus, string> = {
+    pending: "Waiting to Start",
+    in_progress: "Currently Processing",
+    completed: "Finished"
+  };
+  
+  return statusLabels[status];
+}
+
+// ❌ WRONG - ambiguous naming, no guard clause
+function jobStatus(s) {
+  return { pending: "Waiting", in_progress: "Processing", completed: "Done" }[s];
+}
+```
+
+### Constants Pattern
+
+```typescript
+// ✅ CORRECT - named constants with type safety
+export const EXTRACTION_JOB_STATUSES = {
+  PENDING: "pending",
+  IN_PROGRESS: "in_progress",
+  COMPLETED: "completed",
+  FAILED: "failed"
+} as const;
+
+export const EXTRACTION_JOB_STATUSES_VALUES = Object.values(
+  EXTRACTION_JOB_STATUSES
+) as const;
+
+// In @packages/types, use in Zod:
+export const ExtractionJobStatus = z.enum(EXTRACTION_JOB_STATUSES_VALUES);
+```
+
+## @packages/core-client
+
+**Purpose:** Client-side state management and data access (Redux, hooks, repositories).
+
+### What Goes Here
+
+- ✅ Redux slices, actions, and selectors
+- ✅ Custom hooks that manage client state or fetch data
+- ✅ Repository classes that fetch from API and dispatch Redux
+- ✅ Hooks for reading from Redux (useCollection, useAppData, etc.)
+- ❌ UI components (go to @packages/ui)
+- ❌ Business logic helpers (go to @packages/utils)
+- ❌ Type definitions (go to @packages/types)
+
+### File Organization
+
+```
+core-client/src/
+├── store/
+│   ├── slices/
+│   │   ├── auth.slice.ts
+│   │   ├── projects.slice.ts
+│   │   ├── extraction.slice.ts
+│   │   └── index.ts
+│   ├── selectors/
+│   │   ├── auth.selectors.ts
+│   │   ├── projects.selectors.ts
+│   │   └── index.ts
+│   ├── middleware/           # Optional: thunks, listeners
+│   │   └── index.ts
+│   ├── index.ts              # Store configuration
+│   └── types.ts              # RootState, AppDispatch types
+├── hooks/
+│   ├── useCollection.ts      # Generic hook for reading collection from store
+│   ├── useAppDataOrchestrator.ts  # Orchestrate initial data loading
+│   ├── useEntity.ts          # Read single entity from store
+│   ├── useExtractionJobs.ts  # Specific hooks using useCollection
+│   └── index.ts
+├── repositories/
+│   ├── base.repository.ts    # Base class with common API logic
+│   ├── project.repository.ts
+│   ├── extraction.repository.ts
+│   └── index.ts
+└── index.ts                  # Central export
+```
+
+### Redux Slice Pattern
+
+Keep slices focused on a single entity or concern:
+
+```typescript
+// ✅ CORRECT - single concern
+const extractionJobsSlice = createSlice({
+  name: 'extractionJobs',
+  initialState: {
+    items: [] as TExtractionJob[],
+    loading: false,
+    error: null
+  },
+  reducers: {
+    setExtractionJobs: (state, action: PayloadAction<TExtractionJob[]>) => {
+      state.items = action.payload;
+    },
+    updateExtractionJob: (state, action: PayloadAction<TExtractionJob>) => {
+      const idx = state.items.findIndex(j => j.id === action.payload.id);
+      if (idx >= 0) state.items[idx] = action.payload;
+    }
+  }
+});
+
+// ❌ WRONG - mixed concerns in one slice
+const appSlice = createSlice({
+  name: 'app',
+  initialState: {
+    jobs: [],
+    projects: [],
+    users: [],
+    settings: {},
+    notifications: []
+    // ... too many concerns
+  }
+});
+```
+
+### Hook Pattern for Reading from Store
+
+Use `createSelector` for memoization to prevent unnecessary re-renders:
+
+```typescript
+// ✅ CORRECT - uses selector pattern for memoization
+import { createSelector } from '@reduxjs/toolkit';
+import { RootState } from './store';
+
+const selectExtractionJobs = (state: RootState) => state.entities.extractionJobs;
+
+export const selectJobsByProject = createSelector(
+  [selectExtractionJobs, (_: RootState, projectId: string) => projectId],
+  (jobs, projectId) => jobs.filter(j => j.projectId === projectId)
+);
+
+export function useExtractionJobsForProject(projectId: string) {
+  const jobs = useSelector((state: RootState) => selectJobsByProject(state, projectId));
+  return jobs;
+}
+
+// ❌ WRONG - direct inline selector, causes re-renders
+export function useExtractionJobsForProject(projectId: string) {
+  return useSelector((state: RootState) =>
+    state.entities.extractionJobs.filter(j => j.projectId === projectId)
+  );
+}
+```
+
+### Repository Pattern
+
+```typescript
+// ✅ CORRECT - repository handles API + Redux dispatch
+export class ExtractionJobRepository {
+  constructor(private dispatch: AppDispatch) {}
+
+  async getByProject(projectId: string): Promise<TExtractionJob[]> {
+    try {
+      const response = await fetch(`/api/extraction/project/${projectId}/jobs`);
+      if (!response.ok) throw new Error('Failed to fetch jobs');
+      
+      const jobs = await response.json();
+      
+      // Dispatch to store
+      this.dispatch(setExtractionJobs(jobs));
+      
+      return jobs;
+    } catch (error) {
+      console.error(JSON.stringify({ 
+        error: 'Failed to fetch extraction jobs',
+        projectId,
+        details: error
+      }));
+      throw error;
+    }
+  }
+
+  async updateStatus(jobId: string, status: TExtractionJobStatus) {
+    const response = await fetch(`/api/extraction/jobs/${jobId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    
+    const updated = await response.json();
+    
+    // Dispatch individual job update
+    this.dispatch(updateExtractionJob(updated));
+    
+    return updated;
+  }
+}
+```
+
+## @packages/ui
+
+**Purpose:** Shared, reusable UI components based on Radix UI + Tailwind.
+
+### What Goes Here
+
+- ✅ UI components (Button, Card, Modal, etc.)
+- ✅ Form components with form state management
+- ✅ Layout components (Container, Grid, Stack, etc.)
+- ✅ Custom hooks for UI state (useModal, useForm, etc.)
+- ✅ Tailwind utilities and style exports
+- ❌ Page-level components (live in apps)
+- ❌ Application logic/business logic
+- ❌ Redux integration (that's app-specific)
+
+### File Organization
+
+```
+ui/src/
+├── components/
+│   ├── common/
+│   │   ├── Button.tsx
+│   │   ├── Card.tsx
+│   │   ├── Modal.tsx
+│   │   ├── Alert.tsx
+│   │   └── index.ts
+│   ├── form/
+│   │   ├── FormField.tsx
+│   │   ├── Select.tsx
+│   │   ├── Input.tsx
+│   │   └── index.ts
+│   ├── layout/
+│   │   ├── Container.tsx
+│   │   ├── Grid.tsx
+│   │   └── index.ts
+│   └── index.ts
+├── hooks/
+│   ├── useModal.ts
+│   ├── useFormState.ts
+│   └── index.ts
+├── styles/
+│   ├── globals.css         # Tailwind + custom utilities
+│   └── theme.css           # Color/spacing variables
+└── index.ts               # Central export
+```
+
+### Component Pattern
+
+Use **compound component pattern** for complex components:
+
+```typescript
+// ✅ CORRECT - compound component
+export const Modal = ({ children, open, onOpenChange }: Props) => (
+  <Dialog open={open} onOpenChange={onOpenChange}>
+    {children}
+  </Dialog>
+);
+
+Modal.Content = function ModalContent({ children }: { children: React.ReactNode }) {
+  return <DialogContent>{children}</DialogContent>;
+};
+
+Modal.Header = function ModalHeader({ children }: { children: React.ReactNode }) {
+  return <DialogHeader>{children}</DialogHeader>;
+};
+
+Modal.Footer = function ModalFooter({ children }: { children: React.ReactNode }) {
+  return <DialogFooter>{children}</DialogFooter>;
+};
+
+// Usage:
+<Modal open={isOpen} onOpenChange={setIsOpen}>
+  <Modal.Header>Confirm Action</Modal.Header>
+  <Modal.Content>Are you sure?</Modal.Content>
+  <Modal.Footer>
+    <Button onClick={() => setIsOpen(false)}>Cancel</Button>
+    <Button onClick={handleConfirm}>Confirm</Button>
+  </Modal.Footer>
+</Modal>
+```
+
+### Props Pattern
+
+```typescript
+// ✅ CORRECT - clear, typed props
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: "primary" | "secondary" | "ghost";
+  size?: "sm" | "md" | "lg";
+  loading?: boolean;
+  children: React.ReactNode;
+}
+
+export function Button({ 
+  variant = "primary", 
+  size = "md", 
+  loading = false,
+  children,
+  ...props 
+}: ButtonProps) {
+  return (
+    <button 
+      className={cn(buttonVariants({ variant, size }))}
+      disabled={loading || props.disabled}
+      {...props}
+    >
+      {loading ? <Spinner /> : children}
+    </button>
+  );
+}
+```
+
+### Styling Pattern
+
+Use **`class-variance-authority`** + **`tailwind-merge`** for variants:
+
+```typescript
+// ✅ CORRECT - type-safe variants
+import { cva, type VariantProps } from 'class-variance-authority';
+import { cn } from '@packages/utils'; // or clsx/tailwind-merge
+
+const buttonVariants = cva(
+  "inline-flex items-center justify-center rounded-md font-medium",
+  {
+    variants: {
+      variant: {
+        primary: "bg-blue-600 text-white hover:bg-blue-700",
+        secondary: "bg-gray-200 text-gray-900 hover:bg-gray-300",
+        ghost: "text-gray-700 hover:bg-gray-100"
+      },
+      size: {
+        sm: "px-2 py-1 text-sm",
+        md: "px-4 py-2 text-base",
+        lg: "px-6 py-3 text-lg"
+      }
+    },
+    defaultVariants: {
+      variant: "primary",
+      size: "md"
+    }
+  }
+);
+
+export type ButtonVariants = VariantProps<typeof buttonVariants>;
+export { buttonVariants };
+```
+
+## Cross-Package Communication
+
+### Dependency Flow (Respect This)
+
+```
+@packages/types (no dependencies)
+    ↓
+@packages/utils (depends on types)
+    ↓
+@packages/core-client (depends on types + utils)
+    ↓
+@packages/ui (depends on types + utils)
+    ↓
+@apps/frontend, @apps/backend (depend on all)
+```
+
+### Never Create Circular Dependencies
+
+❌ BAD:
+```typescript
+// @packages/types imports from @packages/utils
+import { formatDate } from "@packages/utils";
+export type SomeType = { date: ReturnType<typeof formatDate> };
+
+// @packages/utils imports from @packages/types
+import { SomeType } from "@packages/types";
+// Circular dependency!
+```
+
+✅ GOOD:
+```typescript
+// @packages/types - just types
+export type SomeType = { date: string };
+
+// @packages/utils - helper functions
+export function formatDate(d: Date): string { /* ... */ }
+```
+
+### Package Exports
+
+Always provide a clear **index.ts** for each package:
+
+```typescript
+// ✅ CORRECT - @packages/types/src/index.ts
+export * from "./entities";
+export * from "./dto";
+export * from "./repositories";
+export * from "./store";
+export { 
+  EXTRACTION_JOB_STATUSES, 
+  EXTRACTION_JOB_STATUSES_VALUES,
+  // ... other constants
+} from "./constants";
+```
+
+Then consumers import from the package:
+```typescript
+import { TExtractionJob, CreateProjectSchema } from "@packages/types";
+// Not:
+import { TExtractionJob } from "@packages/types/dist/entities";
+```
+
+## Performance Considerations
+
+### Avoid Over-Fetching
+
+- Fetch only what you need from API
+- Use repository methods that return specific data shapes
+- Don't fetch full entities if you only need a few fields
+
+### Memoization in Selectors
+
+Use `createSelector` in `@packages/core-client` to prevent unnecessary re-renders:
+
+```typescript
+// ✅ CORRECT - selector is memoized, only recomputes when input changes
+const selectFilteredJobs = createSelector(
+  [(state: RootState) => state.entities.extractionJobs, (_: RootState, filter: string) => filter],
+  (jobs, filter) => jobs.filter(j => j.name.includes(filter))
+);
+
+// ❌ WRONG - inline filtering causes re-render on every selector call
+const jobs = useSelector((state: RootState) => 
+  state.entities.extractionJobs.filter(j => j.name.includes(filter))
+);
+```
+
+### Tree-Shaking
+
+Ensure unused code is removed in production:
+- Use named exports (not default exports for large modules)
+- Mark side-effect-free files in package.json: `"sideEffects": false`
+- Keep utilities as pure functions

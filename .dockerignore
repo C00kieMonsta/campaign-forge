@@ -1,0 +1,74 @@
+# Git and CI/CD
+.git
+.github
+.gitignore
+
+# CDK outputs and artifacts
+**/cdk.out
+**/cdk/cdk.out
+apps/backend/cdk
+
+# Build artifacts and caches
+.next
+.swc
+node_modules
+**/node_modules
+**/.next
+**/*.log
+**/coverage
+**/dist
+**/.tsbuildinfo
+
+# Temporary and cache files
+**/.DS_Store
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/pnpm-debug.log*
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS generated files
+Thumbs.db
+.DS_Store
+
+# Environment files
+.env*
+!.env.example
+
+# Test files
+**/test
+**/*.test.*
+**/*.spec.*
+
+# Documentation
+README.md
+**/README.md
+
+# Specific excludes
+apps/mobile
+firestore-debug.log
+tsconfig.tsbuildinfo
+vercel.json
+
+# Infrastructure
+infrastructure/
+**/infrastructure/
+
+# Keep only essential files for workspace builds
+!pnpm-workspace.yaml
+!package.json
+!pnpm-lock.yaml
+!packages/utils/package.json
+!packages/utils/src
+!packages/utils/tsconfig*.json
+!apps/backend/package.json
+!apps/backend/src
+!apps/backend/prisma
+!apps/backend/nest-cli.json
+!apps/backend/tsconfig*.json 

@@ -1,0 +1,21 @@
+name: Build Backend
+description: Builds backend application with Prisma client generation
+
+runs:
+  using: composite
+  steps:
+    - name: Generate Prisma client
+      run: |
+        echo "🔧 Generating Prisma client..."
+        cd apps/backend
+        pnpm db:generate
+        echo "✅ Prisma client generated"
+      shell: bash
+
+    - name: Build backend
+      run: |
+        echo "📦 Building @apps/backend..."
+        pnpm --filter @apps/backend build
+        echo "✅ Backend built"
+      shell: bash
+

@@ -1,0 +1,131 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Dependencies
+/node_modules
+**/node_modules/
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# Build artifacts
+/build
+**/build/
+**/dist/
+!packages/utils/dist/
+
+# Testing
+/coverage
+**/coverage/
+.nyc_output/
+**/.nyc_output/
+
+# Next.js
+/.next/
+/out/
+.next
+next-env.d.ts
+
+# NestJS
+**/nest-cli.json.backup
+
+# TypeScript
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Environment files - never commit these
+.env
+.env.local
+.env*.local
+.env.*
+*.env
+
+# Cache
+.npm
+.eslintcache
+.parcel-cache
+.turbo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor directories and files
+.vscode
+.idea/
+*.iml
+*.ipr
+*.iws
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.pem
+
+# Vercel
+.vercel
+
+# Expo
+.expo/
+
+# iOS
+ios/
+
+# Firebase
+**/firebase-debug.log*
+firestore-debug.log
+
+# Test output
+test-results/
+playwright-report/
+playwright/
+**/e2e/.auth
+**/*snapshots/**
+
+# CDK
+infrastructure/cdk.out/
+**/cdk.out/
+*.out
+infrastructure/lib/*.js
+infrastructure/lib/*.js.map
+infrastructure/lib/*.d.ts
+infrastructure/bin/*.js
+infrastructure/bin/*.js.map
+infrastructure/bin/*.d.ts
+
+# Logs
+logs/
+*.log
+audit.log
+error.log
+
+# Misc
+*.lock
+
+previous-code-inspiration/
+
+# I think this was removed for the deployment script - if yes, then we need to fix this
+**/dist/
+
+deprectated_frontend/

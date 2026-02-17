@@ -1,0 +1,317 @@
+name: Deploy Application
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy to"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+      deploy_backend:
+        description: "Deploy backend"
+        required: false
+        default: true
+        type: boolean
+      deploy_frontend:
+        description: "Deploy frontend"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+  # Stage 1: Build Backend Docker Image
+  build-backend:
+    name: Build Backend Docker Image
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    if: github.event.inputs.deploy_backend != 'false'
+    outputs:
+      image-uri: ${{ steps.image-uri.outputs.uri }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx (for multi-platform builds)
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend image to ECR
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./apps/backend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/remorai-app-registry:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/remorai-app-registry:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/arm64
+
+      - name: Set image URI output
+        id: image-uri
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/remorai-app-registry:${{ github.sha }}"
+          echo "uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "✅ Backend image URI: $IMAGE_URI"
+
+  # Stage 2: Deploy Frontend to S3 + CloudFront
+  deploy-frontend:
+    name: Deploy Frontend to S3 + CloudFront
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    if: github.event.inputs.deploy_frontend != 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Build workspace packages
+        uses: ./.github/actions/build-packages
+
+      - name: Build frontend with Vite
+        uses: ./.github/actions/build-frontend
+        with:
+          vite_api_url: https://api.remorai.solutions
+          vite_supabase_url: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          vite_supabase_anon_key: ${{ vars.SUPABASE_ANON_KEY }}
+          vite_stage: production
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_S3 }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_S3 }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy frontend assets to S3 with optimal caching
+        run: |
+          set -eo pipefail
+          STAGE="${{ github.event.inputs.environment || 'production' }}"
+          S3_BUCKET="remorai-frontend-${STAGE}"
+
+          echo "📦 Deploying frontend to S3: s3://${S3_BUCKET}"
+
+          # Sync versioned assets with long cache (1 year)
+          # Pattern: main.abc123.js, styles.def456.css, etc.
+          echo "📤 Uploading versioned assets with 1-year cache..."
+          aws s3 sync apps/frontend/dist \
+            "s3://${S3_BUCKET}" \
+            --delete \
+            --region "${{ vars.AWS_REGION }}" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "*.html" \
+            --exclude "index.html" \
+            --exclude "*.map"
+
+          # Upload HTML files with no caching for SPA routing
+          echo "📄 Uploading HTML with no-cache for fresh routing..."
+          aws s3 cp apps/frontend/dist/index.html \
+            "s3://${S3_BUCKET}/index.html" \
+            --cache-control "public, max-age=0, must-revalidate" \
+            --content-type "text/html; charset=utf-8" \
+            --region "${{ vars.AWS_REGION }}"
+
+          # Upload any other HTML files with same policy
+          find apps/frontend/dist -name "*.html" -not -name "index.html" -exec \
+            aws s3 cp {} "s3://${S3_BUCKET}/$(basename {})" \
+              --cache-control "public, max-age=0, must-revalidate" \
+              --content-type "text/html; charset=utf-8" \
+              --region "${{ vars.AWS_REGION }}" \; || true
+
+          echo "✅ Frontend assets uploaded to S3"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          DIST_ID="${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}"
+
+          if [ -z "$DIST_ID" ]; then
+            echo "⚠️ CLOUDFRONT_DISTRIBUTION_ID secret not set"
+            echo "   Add to GitHub: Settings → Secrets → CLOUDFRONT_DISTRIBUTION_ID"
+            exit 0
+          fi
+
+          echo "🔄 Invalidating CloudFront distribution: $DIST_ID"
+
+          # Create invalidation with error handling
+          if aws cloudfront create-invalidation \
+            --distribution-id "$DIST_ID" \
+            --paths "/*" \
+            --region us-east-1; then
+            echo "✅ CloudFront invalidation requested"
+          else
+            echo "⚠️ CloudFront invalidation failed (likely IAM permissions)"
+            echo "   Required: cloudfront:CreateInvalidation permission for AWS_ACCESS_KEY_ID_S3 user"
+            echo "   Continuing with deployment..."
+          fi
+
+  # Stage 3: Deploy Database Schema
+  deploy-database:
+    name: Deploy Database Schema with Prisma
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Build workspace packages
+        uses: ./.github/actions/build-packages
+
+      - name: Generate Prisma client
+        working-directory: ./apps/backend
+        run: pnpm db:generate
+
+      - name: Deploy database schema with Prisma migrations
+        working-directory: ./apps/backend
+        env:
+          DATABASE_URL: postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:${{ secrets.SUPABASE_DB_PASSWORD }}@aws-1-eu-west-2.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1&sslmode=require
+          DIRECT_DATABASE_URL: postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:${{ secrets.SUPABASE_DB_PASSWORD }}@aws-1-eu-west-2.pooler.supabase.com:5432/postgres?sslmode=require
+          PRISMA_DISABLE_WARNINGS: true
+        run: |
+          echo "🗄️ Deploying database schema..."
+          echo "Connection pool: postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:***@aws-1-eu-west-2.pooler.supabase.com:6543"
+          pnpm db:deploy
+          echo "✅ Database schema deployed"
+
+  # Stage 4: Deploy Backend Infrastructure
+  deploy-backend:
+    name: Deploy Backend Infrastructure with AWS CDK
+    runs-on: ubuntu-latest
+    needs: build-backend
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    if: github.event.inputs.deploy_backend != 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Build workspace packages
+        uses: ./.github/actions/build-packages
+
+      - name: Build backend application
+        uses: ./.github/actions/build-backend
+
+      - name: Install AWS CDK CLI
+        run: npm install -g aws-cdk@2.154.0
+
+      - name: Deploy backend infrastructure with AWS CDK
+        env:
+          STAGE: ${{ github.event.inputs.environment || 'production' }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          ROOT_DOMAIN: remorai.solutions
+          BACKEND_IMAGE_URI: ${{ needs.build-backend.outputs.image-uri }}
+          # Supabase configuration
+          SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Database configuration
+          DATABASE_URL: postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:${{ secrets.SUPABASE_DB_PASSWORD }}@aws-1-eu-west-2.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1&sslmode=require
+          DIRECT_DATABASE_URL: postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:${{ secrets.SUPABASE_DB_PASSWORD }}@aws-1-eu-west-2.pooler.supabase.com:5432/postgres?sslmode=require
+          DATABASE_URL_DIRECT: postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:${{ secrets.SUPABASE_DB_PASSWORD }}@aws-1-eu-west-2.pooler.supabase.com:5432/postgres?sslmode=require
+          # AI Service API Keys
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+        run: |
+          cd infrastructure
+          npm install
+          npm run build
+
+          echo "🚀 Deploying backend infrastructure for stage: $STAGE"
+          echo "   Domain: $ROOT_DOMAIN"
+          echo "   Image: $BACKEND_IMAGE_URI"
+
+          # Deploy backend stack
+          npx cdk deploy "Remorai-Backend-$STAGE" \
+            --require-approval never \
+            --context backendImageUri="$BACKEND_IMAGE_URI" || {
+            DEPLOY_EXIT=$?
+            echo "❌ CDK deployment failed with exit code: $DEPLOY_EXIT"
+            echo ""
+            echo "Common causes:"
+            echo "  1. CloudFormation validation error - check AWS console"
+            echo "  2. Stack already being updated - wait and retry"
+            echo "  3. IAM permissions - verify credentials"
+            exit $DEPLOY_EXIT
+          }
+
+          echo "✅ Backend infrastructure deployed"
+
+      - name: Run backend health checks
+        run: |
+          echo "🏥 Running health checks..."
+          sleep 30
+
+          # Health check endpoint
+          HEALTH_CHECK_URL="https://api.remorai.solutions/api/health"
+
+          echo "Checking: $HEALTH_CHECK_URL"
+          if curl -f -s "$HEALTH_CHECK_URL" > /dev/null; then
+            echo "✅ Backend health check passed"
+          else
+            echo "⚠️ Backend health check failed or timeout"
+            # Don't fail deployment for health check
+          fi
+
+  # Stage 5: Summary & Notifications
+  deployment-complete:
+    name: Deployment Complete
+    runs-on: ubuntu-latest
+    needs: [build-backend, deploy-frontend, deploy-database, deploy-backend]
+    if: always()
+    steps:
+      - name: Check deployment status
+        run: |
+          echo "📊 Deployment Summary"
+          echo "===================="
+          echo "Backend build: ${{ needs.build-backend.result }}"
+          echo "Frontend deploy: ${{ needs.deploy-frontend.result }}"
+          echo "Database deploy: ${{ needs.deploy-database.result }}"
+          echo "Backend deploy: ${{ needs.deploy-backend.result }}"
+          echo ""
+
+          if [[ "${{ needs.build-backend.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-backend.result }}" == "failure" ]]; then
+            echo "❌ Deployment failed"
+            exit 1
+          else
+            echo "✅ Deployment complete"
+          fi

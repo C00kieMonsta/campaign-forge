@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "module": "CommonJS",
+    "target": "ESNext",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "moduleResolution": "Node",
+    "jsx": "react-jsx",
+    "baseUrl": "./",
+    "paths": {
+      "@packages/utils": ["node_modules/@packages/utils"],
+      "@schemas/*": ["src/schemas/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "references": [
+    {
+      "path": "../types"
+    }
+  ]
+}

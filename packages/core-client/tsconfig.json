@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.packages.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "target": "ESNext",
+    "declarationMap": false,
+    "sourceMap": false,
+    "jsx": "react-jsx",
+    "baseUrl": "./",
+    "composite": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*"],
+  "references": [{ "path": "../types" }]
+}

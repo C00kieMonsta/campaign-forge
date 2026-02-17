@@ -1,0 +1,840 @@
+---
+description: "Next.js frontend patterns, React hooks, Redux integration, and component architecture"
+globs:
+  - "apps/frontend/src/**/*.ts"
+  - "apps/frontend/src/**/*.tsx"
+alwaysApply: true
+---
+
+# Frontend Architecture Guidelines
+
+## 🎯 Simple Components
+
+**Simpler components = easier to understand, test, and maintain**
+
+### Components Should Be Simple
+
+```typescript
+// ❌ TOO COMPLEX - Mixed concerns
+function ExtractionListWithFiltering({ projectId, onSelect }) {
+  const [jobs, setJobs] = useState([]);
+  const [filter, setFilter] = useState("");
+  const [sortBy, setSortBy] = useState("date");
+  
+  useEffect(() => {
+    fetch(`/api/jobs/${projectId}`).then(setJobs);
+  }, [projectId]);
+  
+  const filtered = jobs.filter(j => j.name.includes(filter));
+  const sorted = [...filtered].sort(...);
+  
+  return (
+    <div>
+      <input onChange={e => setFilter(e.target.value)} />
+      <select onChange={e => setSortBy(e.target.value)}>
+        {sorted.map(job => <JobCard />)}
+      </select>
+    </div>
+  );
+}
+
+// ✅ SIMPLE - Each piece has one job
+// Fetching: Done at page level
+// Filtering: Separate hook
+// Rendering: Just display
+
+function ExtractionList({ jobs, onSelect }) {
+  return (
+    <div>
+      {jobs.map(job => (
+        <JobCard key={job.id} job={job} onSelect={onSelect} />
+      ))}
+    </div>
+  );
+}
+```
+
+### Use Simple Props
+
+```typescript
+// ❌ TOO MANY PROPS (over-flexible)
+<ComplexForm
+  isLoading={loading}
+  isError={error}
+  errorMessage={message}
+  onSubmit={handleSubmit}
+  onCancel={handleCancel}
+  onError={handleError}
+  validateOn="blur"
+  validateOnChange={false}
+  showValidationErrors={true}
+  initialValues={values}
+  transformValues={transform}
+  {...otherProps}
+/>
+
+// ✅ SIMPLE PROPS (only what's needed)
+<SimpleForm
+  onSubmit={handleSubmit}
+  initialValues={values}
+/>
+```
+
+---
+
+## Project Structure
+
+```
+apps/frontend/src/
+├── app/                     # Next.js app router pages
+│   ├── auth/
+│   │   ├── callback/
+│   │   │   └── page.tsx     # Auth provider callback
+│   │   ├── login/
+│   │   │   └── page.tsx
+│   │   └── register/
+│   │       └── page.tsx
+│   ├── dashboard/
+│   │   ├── layout.tsx       # Protected layout
+│   │   ├── page.tsx         # Main dashboard
+│   │   ├── projects/        # Projects section
+│   │   ├── extractions/     # Extractions section
+│   │   └── settings/        # Settings section
+│   ├── layout.tsx           # Root layout
+│   └── page.tsx             # Landing page
+├── components/              # Reusable app components (not in @packages/ui)
+│   ├── auth/
+│   │   ├── LoginForm.tsx
+│   │   ├── RegisterForm.tsx
+│   │   └── AuthGuard.tsx
+│   ├── extraction/          # Extraction-specific components
+│   │   ├── ExtractionCard.tsx
+│   │   ├── ExtractionForm.tsx
+│   │   ├── JobStatusBadge.tsx
+│   │   └── ExtractionRow.tsx
+│   ├── projects/
+│   │   ├── ProjectCard.tsx
+│   │   ├── ProjectForm.tsx
+│   │   └── ProjectSelector.tsx
+│   ├── layout/
+│   │   ├── Navbar.tsx
+│   │   ├── Sidebar.tsx
+│   │   └── MainLayout.tsx
+│   └── common/
+│       ├── PageHeader.tsx
+│       ├── LoadingState.tsx
+│       └── EmptyState.tsx
+├── hooks/                   # App-specific hooks
+│   ├── useCurrentUser.ts    # Wrapper around useAppData('user')
+│   ├── useCurrentOrganization.ts
+│   ├── useSelectedProject.ts
+│   ├── useExtractionFilters.ts  # App-specific filtering
+│   └── index.ts
+├── contexts/                # App-specific contexts (if needed)
+│   ├── AuthContext.tsx      # Wraps auth state
+│   └── index.ts
+├── lib/                     # Utilities & helpers
+│   ├── api.ts               # API client setup
+│   ├── auth.ts              # Auth helpers
+│   ├── routes.ts            # Route constants
+│   └── validators.ts        # Form validators
+├── providers/               # Root providers
+│   ├── Providers.tsx        # Redux + Query + Supabase setup
+│   └── AuthProvider.tsx
+├── stores/                  # Redux setup (minimal, most in @packages/core-client)
+│   ├── index.ts             # Store configuration
+│   ├── middleware.ts        # Custom middleware (if needed)
+│   └── persistence.ts       # State persistence (if needed)
+├── types/                   # Frontend-specific types (NOT entities!)
+│   ├── ui.ts                # UI state types
+│   ├── filters.ts           # Filter/query types
+│   └── index.ts
+├── config/
+│   ├── env.ts               # Environment variables
+│   └── constants.ts         # Frontend-specific constants
+├── styles/
+│   ├── globals.css          # Global styles
+│   └── variables.css        # CSS variables
+└── middleware.ts            # Next.js middleware
+```
+
+## Data Fetching & State Management
+
+### Store-First Architecture
+
+**CRITICAL:** The frontend uses store-first architecture. Data flows:
+
+```
+Page/App Level
+    ↓
+useAppDataOrchestrator() fetches data via repositories
+    ↓
+Repositories dispatch Redux actions to store
+    ↓
+Components read from Redux store via useCollection()
+```
+
+### Initial Data Loading
+
+Load data at the **page/layout level**, never in components:
+
+```typescript
+// ✅ CORRECT - fetch at page level
+// apps/frontend/src/app/dashboard/page.tsx
+import { useAppDataOrchestrator } from "@packages/core-client";
+import { useCurrentUser } from "@/hooks";
+
+export default function DashboardPage() {
+  const user = useCurrentUser();
+  
+  // Load all dashboard data at page level
+  useAppDataOrchestrator({
+    includeProjects: true,
+    includeExtractionJobs: true,
+    includeSchemas: true
+  });
+
+  return <DashboardContent />;
+}
+
+// ❌ WRONG - fetching in child component
+function ExtractionList() {
+  const [jobs, setJobs] = useState([]);
+  
+  useEffect(() => {
+    // Don't fetch here! Store might not be hydrated
+    fetch("/api/extraction/jobs").then(setJobs);
+  }, []);
+  
+  return <div>{jobs.map(/* ... */)}</div>;
+}
+```
+
+### Reading from Redux
+
+All components read from Redux store using typed hooks:
+
+```typescript
+// ✅ CORRECT - read from store
+import { useExtractionJobsForProject } from "@packages/core-client";
+
+function ExtractionList({ projectId }: { projectId: string }) {
+  // Hook reads from Redux store (already hydrated by app level)
+  const jobs = useExtractionJobsForProject(projectId);
+  
+  if (!jobs.length) return <EmptyState />;
+  
+  return (
+    <div>
+      {jobs.map(job => (
+        <ExtractionCard key={job.id} job={job} />
+      ))}
+    </div>
+  );
+}
+```
+
+### Repository Usage Pattern
+
+Repositories should only be called at app/page level:
+
+```typescript
+// ✅ CORRECT - page level repository usage
+import { useExtractionJobRepository } from "@packages/core-client";
+
+export default function ExtractionPage({ params }) {
+  const projectId = params.projectId;
+  const repository = useExtractionJobRepository();
+
+  // Fetch at page level
+  useEffect(() => {
+    repository.getByProject(projectId);
+    // This dispatches to Redux, hydrating the store
+  }, [projectId, repository]);
+
+  return <ExtractionContent projectId={projectId} />;
+}
+
+// ❌ WRONG - don't call repository from components
+function ExtractionCard({ jobId }: { jobId: string }) {
+  const repository = useExtractionJobRepository();
+  
+  useEffect(() => {
+    // Don't fetch here - defeats store-first pattern
+    repository.getById(jobId);
+  }, [jobId, repository]);
+}
+```
+
+## React Components
+
+### Functional Component Pattern
+
+Always use functional components with hooks:
+
+```typescript
+// ✅ CORRECT - functional component with hooks
+import { FC } from "react";
+import { Button, Card } from "@packages/ui";
+
+interface ExtractionCardProps {
+  jobId: string;
+  onDelete?: (jobId: string) => void;
+}
+
+export const ExtractionCard: FC<ExtractionCardProps> = ({ 
+  jobId, 
+  onDelete 
+}) => {
+  const job = useExtractionJob(jobId); // Read from store
+  
+  if (!job) return null;
+  
+  return (
+    <Card>
+      <Card.Header>{job.name}</Card.Header>
+      <Card.Body>
+        Status: {job.status}
+        Progress: {job.progressPercentage}%
+      </Card.Body>
+      <Card.Footer>
+        {onDelete && (
+          <Button onClick={() => onDelete(jobId)}>Delete</Button>
+        )}
+      </Card.Footer>
+    </Card>
+  );
+};
+```
+
+### Props Pattern
+
+Keep props focused and typed:
+
+```typescript
+// ✅ CORRECT - typed, focused props
+interface ProjectFormProps {
+  projectId?: string;
+  organizationId: string;
+  onSuccess?: (projectId: string) => void;
+  onCancel?: () => void;
+}
+
+export function ProjectForm({
+  projectId,
+  organizationId,
+  onSuccess,
+  onCancel
+}: ProjectFormProps) {
+  // Component logic
+}
+
+// ❌ WRONG - props too broad/untyped
+function ProjectForm(props: any) {
+  // Impossible to know what props are accepted
+}
+
+// ❌ WRONG - too many props (more than 5)
+interface ProjectFormProps {
+  id: string;
+  name: string;
+  description: string;
+  organizationId: string;
+  ownerId: string;
+  isPublic: boolean;
+  allowSharing: boolean;
+  defaultSchema: string;
+  // ... too many
+}
+```
+
+### Conditional Rendering
+
+Use guard clauses and ternary operators, never nested conditionals:
+
+```typescript
+// ✅ CORRECT - guard clauses
+export function ProjectDetails({ projectId }: { projectId: string }) {
+  const project = useProject(projectId);
+  
+  if (!project) return <EmptyState message="Project not found" />;
+  if (!project.owner) return <LoadingState />;
+  
+  return (
+    <div>
+      <h1>{project.name}</h1>
+      <p>{project.description}</p>
+    </div>
+  );
+}
+
+// ❌ WRONG - nested conditionals
+if (project) {
+  if (project.owner) {
+    if (project.owner.id === userId) {
+      // Too deeply nested
+    }
+  }
+}
+```
+
+## Custom Hooks
+
+### Hook Naming Convention
+
+Start with `use` prefix, clear intent:
+
+```typescript
+// ✅ CORRECT - clear naming
+export function useExtractionJobs() { /* ... */ }
+export function useFilteredJobs(filter: string) { /* ... */ }
+export function useProjectForm() { /* ... */ }
+export function useAuthGuard() { /* ... */ }
+
+// ❌ WRONG - vague naming
+export function useJobs() { /* ... */ }           // Which jobs?
+export function useFilter(f) { /* ... */ }       // What filter?
+export function useFormState() { /* ... */ }     // Which form?
+```
+
+### App-Level Data Hooks
+
+Wrap `@packages/core-client` hooks for app-specific logic:
+
+```typescript
+// ✅ CORRECT - app-level wrapper
+// apps/frontend/src/hooks/useCurrentUser.ts
+import { useAppData } from "@packages/core-client";
+
+export function useCurrentUser() {
+  return useAppData("user");
+}
+
+// Usage:
+const user = useCurrentUser(); // Clear, simple API
+
+// ❌ WRONG - directly exposing package hook
+import { useAppData } from "@packages/core-client";
+// Now consumers need to know about @packages/core-client
+const user = useAppData("user");
+```
+
+### Hook Return Types
+
+Always type hook return values:
+
+```typescript
+// ✅ CORRECT - explicit return type
+import { TExtractionJob } from "@packages/types";
+
+export function useExtractionJob(jobId: string): TExtractionJob | null {
+  return useSelector((state) => 
+    state.entities.extractionJobs.find(j => j.id === jobId) ?? null
+  );
+}
+
+// ❌ WRONG - implicit any return type
+export function useExtractionJob(jobId: string) {
+  return useSelector((state) => 
+    state.entities.extractionJobs.find(j => j.id === jobId)
+  );
+}
+```
+
+### Hook Side Effects
+
+Use `useEffect` only for:
+- Syncing with external systems
+- Setting up listeners
+- Cleaning up resources
+
+Never use for state derivation:
+
+```typescript
+// ✅ CORRECT - effect only for side effects
+export function useExtractionJobSubscription(jobId: string) {
+  useEffect(() => {
+    // Subscribe to WebSocket updates
+    const unsubscribe = subscribeToJobUpdates(jobId, (update) => {
+      dispatch(updateExtractionJob(update));
+    });
+    
+    return unsubscribe;
+  }, [jobId]);
+}
+
+// ❌ WRONG - computing state in effect
+export function useFilteredJobs(filter: string) {
+  const [filtered, setFiltered] = useState<TExtractionJob[]>([]);
+  const jobs = useExtractionJobs();
+  
+  useEffect(() => {
+    // Use useMemo instead!
+    setFiltered(jobs.filter(j => j.name.includes(filter)));
+  }, [jobs, filter]);
+  
+  return filtered;
+}
+
+// ✅ CORRECT - use useMemo for derived state
+export function useFilteredJobs(filter: string) {
+  const jobs = useExtractionJobs();
+  
+  return useMemo(
+    () => jobs.filter(j => j.name.includes(filter)),
+    [jobs, filter]
+  );
+}
+```
+
+## Form Handling
+
+### React Hook Form Pattern
+
+Use `react-hook-form` for form state management:
+
+```typescript
+// ✅ CORRECT - react-hook-form with Zod
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { CreateProjectSchema, TCreateProjectRequest } from "@packages/types";
+
+interface CreateProjectFormProps {
+  organizationId: string;
+  onSuccess?: (projectId: string) => void;
+}
+
+export function CreateProjectForm({ organizationId, onSuccess }: CreateProjectFormProps) {
+  const { register, handleSubmit, formState: { errors }, isSubmitting } = useForm<TCreateProjectRequest>({
+    resolver: zodResolver(CreateProjectSchema),
+    defaultValues: { organizationId }
+  });
+
+  const onSubmit = async (data: TCreateProjectRequest) => {
+    try {
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+      });
+      
+      if (!response.ok) throw new Error("Failed to create project");
+      
+      const { id } = await response.json();
+      onSuccess?.(id);
+    } catch (error) {
+      console.error(JSON.stringify({
+        level: "error",
+        action: "createProjectFailed",
+        error: error instanceof Error ? error.message : "Unknown error"
+      }));
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <input {...register("name")} placeholder="Project name" />
+      {errors.name && <span>{errors.name.message}</span>}
+      
+      <button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? "Creating..." : "Create"}
+      </button>
+    </form>
+  );
+}
+
+// ❌ WRONG - manual state management
+const [name, setName] = useState("");
+const [errors, setErrors] = useState("");
+// ... tedious manual handling
+```
+
+## Performance Optimization
+
+### Memoization
+
+Use `useMemo` for expensive computations:
+
+```typescript
+// ✅ CORRECT - memoize expensive calculation
+function JobList({ jobs, sortBy }: { jobs: TExtractionJob[], sortBy: "date" | "status" }) {
+  const sortedJobs = useMemo(() => {
+    // Expensive sort/filter operation
+    return [...jobs].sort((a, b) => {
+      if (sortBy === "date") return b.createdAt.getTime() - a.createdAt.getTime();
+      return a.status.localeCompare(b.status);
+    });
+  }, [jobs, sortBy]);
+
+  return <div>{sortedJobs.map(/* ... */)}</div>;
+}
+
+// ❌ WRONG - recalculates every render
+function JobList({ jobs, sortBy }) {
+  const sortedJobs = [...jobs].sort(/* ... */); // Recalculated every render!
+  return <div>{sortedJobs.map(/* ... */)}</div>;
+}
+```
+
+### React.memo for Component Memoization
+
+Memoize components that receive data from Redux to prevent re-renders:
+
+```typescript
+// ✅ CORRECT - memoize when props don't change
+interface ExtractionCardProps {
+  jobId: string;
+}
+
+export const ExtractionCard = React.memo(function ExtractionCard({ jobId }: ExtractionCardProps) {
+  const job = useExtractionJob(jobId);
+  
+  if (!job) return null;
+  
+  return <Card>{job.name}</Card>;
+});
+
+// ❌ WRONG - re-renders even when props identical
+export function ExtractionCard({ jobId }: ExtractionCardProps) {
+  const job = useExtractionJob(jobId);
+  return <Card>{job.name}</Card>;
+}
+```
+
+### Virtualization for Long Lists
+
+Use virtualization for lists with many items:
+
+```typescript
+// ✅ CORRECT - virtualized list
+import { FixedSizeList } from "react-window";
+
+function JobList({ jobs }: { jobs: TExtractionJob[] }) {
+  return (
+    <FixedSizeList
+      height={600}
+      itemCount={jobs.length}
+      itemSize={100}
+      width="100%"
+    >
+      {({ index, style }) => (
+        <div style={style}>
+          <ExtractionCard jobId={jobs[index].id} />
+        </div>
+      )}
+    </FixedSizeList>
+  );
+}
+
+// ❌ WRONG - renders all items at once for 1000+ items
+function JobList({ jobs }: { jobs: TExtractionJob[] }) {
+  return (
+    <div>
+      {jobs.map(job => (
+        <ExtractionCard key={job.id} jobId={job.id} />
+      ))}
+    </div>
+  );
+}
+```
+
+## Styling
+
+### Tailwind + CSS Modules
+
+Use Tailwind for utility styles, CSS modules for component-specific styles:
+
+```typescript
+// ✅ CORRECT - Tailwind for layout, CSS module for complex styles
+import styles from "./ExtractionCard.module.css";
+
+export function ExtractionCard({ job }: { job: TExtractionJob }) {
+  return (
+    <div className="p-4 border rounded-lg shadow">
+      <h2 className="text-xl font-bold mb-2">{job.name}</h2>
+      <div className={styles.progressBar}>
+        <div className={styles.fill} style={{ width: `${job.progressPercentage}%` }} />
+      </div>
+    </div>
+  );
+}
+```
+
+```css
+/* ExtractionCard.module.css */
+.progressBar {
+  height: 8px;
+  background-color: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4f46e5, #7c3aed);
+  transition: width 0.3s ease;
+}
+```
+
+### CSS Variables for Theming
+
+Define theme colors as CSS variables:
+
+```css
+/* styles/variables.css */
+:root {
+  --color-primary: #4f46e5;
+  --color-secondary: #7c3aed;
+  --color-error: #ef4444;
+  --color-success: #22c55e;
+  
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 1rem;
+}
+```
+
+## Type Safety
+
+### No `any` Types
+
+Never use `any` - use proper types or generics:
+
+```typescript
+// ✅ CORRECT - typed
+function processJobResponse(response: Response): Promise<TExtractionJob> {
+  return response.json();
+}
+
+// ❌ WRONG - using any
+function processJobResponse(response: any): any {
+  return response.json();
+}
+```
+
+### Extract Shared Types
+
+Move duplicated types to `@packages/types`:
+
+```typescript
+// ❌ WRONG - duplicated in multiple files
+// apps/frontend/src/components/extraction/types.ts
+interface ExtractionJobStatus {
+  id: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+// apps/frontend/src/hooks/types.ts
+interface ExtractionJobStatus {
+  id: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+// ✅ CORRECT - single source of truth
+// @packages/types/src/entities/extraction.ts
+export type TExtractionJob = {
+  id: string;
+  status: TExtractionJobStatus;
+  // ...
+}
+
+// apps/frontend/src/components/extraction/ExtractionCard.tsx
+import { TExtractionJob } from "@packages/types";
+```
+
+## Error Handling
+
+### API Error Handling
+
+```typescript
+// ✅ CORRECT - structured error handling
+async function fetchExtractionJobs(projectId: string): Promise<TExtractionJob[]> {
+  try {
+    const response = await fetch(`/api/extraction/project/${projectId}/jobs`);
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || `HTTP ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      action: "fetchExtractionJobsFailed",
+      projectId,
+      error: error instanceof Error ? error.message : "Unknown error",
+      timestamp: new Date().toISOString()
+    }));
+    
+    throw error;
+  }
+}
+```
+
+### User Feedback
+
+Show errors to users clearly:
+
+```typescript
+// ✅ CORRECT - user-friendly error messages
+function ExtractionForm({ projectId }: { projectId: string }) {
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (data: TStartExtractionJobRequest) => {
+    try {
+      setError(null);
+      await repository.startJob(data);
+    } catch (error) {
+      setError(
+        error instanceof Error 
+          ? error.message 
+          : "Failed to start extraction job. Please try again."
+      );
+    }
+  };
+
+  return (
+    <>
+      {error && <Alert type="error">{error}</Alert>}
+      {/* form fields */}
+    </>
+  );
+}
+```
+
+## URL Routes & Navigation
+
+### Route Constants
+
+Define routes as constants to avoid typos:
+
+```typescript
+// ✅ CORRECT - route constants
+export const ROUTES = {
+  HOME: "/",
+  AUTH: {
+    LOGIN: "/auth/login",
+    REGISTER: "/auth/register",
+    CALLBACK: "/auth/callback"
+  },
+  DASHBOARD: "/dashboard",
+  PROJECTS: {
+    ROOT: "/dashboard/projects",
+    DETAIL: (id: string) => `/dashboard/projects/${id}`,
+    EDIT: (id: string) => `/dashboard/projects/${id}/edit`
+  },
+  EXTRACTIONS: {
+    ROOT: "/dashboard/extractions",
+    DETAIL: (id: string) => `/dashboard/extractions/${id}`
+  }
+} as const;
+
+// Usage
+<Link href={ROUTES.PROJECTS.DETAIL("123")}>View Project</Link>
+router.push(ROUTES.DASHBOARD);
+
+// ❌ WRONG - magic strings
+<Link href={`/dashboard/projects/${id}`}>View Project</Link>
+router.push("/dashboard");
+```

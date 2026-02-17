@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@packages/utils/*": ["../../packages/utils/dist/*"],
+      "@packages/utils": ["../../packages/utils/dist"],
+      "@packages/types/*": ["../../packages/types/dist/*"],
+      "@packages/types": ["../../packages/types/dist"]
+    }
+  }
+}

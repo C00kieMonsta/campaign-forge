@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "target": "ES2021",
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "rootDir": ".",
+    "skipLibCheck": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@packages/utils/*": ["../../packages/utils/src/*"],
+      "@packages/utils": ["../../packages/utils/src"],
+      "@packages/types/*": ["../../packages/types/src/*"],
+      "@packages/types": ["../../packages/types/src"]
+    },
+    "strict": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "cdk/**/*", "test/**/*"],
+  "references": [
+    {
+      "path": "../../packages/types"
+    },
+    {
+      "path": "../../packages/utils"
+    }
+  ]
+}

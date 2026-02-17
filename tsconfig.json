@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "target": "ES2017",
+    "baseUrl": ".",
+    "paths": {
+      "@packages/utils/*": ["packages/utils/src/*"],
+      "@packages/utils": ["packages/utils/src"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules", "**/node_modules", "**/.next", "**/dist"],
+  "references": [
+    {
+      "path": "./apps/frontend"
+    },
+    {
+      "path": "./apps/backend"
+    },
+    {
+      "path": "./packages/types"
+    }
+  ]
+}

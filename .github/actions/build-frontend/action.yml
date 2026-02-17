@@ -1,0 +1,51 @@
+name: Build Frontend
+description: Builds Vite frontend application with environment variables
+
+inputs:
+  vite_api_url:
+    description: Frontend API URL
+    required: false
+    default: http://localhost:3000
+  vite_ws_url:
+    description: WebSocket URL (optional)
+    required: false
+  vite_supabase_url:
+    description: Supabase URL
+    required: false
+    default: http://127.0.0.1:54321
+  vite_supabase_anon_key:
+    description: Supabase anonymous key
+    required: false
+    default: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+  vite_stage:
+    description: Application stage
+    required: false
+    default: production
+
+runs:
+  using: composite
+  steps:
+    - name: Build frontend
+      env:
+        VITE_API_URL: ${{ inputs.vite_api_url }}
+        VITE_WS_URL: ${{ inputs.vite_ws_url }}
+        VITE_SUPABASE_URL: ${{ inputs.vite_supabase_url }}
+        VITE_SUPABASE_ANON_KEY: ${{ inputs.vite_supabase_anon_key }}
+        VITE_STAGE: ${{ inputs.vite_stage }}
+      run: pnpm --filter @apps/frontend-vite run build
+      shell: bash
+
+    - name: Verify build output
+      run: |
+        echo "Checking frontend build output..."
+        if [ ! -d "apps/frontend/dist" ]; then
+          echo "❌ ERROR: Frontend dist build not found!"
+          echo "Available apps/frontend contents:"
+          ls -la apps/frontend/ | grep -E '^d' || echo "No directories found"
+          exit 1
+        fi
+        echo "✅ Frontend built successfully with Vite!"
+        echo "Dist directory contents:"
+        ls -la apps/frontend/dist/ | head -20
+      shell: bash
+

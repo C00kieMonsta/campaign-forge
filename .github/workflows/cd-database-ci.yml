@@ -1,0 +1,260 @@
+name: Database CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/backend/prisma/schema.prisma"
+      - "apps/backend/prisma/seed.ts"
+      - "supabase/config.toml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/backend/prisma/schema.prisma"
+      - "apps/backend/prisma/seed.ts"
+      - "supabase/config.toml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy migrations to"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  # ============================================================================
+  # VALIDATION JOB - Test migrations locally
+  # ============================================================================
+  validate-schema:
+    name: Validate Database Schema
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase local
+        run: |
+          echo "🚀 Starting local Supabase instance..."
+          supabase start
+
+      - name: Validate Prisma schema
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          DIRECT_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+        run: |
+          echo "🔍 Validating Prisma schema..."
+          cd apps/backend
+          pnpm db:generate
+          pnpm db:push
+          echo "✅ Prisma schema validation completed"
+
+      - name: Check database schema
+        run: |
+          echo "🔍 Inspecting database schema..."
+          supabase db dump --local -s public
+
+      - name: Run basic data validation
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          DIRECT_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+        run: |
+          echo "🧪 Running basic data validation..."
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -c "
+            SELECT 
+              schemaname, 
+              tablename, 
+              tableowner 
+            FROM pg_tables 
+            WHERE schemaname = 'public' 
+            ORDER BY tablename;"
+
+          # Check that essential tables exist
+          echo "📊 Checking essential tables..."
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -c "
+            SELECT COUNT(*) as user_count FROM users;
+            SELECT COUNT(*) as org_count FROM organizations;
+            SELECT COUNT(*) as role_count FROM roles;
+            SELECT COUNT(*) as permission_count FROM permissions;" || echo "⚠️ Some tables may not exist yet"
+
+      - name: Test RLS policies
+        run: |
+          echo "🔐 Testing Row Level Security policies..."
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -c "
+            SELECT schemaname, tablename, policyname, permissive, roles, cmd, qual 
+            FROM pg_policies 
+            WHERE schemaname = 'public';"
+
+      - name: Check functions and triggers
+        run: |
+          echo "⚙️ Checking database functions and triggers..."
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -c "
+            SELECT routine_name, routine_type 
+            FROM information_schema.routines 
+            WHERE routine_schema = 'public';"
+
+      - name: Test database connections
+        run: |
+          echo "🔌 Testing database connectivity..."
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -c "SELECT version();"
+
+      - name: Stop Supabase
+        if: always()
+        run: |
+          echo "🛑 Stopping Supabase..."
+          supabase stop
+
+  # ============================================================================
+  # MIGRATION DEPLOYMENT JOB - Deploy to environments
+  # ============================================================================
+  deploy-schema:
+    name: Deploy Database Schema
+    runs-on: ubuntu-latest
+    needs: validate-schema
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch')
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Deploy schema with Prisma
+        timeout-minutes: 10
+        env:
+          CI: true
+          PRISMA_DISABLE_WARNINGS: true
+          PRISMA_HIDE_UPDATE_MESSAGE: true
+          DEBIAN_FRONTEND: noninteractive
+          PRISMA_SCHEMA_ENGINE_LOG: info
+          RUST_LOG: info
+          SUPABASE_PROJECT_ID: ${{ vars.SUPABASE_PROJECT_ID }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          DATABASE_URL: "postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:${{ secrets.SUPABASE_DB_PASSWORD }}@aws-1-eu-west-2.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1&sslmode=require"
+          DIRECT_DATABASE_URL: "postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:${{ secrets.SUPABASE_DB_PASSWORD }}@aws-1-eu-west-2.pooler.supabase.com:5432/postgres?sslmode=require&connect_timeout=30"
+        run: |
+          echo "🚀 Deploying schema to ${{ github.event.inputs.environment || 'production' }} with Prisma..."
+          if [ -z "${SUPABASE_PROJECT_ID}" ] || [ -z "${SUPABASE_DB_PASSWORD}" ]; then
+            echo "❌ Missing SUPABASE_PROJECT_ID or SUPABASE_DB_PASSWORD" && exit 1
+          fi
+          echo "Runtime URL (pooled): postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:***@aws-1-eu-west-2.pooler.supabase.com:6543/postgres"
+          echo "Direct URL (migrations): postgresql://postgres.${{ vars.SUPABASE_PROJECT_ID }}:***@aws-1-eu-west-2.pooler.supabase.com:5432/postgres"
+          cd apps/backend
+          echo "Generating Prisma client..."
+          pnpm db:generate
+          echo "Testing direct database connection..."
+
+          # Test connection with retries
+          max_retries=3
+          retry_count=0
+          connection_success=false
+
+          while [ $retry_count -lt $max_retries ] && [ "$connection_success" = false ]; do
+            echo "Connection attempt $((retry_count + 1))/$max_retries..."
+            if timeout 30s npx prisma db execute --stdin --url "$DIRECT_DATABASE_URL" <<< "SELECT 1;" 2>/dev/null; then
+              echo "✅ Database connection successful"
+              connection_success=true
+            else
+              retry_count=$((retry_count + 1))
+              if [ $retry_count -lt $max_retries ]; then
+                echo "⚠️ Connection failed, retrying in 10 seconds..."
+                sleep 10
+              else
+                echo "⚠️ All connection attempts failed, but continuing with deployment..."
+              fi
+            fi
+          done
+
+          echo "Deploying schema with Prisma migrations (using direct connection for DDL)..."
+
+          # Deploy migrations
+          echo "🚀 Running Prisma migrations..."
+          if pnpm db:deploy; then
+            echo "✅ Migration deployment successful"
+          else
+            echo "❌ Migration deployment failed"
+            exit 1
+          fi
+
+      - name: Setup Supabase CLI (for verification)
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Verify deployment
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_ID: ${{ vars.SUPABASE_PROJECT_ID }}
+        run: |
+          echo "✅ Verifying deployment..."
+          DIRECT_URL="postgresql://postgres.${SUPABASE_PROJECT_ID}:${SUPABASE_DB_PASSWORD}@aws-1-eu-west-2.pooler.supabase.com:5432/postgres?sslmode=require"
+          echo "Using direct URL for dump: postgresql://postgres.${SUPABASE_PROJECT_ID}:***@aws-1-eu-west-2.pooler.supabase.com:5432/postgres"
+          supabase db dump -s public --db-url "$DIRECT_URL"
+
+  # ============================================================================
+  # BACKUP JOB - Create backup before major changes
+  # ============================================================================
+  create-backup:
+    name: Create Database Backup
+    runs-on: ubuntu-latest
+    needs: validate-schema
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event.inputs.environment == 'production')
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link to Supabase project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ vars.SUPABASE_PROJECT_ID }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          echo "🔗 Linking to Supabase project for backup..."
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
+
+      - name: Create schema backup
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_ID: ${{ vars.SUPABASE_PROJECT_ID }}
+        run: |
+          echo "💾 Creating schema backup..."
+          timestamp=$(date +%Y%m%d_%H%M%S)
+          BACKUP_DB_URL="postgresql://postgres.${SUPABASE_PROJECT_ID}:${SUPABASE_DB_PASSWORD}@aws-1-eu-west-2.pooler.supabase.com:5432/postgres?sslmode=require"
+          echo "Using direct URL for backup: postgresql://postgres.${SUPABASE_PROJECT_ID}:***@aws-1-eu-west-2.pooler.supabase.com:5432/postgres"
+          supabase db dump -s public --db-url "$BACKUP_DB_URL" > "backup_schema_${timestamp}.sql"
+
+          # Upload to artifact for safe keeping
+          echo "backup_file=backup_schema_${timestamp}.sql" >> $GITHUB_ENV
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-backup-${{ github.run_number }}
+          path: ${{ env.backup_file }}
+          retention-days: 30

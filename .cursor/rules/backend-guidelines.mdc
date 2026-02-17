@@ -1,0 +1,799 @@
+---
+alwaysApply: true
+---
+
+# Backend Architecture Guidelines
+
+## 🎯 Simple Services
+
+**Keep services focused. Each service does ONE thing well.**
+
+### Services Should Be Simple
+
+```typescript
+// ❌ TOO COMPLEX - Multiple concerns
+@Injectable()
+export class SuperService {
+  async processEverything(data, config, options) {
+    // Validates
+    // Transforms
+    // Caches
+    // Sends to LLM
+    // Updates database
+    // Sends emails
+    // Logs
+    // ... 200 lines
+  }
+}
+
+// ✅ SIMPLE - Each service has one job
+@Injectable()
+export class JobProcessingService {
+  // ONLY processes jobs
+  async process(jobId: string): Promise<Result> {
+    // Clear, focused logic
+  }
+}
+
+@Injectable()
+export class JobValidationService {
+  // ONLY validates
+  async validate(data: unknown): Promise<ValidData> {}
+}
+
+@Injectable()
+export class JobCachingService {
+  // ONLY caches
+  async cache(key: string, value: any): Promise<void> {}
+}
+```
+
+### Constructor Injection Should Be Simple
+
+```typescript
+// ❌ TOO MANY DEPENDENCIES (red flag!)
+@Injectable()
+export class JobService {
+  constructor(
+    private repo1: Repo1,
+    private repo2: Repo2,
+    private repo3: Repo3,
+    private service1: Service1,
+    private service2: Service2,
+    private service3: Service3,
+    private logger: Logger,
+    private cache: Cache
+    // ... more
+  ) {}
+}
+
+// ✅ SIMPLE - Only what this service needs
+@Injectable()
+export class JobService {
+  constructor(
+    private jobRepository: JobRepository,
+    private logger: Logger
+  ) {}
+}
+```
+
+---
+
+## Module Organization
+
+Follow NestJS conventions with feature-based modules:
+
+```
+apps/backend/src/
+├── config/              # Configuration services
+│   ├── env.ts
+│   ├── config.service.ts
+│   └── database.config.ts
+├── shared/              # Cross-cutting concerns
+│   ├── database/        # Prisma client, database utilities
+│   ├── llm/             # LLM services (Gemini, Claude, etc.)
+│   ├── storage/         # S3, file storage
+│   ├── logging/         # Winston logger
+│   └── auth/            # JWT, auth guards
+├── modules/             # Feature modules
+│   ├── auth/
+│   │   ├── auth.module.ts
+│   │   ├── auth.controller.ts
+│   │   ├── auth.service.ts
+│   │   ├── strategies/
+│   │   ├── guards/
+│   │   └── dto/
+│   ├── users/
+│   ├── organizations/
+│   ├── projects/
+│   ├── extraction/      # Extraction job orchestration
+│   │   ├── extraction.module.ts
+│   │   ├── extraction.controller.ts
+│   │   ├── services/
+│   │   │   ├── extraction.service.ts
+│   │   │   ├── pdf-extraction.service.ts
+│   │   │   └── schema-compiler.service.ts
+│   │   ├── repositories/
+│   │   ├── dto/
+│   │   └── providers/   # WebSocket, message queue, etc.
+│   └── ...
+├── main.ts              # Application bootstrap
+└── app.module.ts        # Root module
+```
+
+## Service Layer Design
+
+### Single Responsibility
+
+Each service handles one domain concern:
+
+```typescript
+// ✅ CORRECT - focused services
+@Injectable()
+export class ExtractionJobService {
+  // Only manages extraction job lifecycle
+  async create(data: TStartExtractionJobRequest) {
+    /* ... */
+  }
+  async getById(id: string) {
+    /* ... */
+  }
+  async updateStatus(id: string, status: TExtractionJobStatus) {
+    /* ... */
+  }
+}
+
+@Injectable()
+export class PdfExtractionService {
+  // Only handles PDF text extraction
+  async extractText(filePath: string) {
+    /* ... */
+  }
+}
+
+@Injectable()
+export class SchemaCompilerService {
+  // Only compiles schemas for LLM
+  async compile(schema: TExtractionSchema) {
+    /* ... */
+  }
+}
+
+// ❌ WRONG - mixed responsibilities
+@Injectable()
+export class ExtractionService {
+  async processExtraction(/* 10 parameters */) {
+    // PDF extraction, schema compilation, job status update,
+    // LLM calls, database updates all mixed together
+  }
+}
+```
+
+### Repository Pattern (Database Access)
+
+Use repository pattern for all database queries:
+
+```typescript
+// ✅ CORRECT - repository encapsulates database access
+@Injectable()
+export class ExtractionJobRepository {
+  constructor(private prisma: PrismaClient) {}
+
+  async create(data: TCreateExtractionJobRequest): Promise<TExtractionJob> {
+    return this.prisma.extractionJob.create({
+      data: {
+        organizationId: data.organizationId,
+        schemaId: data.schemaId,
+        status: EXTRACTION_JOB_STATUSES.PENDING
+        // ... other fields
+      }
+    });
+  }
+
+  async getById(id: string): Promise<TExtractionJob | null> {
+    return this.prisma.extractionJob.findUnique({ where: { id } });
+  }
+
+  async updateStatus(
+    id: string,
+    status: TExtractionJobStatus
+  ): Promise<TExtractionJob> {
+    return this.prisma.extractionJob.update({
+      where: { id },
+      data: { status }
+    });
+  }
+
+  // Specific query methods - single concern
+  async getByProject(projectId: string): Promise<TExtractionJob[]> {
+    return this.prisma.extractionJob.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
+  async getByOrganization(
+    organizationId: string,
+    filters?: { status?: TExtractionJobStatus; limit?: number }
+  ): Promise<TExtractionJob[]> {
+    return this.prisma.extractionJob.findMany({
+      where: {
+        organizationId,
+        ...(filters?.status && { status: filters.status })
+      },
+      orderBy: { createdAt: "desc" },
+      take: filters?.limit ?? 100
+    });
+  }
+}
+
+// ❌ WRONG - service directly queries database
+@Injectable()
+export class ExtractionService {
+  constructor(private prisma: PrismaClient) {}
+
+  async processJob(jobId: string) {
+    const job = this.prisma.extractionJob.findUnique({
+      /* ... */
+    });
+    const results = this.prisma.extractionResult.findMany({
+      /* ... */
+    });
+    // Database logic mixed with business logic
+  }
+}
+```
+
+### Dependency Injection
+
+Always use constructor injection with NestJS providers:
+
+```typescript
+// ✅ CORRECT - injected dependencies
+@Injectable()
+export class ExtractionJobService {
+  constructor(
+    private readonly jobRepository: ExtractionJobRepository,
+    private readonly schemaCompiler: SchemaCompilerService,
+    private readonly pdfExtractor: PdfExtractionService,
+    private readonly logger: Logger
+  ) {}
+
+  async createJob(data: TStartExtractionJobRequest): Promise<TExtractionJob> {
+    // Use injected services
+    const job = await this.jobRepository.create(data);
+    this.logger.info(`Job created: ${job.id}`);
+    return job;
+  }
+}
+
+// ❌ WRONG - instantiating dependencies manually
+export class ExtractionJobService {
+  async createJob(data: TStartExtractionJobRequest) {
+    const schemaCompiler = new SchemaCompilerService(); // Hard to test
+    const pdfExtractor = new PdfExtractionService(); // Hard to mock
+  }
+}
+```
+
+## Database Patterns
+
+### Transactions
+
+Group related operations in transactions:
+
+```typescript
+// ✅ CORRECT - atomic operation
+async startExtractionJob(jobData: TStartExtractionJobRequest) {
+  return await this.prisma.$transaction(async (tx) => {
+    // Create job
+    const job = await tx.extractionJob.create({
+      data: {
+        organizationId: jobData.organizationId,
+        schemaId: jobData.schemaId,
+        status: EXTRACTION_JOB_STATUSES.PENDING,
+        // ...
+      }
+    });
+
+    // Create initial result records
+    await tx.extractionResult.createMany({
+      data: jobData.dataLayerIds.map(dlId => ({
+        extractionJobId: job.id,
+        dataLayerId: dlId,
+        status: EXTRACTION_RESULT_STATUSES.PENDING
+      }))
+    });
+
+    return job;
+  });
+}
+```
+
+### Query Optimization
+
+Use select/include carefully to avoid N+1 queries:
+
+```typescript
+// ✅ CORRECT - explicit field selection
+async getJobWithResults(jobId: string) {
+  return this.prisma.extractionJob.findUnique({
+    where: { id: jobId },
+    include: {
+      results: {
+        select: {
+          id: true,
+          status: true,
+          rawExtraction: true,
+          // Explicitly select needed fields
+        }
+      },
+      schema: {
+        select: {
+          id: true,
+          name: true,
+          definition: true
+        }
+      }
+    }
+  });
+}
+
+// ⚠️ CAREFUL - including full relations can fetch too much
+async getJobWithResults(jobId: string) {
+  return this.prisma.extractionJob.findUnique({
+    where: { id: jobId },
+    include: {
+      results: true,  // Includes all fields, can be expensive
+      schema: true,   // Includes all fields
+    }
+  });
+}
+```
+
+## API Contract Validation
+
+### Use DTOs from @packages/types
+
+All API endpoints validate requests using Zod schemas:
+
+```typescript
+// ✅ CORRECT - validate request using @packages/types DTO
+import { StartExtractionJobRequestSchema, TStartExtractionJobRequest } from '@packages/types';
+
+@Controller('extraction')
+export class ExtractionController {
+  constructor(private readonly service: ExtractionJobService) {}
+
+  @Post('jobs')
+  async createJob(@Body() body: unknown) {
+    // Validate request
+    const validated = StartExtractionJobRequestSchema.parse(body);
+
+    // Process with type-safe data
+    return this.service.createJob(validated);
+  }
+}
+
+// ❌ WRONG - no validation
+@Post('jobs')
+async createJob(@Body() body: any) {
+  // No validation, body could be anything
+  return this.service.createJob(body);
+}
+```
+
+### Pipes for Automatic Validation
+
+Use NestJS Validation Pipe with Zod transformer:
+
+```typescript
+// ✅ CORRECT - custom Zod validation pipe
+import { PipeTransform, Injectable, BadRequestException } from '@nestjs/common';
+import { ZodSchema } from 'zod';
+
+@Injectable()
+export class ZodValidationPipe implements PipeTransform {
+  constructor(private schema: ZodSchema) {}
+
+  transform(value: unknown) {
+    try {
+      return this.schema.parse(value);
+    } catch (error) {
+      throw new BadRequestException(error.errors);
+    }
+  }
+}
+
+// Usage in controller
+@Post('jobs')
+@UsePipes(new ZodValidationPipe(StartExtractionJobRequestSchema))
+async createJob(@Body() body: TStartExtractionJobRequest) {
+  // body is now type-safe and validated
+  return this.service.createJob(body);
+}
+```
+
+## Error Handling
+
+### Custom Exceptions
+
+Create domain-specific exceptions:
+
+```typescript
+// ✅ CORRECT - domain exceptions
+export class ExtractionJobNotFoundError extends NotFoundException {
+  constructor(jobId: string) {
+    super(`Extraction job ${jobId} not found`);
+  }
+}
+
+export class InvalidSchemaError extends BadRequestException {
+  constructor(reason: string) {
+    super(`Schema validation failed: ${reason}`);
+  }
+}
+
+// Usage
+@Get(':id')
+async getJob(@Param('id') jobId: string) {
+  const job = await this.jobRepository.getById(jobId);
+
+  if (!job) {
+    throw new ExtractionJobNotFoundError(jobId);
+  }
+
+  return job;
+}
+```
+
+### Structured Error Logging
+
+Always log errors with context:
+
+```typescript
+// ✅ CORRECT - structured error logging
+catch (error) {
+  this.logger.error(JSON.stringify({
+    level: 'error',
+    action: 'extractionJobProcessing',
+    jobId: job.id,
+    error: error instanceof Error ? error.message : 'Unknown error',
+    stack: error instanceof Error ? error.stack : undefined,
+    timestamp: new Date().toISOString()
+  }));
+
+  throw error;
+}
+
+// ❌ WRONG - unstructured logging
+catch (error) {
+  console.log('An error occurred'); // Impossible to parse
+  throw error;
+}
+```
+
+## Async Operations & WebSockets
+
+### Job Processing
+
+Use message queue (Bull/RabbitMQ) for long-running operations:
+
+```typescript
+// ✅ CORRECT - async job queue
+@Injectable()
+export class ExtractionProcessor {
+  constructor(
+    @Inject("EXTRACTION_QUEUE")
+    private extractionQueue: Queue
+  ) {}
+
+  async queueExtractionJob(jobId: string) {
+    await this.extractionQueue.add(
+      "process-extraction",
+      { jobId },
+      {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 2000 },
+        removeOnComplete: true
+      }
+    );
+  }
+
+  @Process("process-extraction")
+  async processJob(job: Job<{ jobId: string }>) {
+    // Long-running extraction happens here
+    const extractionJob = await this.jobRepository.getById(job.data.jobId);
+    // ... extraction logic
+  }
+}
+```
+
+### WebSocket Events
+
+Emit progress updates via WebSocket for client updates:
+
+```typescript
+// ✅ CORRECT - emit to client via WebSocket
+@Injectable()
+export class ExtractionJobService {
+  constructor(
+    private gateway: ExtractionGateway,
+    private jobRepository: ExtractionJobRepository
+  ) {}
+
+  async processJob(jobId: string) {
+    const job = await this.jobRepository.getById(jobId);
+
+    // Update status
+    await this.jobRepository.updateStatus(
+      jobId,
+      EXTRACTION_JOB_STATUSES.IN_PROGRESS
+    );
+
+    // Notify client
+    this.gateway.notifyJobUpdate(job.organizationId, {
+      jobId,
+      status: EXTRACTION_JOB_STATUSES.IN_PROGRESS,
+      progressPercentage: 0
+    });
+
+    // ... extraction processing with progress updates
+  }
+}
+
+@WebSocketGateway()
+export class ExtractionGateway {
+  @WebSocketServer() server: Server;
+
+  notifyJobUpdate(organizationId: string, update: any) {
+    this.server.to(`org-${organizationId}`).emit("job:update", update);
+  }
+}
+```
+
+## Guards & Middleware
+
+### Authentication Guards
+
+```typescript
+// ✅ CORRECT - JWT guard with organization context
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {
+  canActivate(context: ExecutionContext) {
+    const request = context.switchToHttp().getRequest();
+    // JWT strategy populates request.user from token
+    return super.canActivate(context);
+  }
+}
+
+// Usage
+@Get('projects')
+@UseGuards(JwtAuthGuard)
+async getProjects(@Request() req) {
+  const userId = req.user.id; // From JWT
+  return this.projectService.getByUser(userId);
+}
+```
+
+### Authorization Guards
+
+```typescript
+// ✅ CORRECT - role-based authorization
+@Injectable()
+export class RoleGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const roles = this.reflector.get<string[]>('roles', context.getHandler());
+
+    if (!roles) return true; // No role requirement
+
+    const request = context.switchToHttp().getRequest();
+    const userRole = request.user?.role;
+
+    return roles.includes(userRole);
+  }
+}
+
+// Usage
+@Get('admin/stats')
+@UseGuards(JwtAuthGuard, RoleGuard)
+@SetMetadata('roles', ['admin', 'owner'])
+async getAdminStats() {
+  // Only admin/owner can access
+}
+```
+
+## Testing Guidelines
+
+### Unit Tests
+
+Test services in isolation with mocked dependencies:
+
+```typescript
+describe("ExtractionJobService", () => {
+  let service: ExtractionJobService;
+  let repository: ExtractionJobRepository;
+
+  beforeEach(async () => {
+    const mockRepository = {
+      create: jest.fn(),
+      getById: jest.fn(),
+      updateStatus: jest.fn()
+    };
+
+    const module = await Test.createTestingModule({
+      providers: [
+        ExtractionJobService,
+        { provide: ExtractionJobRepository, useValue: mockRepository }
+      ]
+    }).compile();
+
+    service = module.get(ExtractionJobService);
+    repository = module.get(ExtractionJobRepository);
+  });
+
+  it("should create extraction job", async () => {
+    const jobData = {
+      /* test data */
+    };
+
+    jest
+      .spyOn(repository, "create")
+      .mockResolvedValue({ id: "123", ...jobData });
+
+    const result = await service.createJob(jobData);
+
+    expect(repository.create).toHaveBeenCalledWith(jobData);
+    expect(result.id).toBe("123");
+  });
+});
+```
+
+### E2E Tests
+
+Test full request→service→database flow:
+
+```typescript
+describe("Extraction API (e2e)", () => {
+  let app: INestApplication;
+  let database: PrismaClient;
+
+  beforeAll(async () => {
+    const module = await Test.createTestingModule({
+      imports: [AppModule]
+    }).compile();
+
+    app = module.createNestApplication();
+    await app.init();
+
+    database = app.get(PrismaClient);
+  });
+
+  it("POST /extraction/jobs should create job", async () => {
+    const createJobDto = {
+      dataLayerId: "test-id",
+      schemaId: "schema-id"
+    };
+
+    const response = await request(app.getHttpServer())
+      .post("/extraction/jobs")
+      .send(createJobDto)
+      .expect(201);
+
+    expect(response.body).toHaveProperty("id");
+
+    // Verify in database
+    const job = await database.extractionJob.findUnique({
+      where: { id: response.body.id }
+    });
+    expect(job).toBeDefined();
+  });
+});
+```
+
+## Performance
+
+### Database Connection Pooling
+
+Configure Prisma connection pool for production:
+
+```typescript
+// .env or config.service.ts
+DATABASE_URL =
+  "postgresql://user:pass@host/db?schema=public&connection_limit=20";
+```
+
+### Caching
+
+Use Redis for frequently accessed data:
+
+```typescript
+// ✅ CORRECT - cache schema after compilation
+@Injectable()
+export class SchemaCompilerService {
+  constructor(private cache: CacheManager) {}
+
+  async compile(schemaId: string): Promise<JsonSchemaDefinition> {
+    // Check cache first
+    const cached = await this.cache.get(`schema:${schemaId}`);
+    if (cached) return cached;
+
+    // Compile and cache
+    const compiled = /* compilation logic */;
+    await this.cache.set(`schema:${schemaId}`, compiled, 3600); // 1 hour
+
+    return compiled;
+  }
+}
+```
+
+### Rate Limiting
+
+Protect endpoints from abuse:
+
+```typescript
+// ✅ CORRECT - rate limiting on extraction API
+@Controller('extraction')
+@UseGuards(ThrottleGuard)
+@Throttle({ default: { limit: 100, ttl: 60000 } }) // 100 req/min
+export class ExtractionController {
+  // Endpoints here are rate-limited
+}
+
+// Custom limits per endpoint
+@Post('jobs')
+@Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 job creations/min
+async createJob(@Body() data: TStartExtractionJobRequest) {
+  // ...
+}
+```
+
+## Logging
+
+### Structured Logging with Winston
+
+```typescript
+// ✅ CORRECT - structured JSON logs
+@Injectable()
+export class ExtractionJobService {
+  constructor(private logger: Logger) {}
+
+  async createJob(data: TStartExtractionJobRequest) {
+    this.logger.log(
+      JSON.stringify({
+        level: "info",
+        action: "extractionJobCreated",
+        jobId: job.id,
+        organizationId: job.organizationId,
+        schemaId: job.schemaId,
+        timestamp: new Date().toISOString()
+      })
+    );
+  }
+}
+```
+
+### Audit Logging
+
+Track important business events:
+
+```typescript
+// ✅ CORRECT - audit trail
+async deleteProject(projectId: string, userId: string) {
+  const project = await this.projectRepository.getById(projectId);
+
+  await this.projectRepository.delete(projectId);
+
+  // Audit log
+  this.auditLogger.log({
+    action: 'projectDeleted',
+    resource: 'project',
+    resourceId: projectId,
+    userId,
+    timestamp: new Date(),
+    changes: { name: project.name, organizationId: project.organizationId }
+  });
+}
+```

@@ -1,0 +1,36 @@
+name: Test Frontend Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-frontend-build:
+    name: Test Frontend Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Build workspace packages
+        uses: ./.github/actions/build-packages
+
+      - name: Run type check
+        run: pnpm run type-check
+
+      - name: Build frontend
+        uses: ./.github/actions/build-frontend
+        with:
+          next_public_api_url: http://localhost:8001
+          next_public_ws_url: ws://localhost:8001/ws
+          next_public_supabase_url: http://127.0.0.1:54321
+          next_public_supabase_anon_key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+          node_env: production
+
+      - name: Test Docker build
+        uses: ./.github/actions/docker-build-test
+        with:
+          dockerfile: apps/frontend/Dockerfile
+          image-name: test-frontend-build

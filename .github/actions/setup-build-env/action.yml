@@ -1,0 +1,29 @@
+name: Setup Build Environment
+description: Sets up Node.js, pnpm, and caches for build operations
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10.8.0
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: pnpm
+
+    - name: Cache pnpm store
+      uses: actions/cache@v4
+      with:
+        path: ~/.pnpm-store
+        key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-
+
+    - name: Install dependencies
+      run: pnpm install
+      shell: bash
+
