@@ -1,17 +1,5 @@
-// src/dto/index.ts
-// Export all DTOs
-
-// Primitives
+// Export DTOs for campaigns and contacts
 export * from "./primitives";
-
-// Common
 export * from "./common";
-
-// Domain DTOs
-export * from "./auth";
-export * from "./audit";
-export * from "./clients";
 export * from "./contacts";
 export * from "./campaigns";
-export * from "./roles";
-export * from "./users";
