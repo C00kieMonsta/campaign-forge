@@ -1,21 +1,14 @@
 {
-  "name": "@cdk-assets/infrastructure",
+  "name": "@infra/campaign-forge",
   "version": "1.0.0",
   "private": true,
-  "description": "AWS CDK infrastructure for CDK Assets",
+  "description": "AWS CDK infrastructure for Campaign Forge",
   "scripts": {
     "build": "tsc",
-    "watch": "tsc -w",
     "cdk": "cdk",
     "deploy": "cdk deploy --all --require-approval never",
-    "deploy:all": "cdk deploy --all --require-approval never",
-    "deploy:backend": "DEPLOY_TARGET=backend STAGE=$STAGE cdk deploy RemoraiAppBackend-$STAGE --require-approval never",
-    "deploy:frontend": "DEPLOY_TARGET=frontend STAGE=$STAGE cdk deploy RemoraiAppFrontend-$STAGE --require-approval never",
-    "destroy": "cdk destroy",
-    "destroy:all": "cdk destroy --all",
     "diff": "cdk diff",
-    "synth": "cdk synth",
-    "test": "jest"
+    "synth": "cdk synth"
   },
   "devDependencies": {
     "@types/node": "20.11.5",

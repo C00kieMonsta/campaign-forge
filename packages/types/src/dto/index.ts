@@ -11,6 +11,7 @@ export * from "./common";
 export * from "./auth";
 export * from "./audit";
 export * from "./clients";
-export * from "./files";
+export * from "./contacts";
+export * from "./campaigns";
 export * from "./roles";
 export * from "./users";
