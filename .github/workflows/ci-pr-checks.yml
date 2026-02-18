@@ -9,10 +9,10 @@ jobs:
     name: Determine Changes
     runs-on: ubuntu-latest
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
-      utils: ${{ steps.filter.outputs.utils }}
-      database: ${{ steps.filter.outputs.database }}
+      landing: ${{ steps.filter.outputs.landing }}
+      packages: ${{ steps.filter.outputs.packages }}
+      infra: ${{ steps.filter.outputs.infra }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,60 +23,51 @@ jobs:
         uses: tj-actions/changed-files@v42
         with:
           files: |
-            apps/backend/**
             apps/frontend/**
-            packages/utils/**
-            packages/types/**
-            packages/core-client/**
-            apps/backend/prisma/schema.prisma
-            apps/backend/prisma/seed.ts
-            apps/backend/prisma/migrations/**
+            apps/landing/**
+            packages/**
+            infrastructure/**
 
       - name: Set outputs
         id: filter
         run: |
           if [[ "${{ steps.changed-files.outputs.any_changed }}" == "true" ]]; then
-            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -qE "apps/backend|packages/(types|utils|core-client)|prisma"; then
-              echo "backend=true" >> $GITHUB_OUTPUT
-            else
-              echo "backend=false" >> $GITHUB_OUTPUT
-            fi
-            
-            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -qE "apps/frontend|packages/(utils|types|core-client)"; then
+            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -qE "apps/frontend|packages/"; then
               echo "frontend=true" >> $GITHUB_OUTPUT
             else
               echo "frontend=false" >> $GITHUB_OUTPUT
             fi
             
-            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "packages/utils"; then
-              echo "utils=true" >> $GITHUB_OUTPUT
+            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -qE "apps/landing"; then
+              echo "landing=true" >> $GITHUB_OUTPUT
             else
-              echo "utils=false" >> $GITHUB_OUTPUT
+              echo "landing=false" >> $GITHUB_OUTPUT
             fi
             
-            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -qE "apps/backend/prisma"; then
-              echo "database=true" >> $GITHUB_OUTPUT
+            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "packages/"; then
+              echo "packages=true" >> $GITHUB_OUTPUT
             else
-              echo "database=false" >> $GITHUB_OUTPUT
+              echo "packages=false" >> $GITHUB_OUTPUT
+            fi
+            
+            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -qE "infrastructure/"; then
+              echo "infra=true" >> $GITHUB_OUTPUT
+            else
+              echo "infra=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "backend=false" >> $GITHUB_OUTPUT
             echo "frontend=false" >> $GITHUB_OUTPUT
-            echo "utils=false" >> $GITHUB_OUTPUT
-            echo "database=false" >> $GITHUB_OUTPUT
+            echo "landing=false" >> $GITHUB_OUTPUT
+            echo "packages=false" >> $GITHUB_OUTPUT
+            echo "infra=false" >> $GITHUB_OUTPUT
           fi
 
-  test-backend:
-    name: Test Backend (if changed)
+  test-packages:
+    name: Test Packages (if changed)
     needs: changes
-    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.utils == 'true'
+    if: needs.changes.outputs.packages == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: true
-    defaults:
-      run:
-        working-directory: ./apps/backend
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -86,23 +77,18 @@ jobs:
       - name: Build workspace packages
         uses: ./.github/actions/build-packages
 
-      - name: Generate Prisma client
-        run: pnpm db:generate
-
       - name: Run type check
         run: pnpm run type-check
 
-      - name: Run backend tests
+      - name: Run tests
         run: pnpm test
 
   test-frontend:
     name: Test Frontend (if changed)
     needs: changes
-    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.utils == 'true'
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.packages == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: true
     steps:
       - uses: actions/checkout@v4
 
@@ -113,146 +99,79 @@ jobs:
         uses: ./.github/actions/build-packages
 
       - name: Run type check
-        run: pnpm run type-check
-
-      - name: Run frontend tests
-        run: pnpm test
+        run: pnpm --filter @apps/frontend run type-check
 
       - name: Build frontend
-        uses: ./.github/actions/build-frontend
-        with:
-          vite_api_url: http://localhost:8001
-          vite_ws_url: ws://localhost:8001/ws
-          vite_supabase_url: http://127.0.0.1:54321
-          vite_supabase_anon_key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
-          vite_stage: production
+        run: pnpm --filter @apps/frontend build
+        env:
+          VITE_API_BASE_URL: http://localhost:3000
+          VITE_COGNITO_DOMAIN: test.auth.eu-west-1.amazoncognito.com
+          VITE_COGNITO_CLIENT_ID: test-client-id
+          VITE_COGNITO_REDIRECT_URI: http://localhost:5173/auth/callback
+          VITE_COGNITO_LOGOUT_URI: http://localhost:5173
 
-  test-utils:
-    name: Test Utils (if changed)
+  test-landing:
+    name: Test Landing (if changed)
     needs: changes
-    if: needs.changes.outputs.utils == 'true'
+    if: needs.changes.outputs.landing == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: true
-    defaults:
-      run:
-        working-directory: ./packages/utils
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup build environment
         uses: ./.github/actions/setup-build-env
 
-      - name: Run type check
-        run: cd ../.. && pnpm run type-check
+      - name: Build landing
+        run: pnpm --filter @apps/landing build
+        env:
+          VITE_API_BASE_URL: http://localhost:3000
 
-      - name: Run utils tests
-        run: pnpm test
-
-      - name: Build package
-        run: pnpm run build
-
-      - name: Verify build output
-        run: |
-          echo "Checking utils build output..."
-          if [ ! -f "dist/index.js" ]; then
-            echo "❌ ERROR: Utils package not built correctly!"
-            exit 1
-          fi
-          echo "✅ Utils package built successfully!"
-
-  test-database:
-    name: Test Database Migrations (if changed)
+  validate-infra:
+    name: Validate Infrastructure (if changed)
     needs: changes
-    if: needs.changes.outputs.database == 'true'
+    if: needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: true
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          version: latest
+          node-version: 20
 
-      - name: Start Supabase local
+      - name: Install CDK dependencies
+        working-directory: ./infrastructure
+        run: npm ci
+
+      - name: Build and synth CDK
+        working-directory: ./infrastructure
         run: |
-          echo "🚀 Starting local Supabase instance for testing..."
-          supabase start
+          npm run build
+          npx cdk synth --all
 
-      - name: Validate migration sequence
-        run: |
-          echo "🔄 Testing full migration reset..."
-          supabase db reset --debug
-
-      - name: Check database schema
-        run: |
-          echo "🔍 Inspecting database schema..."
-          supabase db dump --local -s public
-
-      - name: Run basic data validation
-        run: |
-          echo "🧪 Running basic data validation..."
-          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -c "
-            SELECT 
-              schemaname, 
-              tablename, 
-              tableowner 
-            FROM pg_tables 
-            WHERE schemaname = 'public' 
-            ORDER BY tablename;" || echo "⚠️ Could not query tables"
-
-          # Check that essential tables exist (if they should)
-          echo "📊 Checking essential tables..."
-          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -c "
-            SELECT COUNT(*) as user_count FROM users;
-            SELECT COUNT(*) as org_count FROM organizations;
-            SELECT COUNT(*) as role_count FROM roles;
-            SELECT COUNT(*) as permission_count FROM permissions;" || echo "⚠️ Some tables may not exist yet"
-
-      - name: Test RLS policies
-        run: |
-          echo "🔐 Testing Row Level Security policies..."
-          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -c "
-            SELECT COUNT(*) as policy_count
-            FROM pg_policies 
-            WHERE schemaname = 'public';" || echo "⚠️ Could not query policies"
-
-      - name: Check functions and triggers
-        run: |
-          echo "⚙️ Checking database functions and triggers..."
-          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -c "
-            SELECT COUNT(*) as function_count
-            FROM information_schema.routines 
-            WHERE routine_schema = 'public';" || echo "⚠️ Could not query functions"
-
-      - name: Stop Supabase
-        if: always()
-        run: |
-          echo "🛑 Stopping Supabase..."
-          supabase stop
-
-  # Summary job that depends on all test jobs
+  # Summary job
   pr-checks-complete:
     name: PR Checks Complete
-    needs: [changes, test-backend, test-frontend, test-utils, test-database]
+    needs: [changes, test-packages, test-frontend, test-landing, validate-infra]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
           echo "📊 PR Check Results:"
-          echo "Backend changed: ${{ needs.changes.outputs.backend }}"
           echo "Frontend changed: ${{ needs.changes.outputs.frontend }}"
-          echo "Utils changed: ${{ needs.changes.outputs.utils }}"
-          echo "Database changed: ${{ needs.changes.outputs.database }}"
+          echo "Landing changed: ${{ needs.changes.outputs.landing }}"
+          echo "Packages changed: ${{ needs.changes.outputs.packages }}"
+          echo "Infrastructure changed: ${{ needs.changes.outputs.infra }}"
           echo ""
-          if [[ "${{ needs.test-backend.result }}" == "failure" ]] || [[ "${{ needs.test-frontend.result }}" == "failure" ]] || [[ "${{ needs.test-utils.result }}" == "failure" ]] || [[ "${{ needs.test-database.result }}" == "failure" ]]; then
-            echo "❌ Some tests failed"
+          if [[ "${{ needs.test-packages.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-frontend.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-landing.result }}" == "failure" ]] || \
+             [[ "${{ needs.validate-infra.result }}" == "failure" ]]; then
+            echo "❌ Some checks failed"
             exit 1
           else
-            echo "✅ All applicable tests passed"
+            echo "✅ All applicable checks passed"
           fi
