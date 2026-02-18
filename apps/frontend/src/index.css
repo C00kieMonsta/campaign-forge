@@ -26,16 +26,14 @@
     --input: 35 25% 88%;
     --ring: 15 65% 55%;
     --radius: 0.75rem;
-    --terracotta: 15 65% 55%;
-    --terracotta-light: 15 60% 70%;
-    --terracotta-dark: 15 70% 40%;
-    --sage: 140 25% 45%;
-    --sage-light: 140 20% 90%;
-    --cream: 35 30% 97%;
-    --cream-dark: 35 25% 92%;
-    --golden: 40 70% 50%;
-    --golden-light: 40 65% 75%;
-    --warm-brown: 25 30% 25%;
+    --sidebar-background: 25 30% 15%;
+    --sidebar-foreground: 35 30% 95%;
+    --sidebar-primary: 15 65% 55%;
+    --sidebar-primary-foreground: 35 30% 98%;
+    --sidebar-accent: 25 25% 22%;
+    --sidebar-accent-foreground: 35 30% 95%;
+    --sidebar-border: 25 20% 25%;
+    --sidebar-ring: 15 65% 55%;
   }
 }
 
@@ -47,29 +45,19 @@
 
 @layer components {
   .gradient-hero {
-    background: linear-gradient(135deg, hsl(var(--cream)) 0%, hsl(var(--cream-dark)) 50%, hsl(var(--sage-light)) 100%);
+    background: linear-gradient(135deg, hsl(35 30% 97%) 0%, hsl(35 25% 92%) 50%, hsl(140 20% 90%) 100%);
   }
   .gradient-terracotta {
-    background: linear-gradient(135deg, hsl(var(--terracotta)) 0%, hsl(var(--terracotta-dark)) 100%);
+    background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(15 70% 40%) 100%);
   }
   .card-elevated {
     @apply bg-card rounded-xl shadow-lg border border-border/50;
-    box-shadow: 0 4px 6px -1px hsl(var(--warm-brown) / 0.05), 0 2px 4px -2px hsl(var(--warm-brown) / 0.05);
   }
   .animate-fade-up { animation: fadeUp 0.6s ease-out forwards; }
   .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
   .animate-scale-in { animation: scaleIn 0.5s ease-out forwards; }
 }
 
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
-}
+@keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
