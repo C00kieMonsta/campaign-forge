@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { useLanguage } from "@/contexts/LanguageContext";
+import { Mail, MapPin, Phone, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
-import { Send, Phone, Mail, MapPin } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -26,17 +26,26 @@ export default function ContactSection() {
         body: JSON.stringify({
           email: data.get("email"),
           firstName: data.get("firstName"),
-          lastName: data.get("lastName"),
-        }),
+          lastName: data.get("lastName")
+        })
       });
 
       const json = await res.json();
 
       if (res.ok) {
-        toast({ title: json.message === "Already subscribed" ? t.contact.alreadySubscribed : t.contact.success });
+        toast({
+          title:
+            json.message === "Already subscribed"
+              ? t.contact.alreadySubscribed
+              : t.contact.success
+        });
         form.reset();
       } else {
-        toast({ variant: "destructive", title: t.contact.error, description: json.error });
+        toast({
+          variant: "destructive",
+          title: t.contact.error,
+          description: json.error
+        });
       }
     } catch {
       toast({ variant: "destructive", title: t.contact.error });
@@ -49,19 +58,29 @@ export default function ContactSection() {
     <section id="contact" className="py-24 bg-card">
       <div className="container mx-auto px-4">
         <div className="text-center mb-16">
-          <h2 className="text-4xl md:text-5xl font-serif font-bold text-foreground mb-4">{t.contact.title}</h2>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">{t.contact.subtitle}</p>
+          <h2 className="text-4xl md:text-5xl font-serif font-bold text-foreground mb-4">
+            {t.contact.title}
+          </h2>
+          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+            {t.contact.subtitle}
+          </p>
         </div>
 
         <div className="grid lg:grid-cols-2 gap-12 max-w-5xl mx-auto">
           <div className="space-y-8">
             <div className="card-elevated p-8">
-              <h3 className="text-2xl font-serif font-semibold text-foreground mb-6">Monique Pirson</h3>
+              <h3 className="text-2xl font-serif font-semibold text-foreground mb-6">
+                Monique Pirson
+              </h3>
               <div className="space-y-4">
                 {[
-                  { icon: Phone, label: "Téléphone", value: "+32 XXX XX XX XX" },
-                  { icon: Mail, label: "Email", value: "contact@example.com" },
-                  { icon: MapPin, label: "Région", value: "Belgique" },
+                  {
+                    icon: Phone,
+                    label: "Téléphone",
+                    value: "+32 475 42 94 20"
+                  },
+                  { icon: Mail, label: "Email", value: "monpirson@gmail.com" },
+                  { icon: MapPin, label: "Région", value: "Belgique" }
                 ].map(({ icon: Icon, label, value }) => (
                   <div key={label} className="flex items-center gap-4">
                     <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
@@ -79,10 +98,32 @@ export default function ContactSection() {
 
           <form onSubmit={handleSubmit} className="card-elevated p-8">
             <div className="space-y-6">
-              <Input name="firstName" type="text" placeholder={t.contact.firstName} required className="bg-background border-border focus:border-primary" />
-              <Input name="lastName" type="text" placeholder={t.contact.lastName} required className="bg-background border-border focus:border-primary" />
-              <Input name="email" type="email" placeholder={t.contact.email} required className="bg-background border-border focus:border-primary" />
-              <Button type="submit" disabled={isSubmitting} className="w-full gradient-terracotta text-primary-foreground hover:opacity-90 transition-opacity">
+              <Input
+                name="firstName"
+                type="text"
+                placeholder={t.contact.firstName}
+                required
+                className="bg-background border-border focus:border-primary"
+              />
+              <Input
+                name="lastName"
+                type="text"
+                placeholder={t.contact.lastName}
+                required
+                className="bg-background border-border focus:border-primary"
+              />
+              <Input
+                name="email"
+                type="email"
+                placeholder={t.contact.email}
+                required
+                className="bg-background border-border focus:border-primary"
+              />
+              <Button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full gradient-terracotta text-primary-foreground hover:opacity-90 transition-opacity"
+              >
                 {isSubmitting ? (
                   <span className="animate-spin">⏳</span>
                 ) : (

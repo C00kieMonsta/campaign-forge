@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 export interface Toast {
   id: string;
@@ -7,42 +7,47 @@ export interface Toast {
   variant?: "default" | "destructive";
 }
 
-let listeners: Array<(toast: Toast) => void> = [];
-let memoryState: Toast[] = [];
+type Action =
+  | { type: "add"; toast: Toast }
+  | { type: "remove"; id: string };
 
-function dispatch(toast: Toast) {
-  memoryState = [...memoryState, toast];
-  listeners.forEach((listener) => listener(toast));
+let memoryState: Toast[] = [];
+const listeners: Set<(action: Action) => void> = new Set();
+
+function dispatch(action: Action) {
+  if (action.type === "add") {
+    memoryState = [...memoryState, action.toast];
+  } else {
+    memoryState = memoryState.filter((t) => t.id !== action.id);
+  }
+  listeners.forEach((fn) => fn(action));
 }
+
+const AUTO_DISMISS_MS = 4000;
 
 export function useToast() {
   const [toasts, setToasts] = useState<Toast[]>(memoryState);
 
-  useState(() => {
-    const listener = (toast: Toast) => {
-      setToasts((prev) => [...prev, toast]);
+  useEffect(() => {
+    const listener = (action: Action) => {
+      if (action.type === "add") {
+        setToasts((prev) => [...prev, action.toast]);
+      } else {
+        setToasts((prev) => prev.filter((t) => t.id !== action.id));
+      }
     };
-    listeners.push(listener);
-    return () => {
-      listeners = listeners.filter((l) => l !== listener);
-    };
-  });
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  }, []);
 
-  const toast = useCallback(
-    (props: Omit<Toast, "id">) => {
-      const id = crypto.randomUUID();
-      dispatch({ ...props, id });
-      setTimeout(() => {
-        setToasts((prev) => prev.filter((t) => t.id !== id));
-        memoryState = memoryState.filter((t) => t.id !== id);
-      }, 3000);
-    },
-    [],
-  );
+  const toast = useCallback((props: Omit<Toast, "id">) => {
+    const id = crypto.randomUUID();
+    dispatch({ type: "add", toast: { ...props, id } });
+    setTimeout(() => dispatch({ type: "remove", id }), AUTO_DISMISS_MS);
+  }, []);
 
   const dismiss = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-    memoryState = memoryState.filter((t) => t.id !== id);
+    dispatch({ type: "remove", id });
   }, []);
 
   return { toasts, toast, dismiss };

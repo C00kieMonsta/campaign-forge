@@ -12,8 +12,10 @@ export const campaignStatusSchema = z.enum(["draft", "sent"]);
 // ============================================================================
 
 export const createCampaignRequestSchema = z.object({
+  name: z.string().min(1, "Name required").max(200, "Name too long"),
   subject: z.string().min(1, "Subject required").max(200, "Subject too long"),
   html: z.string().min(1, "HTML content required").max(500000, "HTML too large"),
+  targetGroups: z.array(z.string()).optional(),
 });
 
 export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>;
@@ -76,8 +78,10 @@ export interface GetCampaignErrorResponse {
 // ============================================================================
 
 export const updateCampaignRequestSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
   subject: z.string().min(1).max(200).optional(),
   html: z.string().min(1).max(500000).optional(),
+  targetGroups: z.array(z.string()).optional(),
 });
 
 export type UpdateCampaignRequest = z.infer<typeof updateCampaignRequestSchema>;

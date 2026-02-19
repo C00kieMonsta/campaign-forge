@@ -18,7 +18,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@packages/types": ["../../packages/types/src"]
+      "@packages/types": ["../../packages/types/src"],
+      "@packages/ui": ["../../packages/ui/src/index.ts"]
     }
   },
   "include": ["src"]

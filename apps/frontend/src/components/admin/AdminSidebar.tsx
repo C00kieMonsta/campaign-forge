@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Mail, LogOut, ChefHat } from "lucide-react";
+import { LayoutDashboard, Users, Mail, LogOut, ChefHat, Tags } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
 import type { Language } from "@/i18n/translations";
@@ -7,6 +7,7 @@ import type { Language } from "@/i18n/translations";
 const menuItems = [
   { path: "/dashboard", icon: LayoutDashboard, labelKey: "dashboard" as const },
   { path: "/contacts", icon: Users, labelKey: "contacts" as const },
+  { path: "/groups", icon: Tags, labelKey: "groups" as const },
   { path: "/campaigns", icon: Mail, labelKey: "campaigns" as const },
 ];
 
@@ -51,11 +52,12 @@ export default function AdminSidebar() {
   const menuLabels: Record<string, string> = {
     dashboard: t.dashboard.title,
     contacts: t.dashboard.contacts,
+    groups: t.dashboard.groups,
     campaigns: t.dashboard.campaigns,
   };
 
   return (
-    <aside className="w-64 min-h-screen bg-sidebar text-sidebar-foreground flex flex-col">
+    <aside className="w-64 shrink-0 min-h-screen bg-sidebar text-sidebar-foreground flex flex-col">
       <div className="p-6">
         <div className="flex items-center gap-3 mb-2">
           <ChefHat className="h-8 w-8 text-sidebar-primary" />

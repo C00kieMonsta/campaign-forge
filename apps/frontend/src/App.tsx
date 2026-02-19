@@ -3,7 +3,9 @@ import LoginPage from "@/pages/LoginPage";
 import AdminLayout from "@/components/admin/AdminLayout";
 import Dashboard from "@/pages/admin/Dashboard";
 import Contacts from "@/pages/admin/Contacts";
+import Groups from "@/pages/admin/Groups";
 import Campaigns from "@/pages/admin/Campaigns";
+import CampaignEditor from "@/pages/admin/CampaignEditor";
 
 export default function App() {
   return (
@@ -12,7 +14,10 @@ export default function App() {
       <Route element={<AdminLayout />}>
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/contacts" element={<Contacts />} />
+        <Route path="/groups" element={<Groups />} />
         <Route path="/campaigns" element={<Campaigns />} />
+        <Route path="/campaigns/new" element={<CampaignEditor />} />
+        <Route path="/campaigns/:id/edit" element={<CampaignEditor />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
