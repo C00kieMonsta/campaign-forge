@@ -13,11 +13,6 @@ on:
         type: choice
         options:
           - production
-      deploy_infra:
-        description: "Deploy infrastructure (CDK)"
-        required: false
-        default: false
-        type: boolean
       deploy_landing:
         description: "Deploy landing site"
         required: false
@@ -28,67 +23,21 @@ on:
         required: false
         default: true
         type: boolean
+      deploy_backend:
+        description: "Deploy backend to EC2"
+        required: false
+        default: true
+        type: boolean
 
 concurrency:
   group: deploy-${{ github.event.inputs.environment || 'production' }}
   cancel-in-progress: false
 
 env:
-  AWS_REGION: eu-west-1
+  AWS_REGION: eu-north-1
 
 jobs:
-  # Stage 1: Deploy Infrastructure (optional, on-demand)
-  deploy-infra:
-    name: Deploy Infrastructure with CDK
-    runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'production' }}
-    if: github.event.inputs.deploy_infra == 'true'
-    outputs:
-      landing-bucket: ${{ steps.outputs.outputs.landing-bucket }}
-      landing-distribution: ${{ steps.outputs.outputs.landing-distribution }}
-      admin-bucket: ${{ steps.outputs.outputs.admin-bucket }}
-      admin-distribution: ${{ steps.outputs.outputs.admin-distribution }}
-      api-url: ${{ steps.outputs.outputs.api-url }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install CDK dependencies
-        working-directory: ./infrastructure
-        run: npm ci
-
-      - name: Build CDK
-        working-directory: ./infrastructure
-        run: npm run build
-
-      - name: Deploy all stacks
-        working-directory: ./infrastructure
-        run: npx cdk deploy --all --require-approval never
-        env:
-          CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
-          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
-
-      - name: Capture CDK outputs
-        id: outputs
-        run: |
-          echo "landing-bucket=${{ vars.LANDING_S3_BUCKET }}" >> $GITHUB_OUTPUT
-          echo "landing-distribution=${{ vars.LANDING_CF_DISTRIBUTION }}" >> $GITHUB_OUTPUT
-          echo "admin-bucket=${{ vars.ADMIN_S3_BUCKET }}" >> $GITHUB_OUTPUT
-          echo "admin-distribution=${{ vars.ADMIN_CF_DISTRIBUTION }}" >> $GITHUB_OUTPUT
-          echo "api-url=${{ vars.API_BASE_URL }}" >> $GITHUB_OUTPUT
-
-  # Stage 2: Deploy Landing Site
+  # ─── Landing Site → S3 + CloudFront ────────────────────────────────────────
   deploy-landing:
     name: Deploy Landing Site
     runs-on: ubuntu-latest
@@ -101,7 +50,7 @@ jobs:
         uses: ./.github/actions/setup-build-env
 
       - name: Build landing site
-        run: pnpm --filter @apps/landing build
+        run: pnpm --filter landing build
         env:
           VITE_API_BASE_URL: ${{ vars.API_BASE_URL }}
 
@@ -115,41 +64,40 @@ jobs:
       - name: Deploy landing to S3
         run: |
           S3_BUCKET="${{ vars.LANDING_S3_BUCKET }}"
-          
+
           if [ -z "$S3_BUCKET" ]; then
-            echo "⚠️ LANDING_S3_BUCKET not set, skipping deploy"
+            echo "⚠️ LANDING_S3_BUCKET not set, skipping"
             exit 0
           fi
-          
-          echo "📦 Deploying landing to S3: s3://${S3_BUCKET}"
-          
-          # Sync versioned assets with long cache
+
+          echo "📦 Deploying to s3://${S3_BUCKET}"
+
+          # Versioned assets: long-lived cache
           aws s3 sync apps/landing/dist "s3://${S3_BUCKET}" \
             --delete \
+            --region "${{ env.AWS_REGION }}" \
             --cache-control "public, max-age=31536000, immutable" \
             --exclude "*.html"
-          
-          # Upload HTML with no-cache
+
+          # HTML: always revalidate
           aws s3 cp apps/landing/dist/index.html "s3://${S3_BUCKET}/index.html" \
+            --region "${{ env.AWS_REGION }}" \
             --cache-control "public, max-age=0, must-revalidate" \
             --content-type "text/html; charset=utf-8"
-          
-          echo "✅ Landing assets uploaded"
+
+          echo "✅ Landing uploaded"
 
       - name: Invalidate CloudFront
         run: |
           DIST_ID="${{ vars.LANDING_CF_DISTRIBUTION }}"
-          
           if [ -z "$DIST_ID" ]; then
-            echo "⚠️ LANDING_CF_DISTRIBUTION not set, skipping invalidation"
+            echo "⚠️ LANDING_CF_DISTRIBUTION not set, skipping"
             exit 0
           fi
-          
-          echo "🔄 Invalidating CloudFront: $DIST_ID"
-          aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
-          echo "✅ CloudFront invalidation requested"
+          aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*" --region us-east-1
+          echo "✅ CloudFront invalidated"
 
-  # Stage 3: Deploy Admin Frontend
+  # ─── Admin Frontend → S3 + CloudFront ──────────────────────────────────────
   deploy-frontend:
     name: Deploy Admin Frontend
     runs-on: ubuntu-latest
@@ -167,11 +115,7 @@ jobs:
       - name: Build admin frontend
         run: pnpm --filter @apps/frontend build
         env:
-          VITE_API_BASE_URL: ${{ vars.API_BASE_URL }}
-          VITE_COGNITO_DOMAIN: ${{ vars.COGNITO_DOMAIN }}
-          VITE_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
-          VITE_COGNITO_REDIRECT_URI: ${{ vars.COGNITO_REDIRECT_URI }}
-          VITE_COGNITO_LOGOUT_URI: ${{ vars.COGNITO_LOGOUT_URI }}
+          VITE_API_URL: ${{ vars.API_BASE_URL }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -183,59 +127,113 @@ jobs:
       - name: Deploy admin to S3
         run: |
           S3_BUCKET="${{ vars.ADMIN_S3_BUCKET }}"
-          
+
           if [ -z "$S3_BUCKET" ]; then
-            echo "⚠️ ADMIN_S3_BUCKET not set, skipping deploy"
+            echo "⚠️ ADMIN_S3_BUCKET not set, skipping"
             exit 0
           fi
-          
-          echo "📦 Deploying admin frontend to S3: s3://${S3_BUCKET}"
-          
-          # Sync versioned assets with long cache
+
+          echo "📦 Deploying to s3://${S3_BUCKET}"
+
+          # Versioned assets: long-lived cache
           aws s3 sync apps/frontend/dist "s3://${S3_BUCKET}" \
             --delete \
+            --region "${{ env.AWS_REGION }}" \
             --cache-control "public, max-age=31536000, immutable" \
             --exclude "*.html"
-          
-          # Upload HTML with no-cache
+
+          # HTML: always revalidate
           aws s3 cp apps/frontend/dist/index.html "s3://${S3_BUCKET}/index.html" \
+            --region "${{ env.AWS_REGION }}" \
             --cache-control "public, max-age=0, must-revalidate" \
             --content-type "text/html; charset=utf-8"
-          
-          echo "✅ Admin assets uploaded"
+
+          echo "✅ Admin frontend uploaded"
 
       - name: Invalidate CloudFront
         run: |
           DIST_ID="${{ vars.ADMIN_CF_DISTRIBUTION }}"
-          
           if [ -z "$DIST_ID" ]; then
-            echo "⚠️ ADMIN_CF_DISTRIBUTION not set, skipping invalidation"
+            echo "⚠️ ADMIN_CF_DISTRIBUTION not set, skipping"
             exit 0
           fi
-          
-          echo "🔄 Invalidating CloudFront: $DIST_ID"
-          aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
-          echo "✅ CloudFront invalidation requested"
+          aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*" --region us-east-1
+          echo "✅ CloudFront invalidated"
 
-  # Summary
+  # ─── Backend → EC2 via SSH ──────────────────────────────────────────────────
+  deploy-backend:
+    name: Deploy Backend to EC2
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    if: github.event.inputs.deploy_backend != 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Build workspace packages
+        uses: ./.github/actions/build-packages
+
+      - name: Build backend
+        run: pnpm --filter @apps/backend build
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 120s
+          script: |
+            set -e
+            echo "🚀 Starting backend deployment..."
+
+            cd /home/ec2-user/campaign-forge
+
+            echo "📥 Pulling latest code..."
+            git pull origin main
+
+            echo "📦 Installing dependencies..."
+            pnpm install --frozen-lockfile
+
+            echo "🔨 Building packages and backend..."
+            pnpm build:packages
+            pnpm build:backend
+
+            echo "♻️ Restarting backend with PM2..."
+            pm2 restart campaign-forge-api || pm2 start apps/backend/dist/main.js \
+              --name campaign-forge-api \
+              --env production
+
+            pm2 save
+
+            echo "🏥 Health check..."
+            sleep 3
+            curl -f http://localhost:3001/api/health || echo "⚠️ Health check failed (may need a moment)"
+
+            echo "✅ Backend deployed"
+
+  # ─── Summary ────────────────────────────────────────────────────────────────
   deployment-complete:
     name: Deployment Complete
     runs-on: ubuntu-latest
-    needs: [deploy-landing, deploy-frontend]
+    needs: [deploy-landing, deploy-frontend, deploy-backend]
     if: always()
     steps:
-      - name: Check deployment status
+      - name: Summary
         run: |
           echo "📊 Deployment Summary"
           echo "===================="
-          echo "Landing deploy: ${{ needs.deploy-landing.result }}"
-          echo "Admin deploy: ${{ needs.deploy-frontend.result }}"
-          echo ""
-          
+          echo "Landing:  ${{ needs.deploy-landing.result }}"
+          echo "Frontend: ${{ needs.deploy-frontend.result }}"
+          echo "Backend:  ${{ needs.deploy-backend.result }}"
+
           if [[ "${{ needs.deploy-landing.result }}" == "failure" ]] || \
-             [[ "${{ needs.deploy-frontend.result }}" == "failure" ]]; then
+             [[ "${{ needs.deploy-frontend.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-backend.result }}" == "failure" ]]; then
             echo "❌ Deployment failed"
             exit 1
           else
-            echo "✅ Deployment complete"
+            echo "✅ All deployments complete"
           fi

@@ -1,5 +1,5 @@
 name: Build Workspace Packages
-description: Builds types, utils, and core-client packages in correct dependency order
+description: Builds shared packages (types, ui) in dependency order
 
 runs:
   using: composite
@@ -9,20 +9,6 @@ runs:
         echo "📦 Building @packages/types..."
         pnpm --filter @packages/types build
         echo "✅ Types package built"
-      shell: bash
-
-    - name: Build utils package
-      run: |
-        echo "📦 Building @packages/utils..."
-        pnpm --filter @packages/utils build
-        echo "✅ Utils package built"
-      shell: bash
-
-    - name: Build core-client package
-      run: |
-        echo "📦 Building @packages/core-client..."
-        pnpm --filter @packages/core-client build
-        echo "✅ Core-client package built"
       shell: bash
 
     - name: Build ui package
