@@ -671,17 +671,23 @@ export default function Contacts() {
     if (!importPreview) return;
 
     try {
+      // Create new groups and collect their IDs
+      const groupNameToId = new Map<string, string>(groups.map((g) => [g.name.toLowerCase(), g.id]));
       for (let i = 0; i < importPreview.newGroupNames.length; i++) {
         const color = AUTO_COLORS[i % AUTO_COLORS.length];
-        await api.groups.create({ name: importPreview.newGroupNames[i], color });
+        const created = await api.groups.create({ name: importPreview.newGroupNames[i], color });
+        groupNameToId.set(importPreview.newGroupNames[i].toLowerCase(), created.id);
       }
 
-      const esc = (v: string) => `"${String(v || "").replace(/"/g, '""')}"`;
-      const csvLines = ["email,firstName,lastName", ...importPreview.toImport.map(({ contact }) =>
-        [esc(contact.email ?? ""), esc(contact.firstName ?? ""), esc(contact.lastName ?? "")].join(",")
-      )];
+      // Build full contact objects with resolved group IDs
+      const contacts = importPreview.toImport.map(({ contact, groupNames }) => {
+        const groupIds = groupNames
+          .map((name) => groupNameToId.get(name.toLowerCase()))
+          .filter(Boolean) as string[];
+        return { ...contact, ...(groupIds.length > 0 ? { groups: groupIds } : {}) };
+      });
 
-      const result = await api.contacts.importCsv(csvLines.join("\n"));
+      const result = await api.contacts.importContacts(contacts as import("@packages/types").Contact[]);
       setImportPreview(null);
       await loadContacts();
       toast({ title: `${result.imported} ${t.contacts.importSuccess}` });

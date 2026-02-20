@@ -110,10 +110,10 @@ export const api = {
     delete(emailLower: string) {
       return request<{ ok: true }>(`/admin/contacts/${encodeURIComponent(emailLower)}`, { method: "DELETE" });
     },
-    importCsv(csv: string) {
-      return request<{ ok: true; imported: number; skipped: number }>("/admin/contacts/import", {
+    importContacts(contacts: Partial<Contact>[]) {
+      return request<{ ok: true; imported: number; skipped: number; errors: unknown[] }>("/admin/contacts/import", {
         method: "POST",
-        body: JSON.stringify({ csv }),
+        body: JSON.stringify({ contacts }),
       });
     },
   },

@@ -7,7 +7,6 @@ import {
   updateContactRequestSchema,
   type Contact,
 } from "@packages/types";
-import { parse as csvParse } from "csv-parse/sync";
 import { stringify as csvStringify } from "csv-stringify/sync";
 import { ContactsService } from "./contacts.service";
 
@@ -75,30 +74,28 @@ export class ContactsController {
   }
 
   @Post("import")
-  async importCsv(@Body("csv") body: string) {
-    if (!body) throw new BadRequestException("CSV body required");
+  async importContacts(@Body("contacts") contacts: (Partial<Contact> & { email: string })[]) {
+    if (!Array.isArray(contacts) || contacts.length === 0) throw new BadRequestException("No contacts provided");
 
-    const rows = csvParse(body, { columns: true, skip_empty_lines: true, trim: true }) as Record<string, string>[];
     const now = new Date().toISOString();
     const toImport: Contact[] = [];
     const errors: { row: number; email: string; reason: string }[] = [];
 
-    for (let i = 0; i < rows.length; i++) {
-      const email = rows[i].email?.trim();
+    for (let i = 0; i < contacts.length; i++) {
+      const { email, ...rest } = contacts[i];
       if (!email || !email.includes("@")) {
         errors.push({ row: i + 1, email: email || "", reason: "Invalid email" });
         continue;
       }
       toImport.push({
-        emailLower: email.toLowerCase(),
-        email,
-        firstName: rows[i].firstName?.trim() || undefined,
-        lastName: rows[i].lastName?.trim() || undefined,
+        ...rest,
+        emailLower: email.toLowerCase().trim(),
+        email: email.trim(),
         status: "subscribed",
         source: "import",
         createdAt: now,
         updatedAt: now,
-      });
+      } as Contact);
     }
 
     if (toImport.length > 0) await this.contacts.batchPut(toImport);
