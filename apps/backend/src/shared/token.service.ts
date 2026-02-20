@@ -62,9 +62,10 @@ export class TokenService {
   appendFooter(html: string, emailLower: string): string {
     const url = this.unsubscribeUrl(emailLower);
     const footer = `
-<div style="margin-top:40px;padding-top:20px;border-top:1px solid #e0e0e0;font-size:12px;color:#666;text-align:center">
-  <p><strong>Monique Pirson</strong><br>Belgium</p>
-  <p><a href="${url}" style="color:#666;text-decoration:underline">Unsubscribe</a></p>
+<div style="margin-top:40px;padding-top:20px;border-top:1px solid #e0e0e0;font-size:12px;color:#999;text-align:center;font-family:Arial,sans-serif">
+  <p style="margin:0 0 6px 0"><strong style="color:#555">Monique Pirson</strong><br>Belgium</p>
+  <p style="margin:0 0 6px 0">Ne répondez pas à cet email. Pour nous contacter, envoyez un email à <a href="mailto:monpirson@gmail.com" style="color:#999">monpirson@gmail.com</a> ou appelez le <a href="tel:+32475429420" style="color:#999">+32 475 42 94 20</a>.</p>
+  <p style="margin:0"><a href="${url}" style="color:#999;text-decoration:underline">Se désabonner</a></p>
 </div>`;
     return html.includes("</body>")
       ? html.replace("</body>", `${footer}</body>`)

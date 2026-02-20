@@ -18,12 +18,14 @@ export class GroupsController {
   }
 
   @Patch(":id")
-  update(@Param("id") id: string, @Body() body: { name?: string; color?: string }) {
-    return this.groups.update(id, body);
+  async update(@Param("id") id: string, @Body() body: { name?: string; color?: string }) {
+    await this.groups.update(id, body);
+    return { ok: true };
   }
 
   @Delete(":id")
-  delete(@Param("id") id: string) {
-    return this.groups.delete(id);
+  async delete(@Param("id") id: string) {
+    await this.groups.delete(id);
+    return { ok: true };
   }
 }
