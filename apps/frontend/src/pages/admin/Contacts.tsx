@@ -687,10 +687,17 @@ export default function Contacts() {
         return { ...contact, ...(groupIds.length > 0 ? { groups: groupIds } : {}) };
       });
 
-      const result = await api.contacts.importContacts(contacts as import("@packages/types").Contact[]);
+      const BATCH_SIZE = 100;
+      let totalImported = 0;
+      const typedContacts = contacts as import("@packages/types").Contact[];
+      for (let i = 0; i < typedContacts.length; i += BATCH_SIZE) {
+        const batch = typedContacts.slice(i, i + BATCH_SIZE);
+        const result = await api.contacts.importContacts(batch);
+        totalImported += result.imported;
+      }
       setImportPreview(null);
       await loadContacts();
-      toast({ title: `${result.imported} ${t.contacts.importSuccess}` });
+      toast({ title: `${totalImported} ${t.contacts.importSuccess}` });
     } catch (err) {
       toast({ title: String(err), variant: "destructive" });
     }
