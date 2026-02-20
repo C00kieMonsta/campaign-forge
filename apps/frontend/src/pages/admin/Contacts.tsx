@@ -127,6 +127,18 @@ const emptyForm: FormData = {
   groups: []
 };
 
+const SOURCE_LABELS: Record<string, string> = {
+  landing: "Newsletter",
+  import: "Import",
+  admin: "Admin"
+};
+
+const SOURCE_CLASSES: Record<string, string> = {
+  landing: "bg-blue-50 text-blue-600 border-blue-200",
+  import: "bg-amber-50 text-amber-600 border-amber-200",
+  admin: "bg-purple-50 text-purple-600 border-purple-200"
+};
+
 const groupColorMap: Record<string, string> = {
   red: "bg-red-100 text-red-700 border-red-200",
   blue: "bg-blue-100 text-blue-700 border-blue-200",
@@ -989,15 +1001,20 @@ export default function Contacts() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${
-                          contact.status === "subscribed"
-                            ? "bg-green-50 text-green-700 border-green-200"
-                            : "bg-secondary text-secondary-foreground border-border"
-                        }`}
-                      >
-                        {contact.status}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border w-fit ${
+                            contact.status === "subscribed"
+                              ? "bg-green-50 text-green-700 border-green-200"
+                              : "bg-secondary text-secondary-foreground border-border"
+                          }`}
+                        >
+                          {contact.status}
+                        </span>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border w-fit ${SOURCE_CLASSES[contact.source] ?? "bg-gray-100 text-gray-600 border-gray-200"}`}>
+                          {SOURCE_LABELS[contact.source] ?? contact.source}
+                        </span>
+                      </div>
                     </TableCell>
                     <TableCell className="w-20">
                       <div className="flex items-center gap-0.5">
@@ -1176,6 +1193,15 @@ export default function Contacts() {
                     onChange={(e) => updateField("displayName", e.target.value)}
                   />
                 </div>
+                {editingContact && (
+                  <div className="flex items-center gap-3 text-sm text-muted-foreground pt-1">
+                    <span>Source :</span>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${SOURCE_CLASSES[editingContact.source] ?? "bg-gray-100 text-gray-600 border-gray-200"}`}>
+                      {SOURCE_LABELS[editingContact.source] ?? editingContact.source}
+                    </span>
+                    <span className="ml-auto text-xs">Créé le {new Date(editingContact.createdAt).toLocaleDateString("fr-BE")}</span>
+                  </div>
+                )}
               </div>
             )}
 

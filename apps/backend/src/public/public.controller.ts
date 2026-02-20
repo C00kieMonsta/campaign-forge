@@ -25,10 +25,12 @@ export class PublicController {
     }
 
     const now = new Date().toISOString();
+    const formattedDate = new Date(now).toLocaleDateString("fr-BE", { day: "2-digit", month: "2-digit", year: "numeric" });
     const contact: Contact = {
       emailLower, email,
       firstName: firstName?.trim(),
       lastName: lastName?.trim(),
+      notes: `Inscription à la newsletter le ${formattedDate}`,
       status: "subscribed", source: "landing",
       createdAt: now, updatedAt: now,
     };

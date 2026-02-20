@@ -3,9 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button, Input, Label } from "@packages/ui";
 import { ArrowLeft, Eye, LayoutTemplate, Loader2, Save, Variable } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import type { Contact, ContactGroup } from "@packages/types";
 import {
   EMAIL_TEMPLATES,
   SAMPLE_DATA,
@@ -13,18 +13,6 @@ import {
   groupColorMap,
 } from "@/lib/campaign-constants";
 import TiptapEditor, { type TiptapEditorHandle } from "@/components/admin/TiptapEditor";
-
-interface Contact {
-  emailLower: string;
-  groups?: string[];
-  status: string;
-}
-
-interface ContactGroup {
-  id: string;
-  name: string;
-  color: string;
-}
 
 const emptyForm = {
   name: "",
@@ -42,39 +30,47 @@ export default function CampaignEditor() {
 
   const isEditing = Boolean(id);
 
-  const [contacts] = useLocalStorage<Contact[]>("cf_contacts", []);
-  const [groups] = useLocalStorage<ContactGroup[]>("cf_groups", []);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [groups, setGroups] = useState<ContactGroup[]>([]);
 
   const [formData, setFormData] = useState(emptyForm);
   const [isSent, setIsSent] = useState(false);
   const [viewMode, setViewMode] = useState<"editor" | "preview">("editor");
-  const [isLoading, setIsLoading] = useState(isEditing);
+  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  const loadCampaign = useCallback(async () => {
-    if (!id) return;
+  const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const { campaign } = await api.campaigns.get(id);
-      setIsSent(campaign.status === "sent");
-      setFormData({
-        name: campaign.name,
-        subject: campaign.subject,
-        html: campaign.html ?? "",
-        targetGroups: campaign.targetGroups ?? [],
-      });
+      const [groupsData, contactsData, campaignData] = await Promise.all([
+        api.groups.list(),
+        api.contacts.list({ limit: 1000 }),
+        id ? api.campaigns.get(id) : null,
+      ]);
+      setGroups(groupsData);
+      setContacts(contactsData.items);
+      if (campaignData) {
+        const { campaign } = campaignData;
+        setIsSent(campaign.status === "sent");
+        setFormData({
+          name: campaign.name,
+          subject: campaign.subject,
+          html: campaign.html ?? "",
+          targetGroups: campaign.targetGroups ?? [],
+        });
+      }
     } catch (err) {
       console.log(JSON.stringify({ event: "CampaignEditor:loadError", error: String(err) }));
       toast({ title: String(err), variant: "destructive" });
-      navigate("/campaigns");
+      if (id) navigate("/campaigns");
     } finally {
       setIsLoading(false);
     }
   }, [id, navigate, toast]);
 
   useEffect(() => {
-    loadCampaign();
-  }, [loadCampaign]);
+    loadData();
+  }, [loadData]);
 
   const previewHtml = useMemo(() => {
     let html = formData.html;
