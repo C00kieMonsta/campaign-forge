@@ -18,20 +18,25 @@ export class ContactsService {
     return c;
   }
 
-  async create(data: { email: string; firstName?: string; lastName?: string; status?: string; source?: string }): Promise<Contact> {
+  async create(data: Record<string, unknown> & { email: string }): Promise<Contact> {
     const now = new Date().toISOString();
+    const emailLower = (data.email as string).toLowerCase().trim();
+    const status = (data.status as Contact["status"]) || "subscribed";
     const contact: Contact = {
-      emailLower: data.email.toLowerCase().trim(),
-      email: data.email,
-      firstName: data.firstName?.trim(),
-      lastName: data.lastName?.trim(),
-      status: (data.status as Contact["status"]) || "subscribed",
+      ...data,
+      emailLower,
+      email: data.email as string,
+      status,
       source: (data.source as Contact["source"]) || "admin",
       createdAt: now,
       updatedAt: now,
-    };
-    await this.ddb.put(this.table, { ...contact, gsi1pk: contact.status, gsi1sk: contact.emailLower });
+    } as Contact;
+    await this.ddb.put(this.table, { ...contact, gsi1pk: status, gsi1sk: emailLower });
     return contact;
+  }
+
+  async delete(emailLower: string): Promise<void> {
+    await this.ddb.delete(this.table, { emailLower });
   }
 
   async createConditional(contact: Contact): Promise<void> {

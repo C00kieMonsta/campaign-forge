@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Button,
   Dialog,
@@ -15,23 +15,11 @@ import {
   TableHeader,
   TableRow
 } from "@packages/ui";
-import { Check, Pencil, Plus, Trash2 } from "lucide-react";
+import { Check, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useToast } from "@/hooks/use-toast";
-
-interface ContactGroup {
-  id: string;
-  name: string;
-  color: string;
-  createdAt: string;
-}
-
-interface Contact {
-  emailLower: string;
-  groups?: string[];
-  [key: string]: unknown;
-}
+import { api } from "@/lib/api";
+import type { ContactGroup } from "@packages/types";
 
 const COLORS = [
   { name: "red", bg: "bg-red-500" },
@@ -49,18 +37,28 @@ const emptyForm = { name: "", color: COLORS[0].name };
 export default function Groups() {
   const { t } = useLanguage();
   const { toast } = useToast();
-  const [groups, setGroups] = useLocalStorage<ContactGroup[]>("cf_groups", []);
-  const [contacts, setContacts] = useLocalStorage<Contact[]>("cf_contacts", []);
+  const [groups, setGroups] = useState<ContactGroup[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<ContactGroup | null>(null);
   const [formData, setFormData] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
 
-  const contactCountMap = contacts.reduce<Record<string, number>>((acc, c) => {
-    c.groups?.forEach((gId) => {
-      acc[gId] = (acc[gId] ?? 0) + 1;
-    });
-    return acc;
-  }, {});
+  const loadGroups = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.groups.list();
+      setGroups(data);
+    } catch {
+      toast({ title: "Failed to load groups", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    loadGroups();
+  }, [loadGroups]);
 
   const openCreate = () => {
     setEditingGroup(null);
@@ -74,41 +72,34 @@ export default function Groups() {
     setIsDialogOpen(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.name.trim()) return;
-
-    if (editingGroup) {
-      setGroups((prev) =>
-        prev.map((g) =>
-          g.id === editingGroup.id
-            ? { ...g, name: formData.name.trim(), color: formData.color }
-            : g
-        )
-      );
-      toast({ title: "Group updated" });
-    } else {
-      const newGroup: ContactGroup = {
-        id: crypto.randomUUID(),
-        name: formData.name.trim(),
-        color: formData.color,
-        createdAt: new Date().toISOString()
-      };
-      setGroups((prev) => [...prev, newGroup]);
-      toast({ title: "Group created" });
+    setSaving(true);
+    try {
+      if (editingGroup) {
+        await api.groups.update(editingGroup.id, { name: formData.name.trim(), color: formData.color });
+        toast({ title: "Group updated" });
+      } else {
+        await api.groups.create({ name: formData.name.trim(), color: formData.color });
+        toast({ title: "Group created" });
+      }
+      setIsDialogOpen(false);
+      await loadGroups();
+    } catch {
+      toast({ title: "Failed to save group", variant: "destructive" });
+    } finally {
+      setSaving(false);
     }
-    setIsDialogOpen(false);
   };
 
-  const handleDelete = (group: ContactGroup) => {
-    setGroups((prev) => prev.filter((g) => g.id !== group.id));
-    setContacts((prev) =>
-      prev.map((c) =>
-        c.groups?.includes(group.id)
-          ? { ...c, groups: c.groups.filter((gId) => gId !== group.id) }
-          : c
-      )
-    );
-    toast({ title: "Group deleted" });
+  const handleDelete = async (group: ContactGroup) => {
+    try {
+      await api.groups.delete(group.id);
+      toast({ title: "Group deleted" });
+      setGroups((prev) => prev.filter((g) => g.id !== group.id));
+    } catch {
+      toast({ title: "Failed to delete group", variant: "destructive" });
+    }
   };
 
   const colorBg = (name: string) =>
@@ -130,7 +121,11 @@ export default function Groups() {
       </div>
 
       <div className="card-elevated">
-        {groups.length === 0 ? (
+        {loading ? (
+          <div className="p-12 flex justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : groups.length === 0 ? (
           <div className="p-12 text-center text-muted-foreground">
             {t.groupsPage.noGroups}
           </div>
@@ -140,7 +135,6 @@ export default function Groups() {
               <TableRow>
                 <TableHead>{t.groupsPage.color}</TableHead>
                 <TableHead>{t.groupsPage.name}</TableHead>
-                <TableHead>{t.groupsPage.contactCount}</TableHead>
                 <TableHead className="text-right">
                   {t.groupsPage.actions}
                 </TableHead>
@@ -155,7 +149,6 @@ export default function Groups() {
                     />
                   </TableCell>
                   <TableCell className="font-medium">{group.name}</TableCell>
-                  <TableCell>{contactCountMap[group.id] ?? 0}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button
@@ -223,8 +216,10 @@ export default function Groups() {
             </Button>
             <Button
               onClick={handleSave}
+              disabled={saving}
               className="gradient-terracotta text-white hover:opacity-90"
             >
+              {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {t.groupsPage.save}
             </Button>
           </DialogFooter>

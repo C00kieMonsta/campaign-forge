@@ -59,6 +59,7 @@ if [[ "${1:-}" == "--file" ]]; then
   aws_secret=$(get_json_field "$json" "AWS_SECRET_ACCESS_KEY")
   contacts_table=$(get_json_field "$json" "CONTACTS_TABLE")
   campaigns_table=$(get_json_field "$json" "CAMPAIGNS_TABLE")
+  groups_table=$(get_json_field "$json" "GROUPS_TABLE")
   ses_from_email=$(get_json_field "$json" "SES_FROM_EMAIL")
   unsub_secret=$(get_json_field "$json" "UNSUBSCRIBE_SECRET")
   public_base_url=$(get_json_field "$json" "PUBLIC_BASE_URL")
@@ -76,6 +77,9 @@ else
 
   read -rp "CAMPAIGNS_TABLE [cf-campaigns-prod]: " campaigns_table
   campaigns_table="${campaigns_table:-cf-campaigns-prod}"
+
+  read -rp "GROUPS_TABLE [cf-groups-prod]: " groups_table
+  groups_table="${groups_table:-cf-groups-prod}"
 
   # ── SES ───────────────────────────────────────────────────────────────────────
   read -rp "SES_FROM_EMAIL: " ses_from_email
@@ -101,6 +105,7 @@ put_param "AWS_ACCESS_KEY_ID"     "$aws_key_id"
 put_param "AWS_SECRET_ACCESS_KEY" "$aws_secret"
 put_param "CONTACTS_TABLE"        "$contacts_table"  "String"
 put_param "CAMPAIGNS_TABLE"       "$campaigns_table" "String"
+put_param "GROUPS_TABLE"          "$groups_table"    "String"
 put_param "SES_FROM_EMAIL"        "$ses_from_email"  "String"
 put_param "UNSUBSCRIBE_SECRET"    "$unsub_secret"
 put_param "PUBLIC_BASE_URL"       "$public_base_url" "String"

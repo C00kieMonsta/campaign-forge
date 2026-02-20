@@ -47,4 +47,5 @@ export interface ContactGroup {
   name: string;
   color: string;
   createdAt: string;
+  updatedAt: string;
 }

@@ -49,6 +49,7 @@ AWS_ACCESS_KEY_ID=$(ssm_get "AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY=$(ssm_get "AWS_SECRET_ACCESS_KEY")
 CONTACTS_TABLE=$(ssm_get "CONTACTS_TABLE")
 CAMPAIGNS_TABLE=$(ssm_get "CAMPAIGNS_TABLE")
+GROUPS_TABLE=$(ssm_get "GROUPS_TABLE")
 SES_FROM_EMAIL=$(ssm_get "SES_FROM_EMAIL")
 UNSUBSCRIBE_SECRET=$(ssm_get "UNSUBSCRIBE_SECRET")
 PUBLIC_BASE_URL=$(ssm_get "PUBLIC_BASE_URL")
@@ -71,6 +72,7 @@ AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 CONTACTS_TABLE=${CONTACTS_TABLE}
 CAMPAIGNS_TABLE=${CAMPAIGNS_TABLE}
+GROUPS_TABLE=${GROUPS_TABLE}
 SES_FROM_EMAIL=${SES_FROM_EMAIL}
 SES_REGION=${REGION}
 UNSUBSCRIBE_SECRET=${UNSUBSCRIBE_SECRET}
@@ -101,10 +103,11 @@ env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd \
 
 # ── Nginx config ──────────────────────────────────────────────────────────────
 log "Configuring Nginx..."
-cat > /etc/nginx/conf.d/campaign-forge.conf <<NGINX
+NGINX_DOMAIN="${DOMAIN}"
+cat > /etc/nginx/conf.d/campaign-forge.conf <<'NGINX_EOF'
 server {
     listen 80;
-    server_name ${DOMAIN};
+    server_name NGINX_DOMAIN_PLACEHOLDER;
 
     location / {
         proxy_pass         http://localhost:3001;
@@ -119,7 +122,8 @@ server {
         client_max_body_size 10m;
     }
 }
-NGINX
+NGINX_EOF
+sed -i "s/NGINX_DOMAIN_PLACEHOLDER/${NGINX_DOMAIN}/" /etc/nginx/conf.d/campaign-forge.conf
 
 systemctl enable nginx
 systemctl start nginx
@@ -138,6 +142,57 @@ certbot --nginx \
 
 systemctl reload nginx
 
+# ── CloudWatch agent ──────────────────────────────────────────────────────────
+log "Installing CloudWatch agent..."
+dnf install -y amazon-cloudwatch-agent
+
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<EOF
+{
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/home/ec2-user/.pm2/logs/campaign-forge-api-out.log",
+            "log_group_name": "/campaign-forge/api",
+            "log_stream_name": "pm2-out",
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/home/ec2-user/.pm2/logs/campaign-forge-api-error.log",
+            "log_group_name": "/campaign-forge/api",
+            "log_stream_name": "pm2-error",
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/var/log/nginx/access.log",
+            "log_group_name": "/campaign-forge/nginx",
+            "log_stream_name": "access",
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/var/log/nginx/error.log",
+            "log_group_name": "/campaign-forge/nginx",
+            "log_stream_name": "error",
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/var/log/cloud-init-output.log",
+            "log_group_name": "/campaign-forge/bootstrap",
+            "log_stream_name": "cloud-init",
+            "timezone": "UTC"
+          }
+        ]
+      }
+    }
+  }
+}
+EOF
+
+systemctl enable amazon-cloudwatch-agent
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 -s \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
 log "✅ Bootstrap complete — API is live at https://${DOMAIN}"
-log "Next: Update GitHub Secrets with EC2_HOST and EC2_SSH_KEY"
-log "Then: Configure Route53 / DNS to point to the Elastic IP"
+log "Logs available in CloudWatch under /campaign-forge/"

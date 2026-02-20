@@ -78,10 +78,33 @@ export interface ListContactsResponse {
 // Admin API - Create Contact
 // ============================================================================
 
-export const createContactRequestSchema = z.object({
-  email: emailSchema,
+const contactOptionalFieldsSchema = z.object({
   firstName: z.string().max(100).optional(),
   lastName: z.string().max(100).optional(),
+  displayName: z.string().max(200).optional(),
+  email2: z.string().email().optional(),
+  homePhone: z.string().max(50).optional(),
+  businessPhone: z.string().max(50).optional(),
+  mobilePhone: z.string().max(50).optional(),
+  homeStreet: z.string().max(200).optional(),
+  homeAddress2: z.string().max(200).optional(),
+  homeCity: z.string().max(100).optional(),
+  homePostalCode: z.string().max(20).optional(),
+  homeCountry: z.string().max(100).optional(),
+  businessAddress: z.string().max(200).optional(),
+  businessAddress2: z.string().max(200).optional(),
+  businessCity: z.string().max(100).optional(),
+  businessState: z.string().max(100).optional(),
+  businessPostalCode: z.string().max(20).optional(),
+  businessCountry: z.string().max(100).optional(),
+  organization: z.string().max(200).optional(),
+  notes: z.string().max(2000).optional(),
+  birthday: z.string().optional(),
+  groups: z.array(z.string()).optional(),
+});
+
+export const createContactRequestSchema = contactOptionalFieldsSchema.extend({
+  email: emailSchema,
   status: contactStatusSchema.default("subscribed"),
 });
 
@@ -101,9 +124,7 @@ export interface CreateContactErrorResponse {
 // Admin API - Update Contact
 // ============================================================================
 
-export const updateContactRequestSchema = z.object({
-  firstName: z.string().max(100).optional(),
-  lastName: z.string().max(100).optional(),
+export const updateContactRequestSchema = contactOptionalFieldsSchema.extend({
   status: contactStatusSchema.optional(),
 });
 

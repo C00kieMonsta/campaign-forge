@@ -1,4 +1,4 @@
-import type { Campaign } from "@packages/types";
+import type { Campaign, Contact, ContactGroup } from "@packages/types";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
 const TOKEN_KEY = "admin_token";
@@ -23,10 +23,10 @@ async function parseResponse<T>(res: Response): Promise<T> {
 
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const token = getToken();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts?.headers as Record<string, string>) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE}${path}`, { headers, ...opts });
+  const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
 
   if (res.status === 401) {
     handleUnauthorized();
@@ -83,6 +83,58 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ email, subject, html }),
       });
+    },
+  },
+  contacts: {
+    list(params?: { status?: string; q?: string; limit?: number; cursor?: string }) {
+      const qs = new URLSearchParams();
+      if (params?.status) qs.set("status", params.status);
+      if (params?.q) qs.set("q", params.q);
+      if (params?.limit) qs.set("limit", String(params.limit));
+      if (params?.cursor) qs.set("cursor", params.cursor);
+      const query = qs.toString();
+      return request<{ items: Contact[]; cursor: string | null; count: number }>(`/admin/contacts${query ? `?${query}` : ""}`);
+    },
+    create(data: Partial<Contact> & { email: string }) {
+      return request<{ ok: true; contact: Contact }>("/admin/contacts", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+    update(emailLower: string, data: Partial<Contact>) {
+      return request<{ ok: true; contact: Contact }>(`/admin/contacts/${encodeURIComponent(emailLower)}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
+    },
+    delete(emailLower: string) {
+      return request<{ ok: true }>(`/admin/contacts/${encodeURIComponent(emailLower)}`, { method: "DELETE" });
+    },
+    importCsv(csv: string) {
+      return request<{ ok: true; imported: number; skipped: number }>("/admin/contacts/import", {
+        method: "POST",
+        body: JSON.stringify(csv),
+      });
+    },
+  },
+  groups: {
+    list() {
+      return request<ContactGroup[]>("/admin/groups");
+    },
+    create(data: { name: string; color: string }) {
+      return request<ContactGroup>("/admin/groups", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+    update(id: string, data: { name?: string; color?: string }) {
+      return request<void>(`/admin/groups/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
+    },
+    delete(id: string) {
+      return request<void>(`/admin/groups/${id}`, { method: "DELETE" });
     },
   },
   public: {

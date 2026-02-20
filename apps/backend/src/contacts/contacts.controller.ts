@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Query, Param, Body, Res, BadRequestException, UseGuards } from "@nestjs/common";
+import { Controller, Get, Post, Patch, Delete, Query, Param, Body, Res, BadRequestException, UseGuards } from "@nestjs/common";
 import { AdminGuard } from "../auth/admin.guard";
 import { Response } from "express";
 import {
@@ -55,17 +55,23 @@ export class ContactsController {
     if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
 
     const existing = await this.contacts.getOrFail(decodeURIComponent(emailLower));
-    const updates: Record<string, unknown> = {};
-    if (parsed.data.firstName !== undefined) updates.firstName = parsed.data.firstName;
-    if (parsed.data.lastName !== undefined) updates.lastName = parsed.data.lastName;
-    if (parsed.data.status !== undefined) {
-      updates.status = parsed.data.status;
-      if (parsed.data.status === "unsubscribed") updates.unsubscribedAt = new Date().toISOString();
+    const { status, ...rest } = parsed.data;
+    const updates: Record<string, unknown> = { ...rest };
+    if (status !== undefined) {
+      updates.status = status;
+      if (status === "unsubscribed") updates.unsubscribedAt = new Date().toISOString();
     }
 
     if (Object.keys(updates).length === 0) return { ok: true, contact: existing };
     await this.contacts.update(existing.emailLower, updates);
     return { ok: true, contact: { ...existing, ...updates, updatedAt: new Date().toISOString() } };
+  }
+
+  @Delete(":emailLower")
+  async delete(@Param("emailLower") emailLower: string) {
+    await this.contacts.getOrFail(decodeURIComponent(emailLower));
+    await this.contacts.delete(decodeURIComponent(emailLower));
+    return { ok: true };
   }
 
   @Post("import")

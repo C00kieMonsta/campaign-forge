@@ -3,7 +3,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button, Input, Label, Textarea } from "@packages/ui";
 import { ArrowLeft, Code, Eye, LayoutTemplate, Loader2, Save, Variable } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import {
@@ -41,37 +40,45 @@ export default function CampaignEditor() {
 
   const isEditing = Boolean(id);
 
-  const [contacts] = useLocalStorage<Contact[]>("cf_contacts", []);
-  const [groups] = useLocalStorage<ContactGroup[]>("cf_groups", []);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [groups, setGroups] = useState<ContactGroup[]>([]);
 
   const [formData, setFormData] = useState(emptyForm);
   const [viewMode, setViewMode] = useState<"editor" | "preview">("editor");
-  const [isLoading, setIsLoading] = useState(isEditing);
+  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  const loadCampaign = useCallback(async () => {
-    if (!id) return;
+  const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const { campaign } = await api.campaigns.get(id);
-      setFormData({
-        name: campaign.name,
-        subject: campaign.subject,
-        html: campaign.html ?? "",
-        targetGroups: campaign.targetGroups ?? [],
-      });
+      const [groupsData, contactsRes] = await Promise.all([
+        api.groups.list(),
+        api.contacts.list({ limit: 200 }),
+      ]);
+      setGroups(groupsData);
+      setContacts(contactsRes.items);
+
+      if (id) {
+        const { campaign } = await api.campaigns.get(id);
+        setFormData({
+          name: campaign.name,
+          subject: campaign.subject,
+          html: campaign.html ?? "",
+          targetGroups: campaign.targetGroups ?? [],
+        });
+      }
     } catch (err) {
       console.log(JSON.stringify({ event: "CampaignEditor:loadError", error: String(err) }));
       toast({ title: String(err), variant: "destructive" });
-      navigate("/campaigns");
+      if (id) navigate("/campaigns");
     } finally {
       setIsLoading(false);
     }
   }, [id, navigate, toast]);
 
   useEffect(() => {
-    loadCampaign();
-  }, [loadCampaign]);
+    loadData();
+  }, [loadData]);
 
   const previewHtml = useMemo(() => {
     let html = formData.html;

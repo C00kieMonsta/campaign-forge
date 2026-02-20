@@ -6,6 +6,7 @@ const schema = z.object({
   AWS_REGION: z.string().default("eu-west-1"),
   CONTACTS_TABLE: z.string().min(1),
   CAMPAIGNS_TABLE: z.string().min(1),
+  GROUPS_TABLE: z.string().min(1),
   DDB_ENDPOINT: z.string().url().optional(),
   SES_FROM_EMAIL: z.string().email(),
   SES_REGION: z.string().default("eu-west-1"),
@@ -30,6 +31,6 @@ export class ConfigService {
   }
 
   get tables() {
-    return { contacts: this.env.CONTACTS_TABLE, campaigns: this.env.CAMPAIGNS_TABLE };
+    return { contacts: this.env.CONTACTS_TABLE, campaigns: this.env.CAMPAIGNS_TABLE, groups: this.env.GROUPS_TABLE };
   }
 }

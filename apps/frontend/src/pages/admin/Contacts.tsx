@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
   Checkbox,
@@ -34,8 +34,8 @@ import {
   Users,
 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useToast } from "@/hooks/use-toast";
+import { api } from "@/lib/api";
 
 interface Contact {
   emailLower: string;
@@ -246,8 +246,29 @@ const PAGE_SIZE = 25;
 export default function Contacts() {
   const { t } = useLanguage();
   const { toast } = useToast();
-  const [contacts, setContacts] = useLocalStorage<Contact[]>("cf_contacts", []);
-  const [groups, setGroups] = useLocalStorage<ContactGroup[]>("cf_groups", []);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [groups, setGroups] = useState<ContactGroup[]>([]);
+
+  const loadContacts = useCallback(async () => {
+    try {
+      setLoading(true);
+      const [contactsRes, groupsData] = await Promise.all([
+        api.contacts.list({ limit: 200 }),
+        api.groups.list(),
+      ]);
+      setContacts(contactsRes.items);
+      setGroups(groupsData);
+    } catch (err) {
+      toast({ title: String(err), variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    loadContacts();
+  }, [loadContacts]);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -353,20 +374,27 @@ export default function Contacts() {
     });
   };
 
-  const handleBatchAddGroup = (groupId: string) => {
+  const handleBatchAddGroup = async (groupId: string) => {
     const count = selectedIds.size;
-    setContacts((prev) =>
-      prev.map((c) =>
-        selectedIds.has(c.emailLower)
-          ? { ...c, groups: [...new Set([...(c.groups ?? []), groupId])] }
-          : c
-      )
-    );
-    setSelectedIds(new Set());
-    setBatchGroupOpen(false);
-    toast({
-      title: `${t.contacts.batchGroupAdded} ${count} ${t.contacts.batchContacts}`
-    });
+    try {
+      await Promise.all(
+        [...selectedIds].map((emailLower) => {
+          const contact = contacts.find((c) => c.emailLower === emailLower);
+          const groupsArr = [...new Set([...(contact?.groups ?? []), groupId])];
+          return api.contacts.update(emailLower, { groups: groupsArr });
+        })
+      );
+      setContacts((prev) =>
+        prev.map((c) =>
+          selectedIds.has(c.emailLower) ? { ...c, groups: [...new Set([...(c.groups ?? []), groupId])] } : c
+        )
+      );
+      setSelectedIds(new Set());
+      setBatchGroupOpen(false);
+      toast({ title: `${t.contacts.batchGroupAdded} ${count} ${t.contacts.batchContacts}` });
+    } catch (err) {
+      toast({ title: String(err), variant: "destructive" });
+    }
   };
 
   const handleBatchDelete = () => {
@@ -374,27 +402,32 @@ export default function Contacts() {
     setDeleteConfirmOpen(true);
   };
 
-  const confirmBatchDelete = () => {
+  const confirmBatchDelete = async () => {
     const count = selectedIds.size;
-    setContacts((prev) => prev.filter((c) => !selectedIds.has(c.emailLower)));
-    setSelectedIds(new Set());
-    setDeleteConfirmOpen(false);
-    setContactToDelete(null);
-    toast({ title: `${count} ${t.contacts.batchDeleted}` });
+    try {
+      await Promise.all([...selectedIds].map((emailLower) => api.contacts.delete(emailLower)));
+      setContacts((prev) => prev.filter((c) => !selectedIds.has(c.emailLower)));
+      setSelectedIds(new Set());
+      setDeleteConfirmOpen(false);
+      setContactToDelete(null);
+      toast({ title: `${count} ${t.contacts.batchDeleted}` });
+    } catch (err) {
+      toast({ title: String(err), variant: "destructive" });
+    }
   };
 
-  const toggleContactGroup = (contact: Contact, groupId: string) => {
+  const toggleContactGroup = async (contact: Contact, groupId: string) => {
     const curr = contact.groups ?? [];
-    const next = curr.includes(groupId)
-      ? curr.filter((id) => id !== groupId)
-      : [...curr, groupId];
-    setContacts((prev) =>
-      prev.map((c) =>
-        c.emailLower === contact.emailLower
-          ? { ...c, groups: next.length > 0 ? next : undefined }
-          : c
-      )
-    );
+    const next = curr.includes(groupId) ? curr.filter((id) => id !== groupId) : [...curr, groupId];
+    const groupsArr = next.length > 0 ? next : undefined;
+    try {
+      await api.contacts.update(contact.emailLower, { groups: groupsArr });
+      setContacts((prev) =>
+        prev.map((c) => (c.emailLower === contact.emailLower ? { ...c, groups: groupsArr } : c))
+      );
+    } catch (err) {
+      toast({ title: String(err), variant: "destructive" });
+    }
   };
 
   const toggleSection = (key: string) =>
@@ -449,15 +482,12 @@ export default function Contacts() {
     setIsDialogOpen(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.firstName || !formData.lastName || !formData.email) return;
 
-    const now = new Date().toISOString();
-    const contactFields = {
-      firstName: formData.firstName,
-      lastName: formData.lastName,
-      email: formData.email,
-      emailLower: formData.email.toLowerCase(),
+    const fields = {
+      firstName: formData.firstName || undefined,
+      lastName: formData.lastName || undefined,
       displayName: formData.displayName || undefined,
       email2: formData.email2 || undefined,
       homePhone: formData.homePhone || undefined,
@@ -477,29 +507,22 @@ export default function Contacts() {
       organization: formData.organization || undefined,
       notes: formData.notes || undefined,
       birthday: formData.birthday || undefined,
-      groups: formData.groups.length > 0 ? formData.groups : undefined
+      groups: formData.groups.length > 0 ? formData.groups : undefined,
     };
 
-    if (editingContact) {
-      setContacts((prev) =>
-        prev.map((c) =>
-          c.emailLower === editingContact.emailLower
-            ? { ...c, ...contactFields, updatedAt: now }
-            : c
-        )
-      );
-    } else {
-      const newContact: Contact = {
-        ...contactFields,
-        status: "subscribed",
-        source: "admin",
-        createdAt: now,
-        updatedAt: now
-      };
-      setContacts((prev) => [...prev, newContact]);
+    try {
+      if (editingContact) {
+        const { contact } = await api.contacts.update(editingContact.emailLower, fields);
+        setContacts((prev) => prev.map((c) => (c.emailLower === editingContact.emailLower ? contact : c)));
+      } else {
+        const { contact } = await api.contacts.create({ email: formData.email, ...fields });
+        setContacts((prev) => [...prev, contact]);
+      }
+      setIsDialogOpen(false);
+      toast({ title: editingContact ? "Contact updated" : "Contact created" });
+    } catch (err) {
+      toast({ title: String(err), variant: "destructive" });
     }
-    setIsDialogOpen(false);
-    toast({ title: editingContact ? "Contact updated" : "Contact created" });
   };
 
   const handleDelete = (contact: Contact) => {
@@ -507,14 +530,17 @@ export default function Contacts() {
     setDeleteConfirmOpen(true);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!contactToDelete) return;
-    setContacts((prev) =>
-      prev.filter((c) => c.emailLower !== contactToDelete.emailLower)
-    );
-    setDeleteConfirmOpen(false);
-    setContactToDelete(null);
-    toast({ title: "Contact deleted" });
+    try {
+      await api.contacts.delete(contactToDelete.emailLower);
+      setContacts((prev) => prev.filter((c) => c.emailLower !== contactToDelete.emailLower));
+      setDeleteConfirmOpen(false);
+      setContactToDelete(null);
+      toast({ title: "Contact deleted" });
+    } catch (err) {
+      toast({ title: String(err), variant: "destructive" });
+    }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -620,49 +646,27 @@ export default function Contacts() {
     reader.readAsText(file);
   };
 
-  const confirmImport = () => {
+  const confirmImport = async () => {
     if (!importPreview) return;
 
-    const now = new Date().toISOString();
-    const groupNameToId = new Map(
-      groups.map((g) => [g.name.toLowerCase(), g.id])
-    );
-    const newGroups: ContactGroup[] = [];
-
-    for (const name of importPreview.newGroupNames) {
-      const id = crypto.randomUUID();
-      const color = AUTO_COLORS[newGroups.length % AUTO_COLORS.length];
-      newGroups.push({ id, name, color, createdAt: now });
-      groupNameToId.set(name.toLowerCase(), id);
-    }
-
-    if (newGroups.length > 0) {
-      setGroups((prev) => [...prev, ...newGroups]);
-    }
-
-    const newContacts: Contact[] = importPreview.toImport.map(
-      ({ contact, groupNames }) => {
-        const groupIds = groupNames
-          .map((gn) => groupNameToId.get(gn.toLowerCase()))
-          .filter((id): id is string => !!id);
-
-        return {
-          ...contact,
-          email: contact.email!,
-          emailLower: contact.emailLower!,
-          groups: groupIds.length > 0 ? groupIds : undefined,
-          status: "subscribed",
-          source: "import",
-          createdAt: now,
-          updatedAt: now
-        } as Contact;
+    try {
+      for (let i = 0; i < importPreview.newGroupNames.length; i++) {
+        const color = AUTO_COLORS[i % AUTO_COLORS.length];
+        await api.groups.create({ name: importPreview.newGroupNames[i], color });
       }
-    );
 
-    setContacts((prev) => [...prev, ...newContacts]);
-    const count = newContacts.length;
-    setImportPreview(null);
-    toast({ title: `${count} ${t.contacts.importSuccess}` });
+      const esc = (v: string) => `"${String(v || "").replace(/"/g, '""')}"`;
+      const csvLines = ["email,firstName,lastName", ...importPreview.toImport.map(({ contact }) =>
+        [esc(contact.email ?? ""), esc(contact.firstName ?? ""), esc(contact.lastName ?? "")].join(",")
+      )];
+
+      const result = await api.contacts.importCsv(csvLines.join("\n"));
+      setImportPreview(null);
+      await loadContacts();
+      toast({ title: `${result.imported} ${t.contacts.importSuccess}` });
+    } catch (err) {
+      toast({ title: String(err), variant: "destructive" });
+    }
   };
 
   const getContactGroups = (contact: Contact) =>
@@ -841,7 +845,11 @@ export default function Contacts() {
         )}
 
         {/* Table */}
-        {filtered.length === 0 ? (
+        {loading ? (
+          <div className="p-12 text-center text-muted-foreground">
+            Loading...
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="p-12 text-center text-muted-foreground">
             {t.contacts.noContacts}
           </div>

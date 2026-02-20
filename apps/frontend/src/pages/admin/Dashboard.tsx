@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Users, Mail, UserPlus, Send, FileEdit, CheckCircle } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useLocalStorage } from "@/hooks/use-local-storage";
+import { api } from "@/lib/api";
 
 interface Contact {
   email: string;
@@ -15,8 +15,13 @@ interface Campaign {
 
 export default function Dashboard() {
   const { t } = useLanguage();
-  const [contacts] = useLocalStorage<Contact[]>("cf_contacts", []);
-  const [campaigns] = useLocalStorage<Campaign[]>("cf_campaigns", []);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+
+  useEffect(() => {
+    api.contacts.list({ limit: 200 }).then((res) => setContacts(res.items)).catch(() => {});
+    api.campaigns.list().then((res) => setCampaigns(res.items)).catch(() => {});
+  }, []);
 
   const contactStats = useMemo(() => {
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;

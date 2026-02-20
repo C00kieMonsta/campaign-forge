@@ -19,7 +19,6 @@ import {
 } from "@packages/ui";
 import { Loader2, Pencil, Plus, Send, TestTube, Trash2 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import { groupColorMap } from "@/lib/campaign-constants";
@@ -40,8 +39,8 @@ export default function Campaigns() {
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  const [contacts] = useLocalStorage<Contact[]>("cf_contacts", []);
-  const [groups] = useLocalStorage<ContactGroup[]>("cf_groups", []);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [groups, setGroups] = useState<ContactGroup[]>([]);
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -57,8 +56,14 @@ export default function Campaigns() {
   const loadCampaigns = useCallback(async () => {
     setIsLoading(true);
     try {
-      const { items } = await api.campaigns.list();
+      const [{ items }, groupsData, contactsRes] = await Promise.all([
+        api.campaigns.list(),
+        api.groups.list(),
+        api.contacts.list({ limit: 200 }),
+      ]);
       setCampaigns(items);
+      setGroups(groupsData);
+      setContacts(contactsRes.items);
     } catch (err) {
       console.log(
         JSON.stringify({ event: "loadCampaigns:error", error: String(err) })

@@ -103,6 +103,23 @@ if ! aws_cmd iam get-role --role-name "$ROLE_NAME" &>/dev/null; then
       }]
     }"
 
+  aws_cmd iam put-role-policy \
+    --role-name "$ROLE_NAME" \
+    --policy-name "cloudwatch-logs-campaign-forge" \
+    --policy-document "{
+      \"Version\": \"2012-10-17\",
+      \"Statement\": [{
+        \"Effect\": \"Allow\",
+        \"Action\": [
+          \"logs:CreateLogGroup\",
+          \"logs:CreateLogStream\",
+          \"logs:PutLogEvents\",
+          \"logs:DescribeLogStreams\"
+        ],
+        \"Resource\": \"arn:aws:logs:${REGION}:*:log-group:/campaign-forge/*\"
+      }]
+    }"
+
   aws_cmd iam create-instance-profile --instance-profile-name "$PROFILE_NAME"
   aws_cmd iam add-role-to-instance-profile \
     --instance-profile-name "$PROFILE_NAME" \
