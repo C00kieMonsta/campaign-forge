@@ -12,7 +12,7 @@ export class GroupsService {
 
   async list(): Promise<ContactGroup[]> {
     const items = await this.ddb.scanAll(this.table);
-    return (items as ContactGroup[]).sort(
+    return (items as unknown as ContactGroup[]).sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
   }
@@ -26,7 +26,7 @@ export class GroupsService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.ddb.put(this.table, group);
+    await this.ddb.put(this.table, group as unknown as Record<string, unknown>);
     return group;
   }
 
