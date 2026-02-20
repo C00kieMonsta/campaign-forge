@@ -25,10 +25,10 @@ RECREATE=false
 aws_cmd() { aws --region "$REGION" --no-cli-pager "$@"; }
 
 get_latest_ami() {
-  # Use the most recent x86_64 Amazon Linux 2 AMI
+  # Amazon Linux 2023 (has glibc 2.34, supports Node.js 20+)
   aws_cmd ec2 describe-images \
     --owners amazon \
-    --filters "Name=name,Values=amzn2-ami-hvm-*-x86_64-gp2" \
+    --filters "Name=name,Values=al2023-ami-2023*-x86_64" \
     --query "sort_by(Images, &CreationDate)[-1].ImageId" \
     --output text
 }
@@ -205,5 +205,5 @@ echo "Next steps:"
 echo "  1. Add EC2_HOST=$ELASTIC_IP as a GitHub Secret"
 echo "  2. Copy the private key contents as EC2_SSH_KEY GitHub Secret:"
 echo "     cat $KEY_FILE"
-echo "  3. Point api.campaignforge.io → $ELASTIC_IP in Route 53"
+echo "  3. api.moniquepirson.be → $ELASTIC_IP already set in Route 53"
 echo "======================================================"

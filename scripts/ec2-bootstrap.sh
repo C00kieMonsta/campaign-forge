@@ -27,13 +27,13 @@ ssm_get() {
 
 # ── System packages ───────────────────────────────────────────────────────────
 log "Installing system packages..."
-yum update -y
-yum install -y git nginx
+dnf update -y
+dnf install -y git nginx
 
 # ── Node.js 20 via NodeSource ─────────────────────────────────────────────────
 log "Installing Node.js 20..."
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-yum install -y nodejs
+dnf install -y nodejs
 
 # ── pnpm ─────────────────────────────────────────────────────────────────────
 log "Installing pnpm..."
@@ -122,7 +122,7 @@ systemctl start nginx
 
 # ── Certbot / Let's Encrypt ───────────────────────────────────────────────────
 log "Installing Certbot..."
-yum install -y python3-certbot-nginx
+dnf install -y python3-certbot-nginx
 
 log "Requesting TLS certificate for ${DOMAIN}..."
 certbot --nginx \
