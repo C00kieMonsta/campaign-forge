@@ -6,36 +6,36 @@
 
 @layer base {
   :root {
-    --background: 35 30% 97%;
-    --foreground: 25 30% 15%;
-    --card: 35 40% 99%;
-    --card-foreground: 25 30% 15%;
-    --popover: 35 40% 99%;
-    --popover-foreground: 25 30% 15%;
-    --primary: 15 65% 55%;
-    --primary-foreground: 35 30% 98%;
+    --background: 140 20% 97%;
+    --foreground: 142 20% 15%;
+    --card: 140 30% 99%;
+    --card-foreground: 142 20% 15%;
+    --popover: 140 30% 99%;
+    --popover-foreground: 142 20% 15%;
+    --primary: 142 60% 38%;
+    --primary-foreground: 0 0% 100%;
     --secondary: 140 20% 90%;
     --secondary-foreground: 140 25% 25%;
-    --muted: 35 20% 93%;
-    --muted-foreground: 25 15% 45%;
+    --muted: 140 15% 93%;
+    --muted-foreground: 140 10% 45%;
     --accent: 40 70% 50%;
-    --accent-foreground: 35 30% 98%;
+    --accent-foreground: 0 0% 100%;
     --destructive: 0 70% 50%;
     --destructive-foreground: 0 0% 100%;
-    --border: 35 25% 88%;
-    --input: 35 25% 88%;
-    --ring: 15 65% 55%;
+    --border: 140 20% 88%;
+    --input: 140 20% 88%;
+    --ring: 142 60% 38%;
     --radius: 0.75rem;
-    --terracotta: 15 65% 55%;
-    --terracotta-light: 15 60% 70%;
-    --terracotta-dark: 15 70% 40%;
+    --terracotta: 142 60% 38%;
+    --terracotta-light: 142 50% 60%;
+    --terracotta-dark: 142 65% 28%;
     --sage: 140 25% 45%;
     --sage-light: 140 20% 90%;
-    --cream: 35 30% 97%;
-    --cream-dark: 35 25% 92%;
+    --cream: 140 20% 97%;
+    --cream-dark: 140 18% 92%;
     --golden: 40 70% 50%;
     --golden-light: 40 65% 75%;
-    --warm-brown: 25 30% 25%;
+    --warm-brown: 142 20% 20%;
   }
 }
 
@@ -50,7 +50,7 @@
     background: linear-gradient(135deg, hsl(var(--cream)) 0%, hsl(var(--cream-dark)) 50%, hsl(var(--sage-light)) 100%);
   }
   .gradient-terracotta {
-    background: linear-gradient(135deg, hsl(var(--terracotta)) 0%, hsl(var(--terracotta-dark)) 100%);
+    background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--terracotta-dark)) 100%);
   }
   .card-elevated {
     @apply bg-card rounded-xl shadow-lg border border-border/50;

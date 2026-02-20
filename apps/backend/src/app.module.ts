@@ -4,8 +4,9 @@ import { SharedModule } from "./shared/shared.module";
 import { ContactsModule } from "./contacts/contacts.module";
 import { CampaignsModule } from "./campaigns/campaigns.module";
 import { PublicModule } from "./public/public.module";
+import { AuthModule } from "./auth/auth.module";
 
 @Module({
-  imports: [ConfigModule, SharedModule, ContactsModule, CampaignsModule, PublicModule],
+  imports: [ConfigModule, SharedModule, ContactsModule, CampaignsModule, PublicModule, AuthModule],
 })
 export class AppModule {}

@@ -11,6 +11,8 @@ const schema = z.object({
   SES_REGION: z.string().default("eu-west-1"),
   UNSUBSCRIBE_SECRET: z.string().min(32),
   PUBLIC_BASE_URL: z.string().url(),
+  ADMIN_CREDENTIALS: z.string().min(1),
+  JWT_SECRET: z.string().min(32),
 });
 
 export type Env = z.infer<typeof schema>;

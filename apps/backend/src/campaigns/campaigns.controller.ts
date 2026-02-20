@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Patch, Delete, Query, Param, Body, BadRequestException } from "@nestjs/common";
+import { Controller, Get, Post, Patch, Delete, Query, Param, Body, BadRequestException, UseGuards } from "@nestjs/common";
+import { AdminGuard } from "../auth/admin.guard";
 import { z } from "zod";
 import {
   createCampaignRequestSchema,
@@ -36,6 +37,7 @@ const SAMPLE_CONTACT = {
   organization: "Acme Corp",
 };
 
+@UseGuards(AdminGuard)
 @Controller("admin/campaigns")
 export class CampaignsController {
   constructor(

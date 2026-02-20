@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Patch, Query, Param, Body, Res, BadRequestException } from "@nestjs/common";
+import { Controller, Get, Post, Patch, Query, Param, Body, Res, BadRequestException, UseGuards } from "@nestjs/common";
+import { AdminGuard } from "../auth/admin.guard";
 import { Response } from "express";
 import {
   listContactsQuerySchema,
@@ -10,6 +11,7 @@ import { parse as csvParse } from "csv-parse/sync";
 import { stringify as csvStringify } from "csv-stringify/sync";
 import { ContactsService } from "./contacts.service";
 
+@UseGuards(AdminGuard)
 @Controller("admin/contacts")
 export class ContactsController {
   constructor(private contacts: ContactsService) {}

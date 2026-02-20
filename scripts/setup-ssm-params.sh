@@ -51,6 +51,13 @@ echo ""
 # ── Public base URL (e.g. https://api.yourdomain.com/api) ─────────────────────
 read -rp "PUBLIC_BASE_URL (e.g. https://api.campaignforge.io/api): " public_base_url
 
+# ── Admin credentials ─────────────────────────────────────────────────────────
+echo "ADMIN_CREDENTIALS: JSON array of {email, hash} objects."
+echo "Generate hashes with: node -e \"const b=require('bcryptjs');b.hash('password',12).then(console.log)\""
+read -rp "ADMIN_CREDENTIALS (JSON): " admin_credentials
+read -rsp "JWT_SECRET (32+ random chars): " jwt_secret
+echo ""
+
 # ── GitHub PAT for git clone (repo:read scope) ───────────────────────────────
 echo ""
 echo "GitHub Personal Access Token (read:packages + contents scope)."
@@ -67,6 +74,8 @@ put_param "CAMPAIGNS_TABLE"       "$campaigns_table" "String"
 put_param "SES_FROM_EMAIL"        "$ses_from_email"  "String"
 put_param "UNSUBSCRIBE_SECRET"    "$unsub_secret"
 put_param "PUBLIC_BASE_URL"       "$public_base_url" "String"
+put_param "ADMIN_CREDENTIALS"     "$admin_credentials"
+put_param "JWT_SECRET"            "$jwt_secret"
 put_param "GITHUB_PAT"            "$github_pat"
 
 echo ""

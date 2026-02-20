@@ -1,18 +1,47 @@
 import type { Campaign } from "@packages/types";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
+const TOKEN_KEY = "admin_token";
 
-async function request<T>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-  });
+function getToken(): string | null {
+  return sessionStorage.getItem(TOKEN_KEY);
+}
+
+function handleUnauthorized() {
+  sessionStorage.removeItem(TOKEN_KEY);
+  window.location.href = "/login";
+}
+
+async function parseResponse<T>(res: Response): Promise<T> {
   const data = await res.json();
   if (!res.ok) {
     const msg = Array.isArray(data.message) ? data.message.join(", ") : (data.message || data.error || `Request failed: ${res.status}`);
     throw new Error(msg);
   }
   return data;
+}
+
+async function request<T>(path: string, opts?: RequestInit): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}${path}`, { headers, ...opts });
+
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error("Unauthorized");
+  }
+
+  return parseResponse<T>(res);
+}
+
+async function publicRequest<T>(path: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  return parseResponse<T>(res);
 }
 
 export const api = {
@@ -58,7 +87,7 @@ export const api = {
   },
   public: {
     subscribe(email: string, firstName?: string, lastName?: string) {
-      return request<{ ok: true; message: string }>("/public/subscribe", {
+      return publicRequest<{ ok: true; message: string }>("/public/subscribe", {
         method: "POST",
         body: JSON.stringify({ email, firstName, lastName }),
       });
