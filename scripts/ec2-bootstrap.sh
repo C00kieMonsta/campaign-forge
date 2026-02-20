@@ -6,7 +6,7 @@ set -euo pipefail
 
 REGION="eu-north-1"
 SSM_PREFIX="/campaign-forge/production"
-REPO_URL_BASE="github.com/antoineboxho/campaign-forge.git"
+REPO_URL_BASE="github.com/C00kieMonsta/campaign-forge.git"
 APP_DIR="/home/ec2-user/campaign-forge"
 APP_USER="ec2-user"
 API_NAME="campaign-forge-api"
@@ -54,12 +54,11 @@ UNSUBSCRIBE_SECRET=$(ssm_get "UNSUBSCRIBE_SECRET")
 PUBLIC_BASE_URL=$(ssm_get "PUBLIC_BASE_URL")
 ADMIN_CREDENTIALS=$(ssm_get "ADMIN_CREDENTIALS")
 JWT_SECRET=$(ssm_get "JWT_SECRET")
-GITHUB_PAT=$(ssm_get "GITHUB_PAT")
 
 # ── Clone repo ────────────────────────────────────────────────────────────────
 log "Cloning repository..."
 sudo -u "$APP_USER" git clone \
-  "https://${GITHUB_PAT}@${REPO_URL_BASE}" \
+  "https://${REPO_URL_BASE}" \
   "$APP_DIR"
 
 # ── Write .env ────────────────────────────────────────────────────────────────
