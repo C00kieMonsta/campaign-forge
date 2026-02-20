@@ -6,7 +6,7 @@ import { AppModule } from "./app.module";
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { logger: ["error", "warn", "log"] });
 
-  app.setGlobalPrefix("api");
+  app.setGlobalPrefix("api", { exclude: ["health"] });
   app.enableCors({
     origin: [/localhost:\d+$/, /127\.0\.0\.1:\d+$/, /https:\/\/(.*\.)?moniquepirson\.be$/],
     credentials: true,

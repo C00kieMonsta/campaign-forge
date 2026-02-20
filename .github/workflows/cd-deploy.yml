@@ -243,7 +243,7 @@ jobs:
 
             echo "🏥 Health check..."
             sleep 3
-            curl -f http://localhost:3001/api/health || echo "⚠️ Health check failed (may need a moment)"
+            curl -f http://localhost:3001/health || echo "⚠️ Health check failed (may need a moment)"
 
             echo "✅ Backend deployed"
 

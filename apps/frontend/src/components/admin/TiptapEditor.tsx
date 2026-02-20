@@ -1,7 +1,6 @@
 import { forwardRef, useImperativeHandle } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import Link from "@tiptap/extension-link";
 import TextAlign from "@tiptap/extension-text-align";
 import Color from "@tiptap/extension-color";
 import { TextStyle } from "@tiptap/extension-text-style";
@@ -21,8 +20,7 @@ interface Props {
 const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange, readonly = false }, ref) => {
   const editor = useEditor({
     extensions: [
-      StarterKit,
-      Link.configure({ openOnClick: false }),
+      StarterKit.configure({ link: { openOnClick: false } }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       TextStyle,
       Color,

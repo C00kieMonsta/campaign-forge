@@ -5,7 +5,7 @@ import { ArrowLeft, Eye, LayoutTemplate, Loader2, Save, Variable } from "lucide-
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
-import type { Contact, ContactGroup } from "@packages/types";
+import type { ContactGroup } from "@packages/types";
 import {
   EMAIL_TEMPLATES,
   SAMPLE_DATA,
@@ -30,7 +30,6 @@ export default function CampaignEditor() {
 
   const isEditing = Boolean(id);
 
-  const [contacts, setContacts] = useState<Contact[]>([]);
   const [groups, setGroups] = useState<ContactGroup[]>([]);
 
   const [formData, setFormData] = useState(emptyForm);
@@ -42,13 +41,11 @@ export default function CampaignEditor() {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [groupsData, contactsData, campaignData] = await Promise.all([
+      const [groupsData, campaignData] = await Promise.all([
         api.groups.list(),
-        api.contacts.list({ limit: 1000 }),
         id ? api.campaigns.get(id) : null,
       ]);
       setGroups(groupsData);
-      setContacts(contactsData.items);
       if (campaignData) {
         const { campaign } = campaignData;
         setIsSent(campaign.status === "sent");
@@ -91,12 +88,6 @@ export default function CampaignEditor() {
         ? prev.targetGroups.filter((g) => g !== groupId)
         : [...prev.targetGroups, groupId],
     }));
-  };
-
-  const getRecipientCount = (targetGroups?: string[]) => {
-    const subscribed = contacts.filter((c) => c.status === "subscribed");
-    if (!targetGroups || targetGroups.length === 0) return subscribed.length;
-    return subscribed.filter((c) => c.groups?.some((g) => targetGroups.includes(g))).length;
   };
 
   const handleSave = async () => {
@@ -200,22 +191,18 @@ export default function CampaignEditor() {
               {groups.map((group) => {
                 const selected = formData.targetGroups.includes(group.id);
                 const colorCls = groupColorMap[group.color] ?? "bg-gray-100 text-gray-700 border-gray-200";
-                const contactCount = contacts.filter(
-                  (c) => c.status === "subscribed" && c.groups?.includes(group.id)
-                ).length;
                 return (
                   <button
                     key={group.id}
                     type="button"
                     onClick={() => toggleGroup(group.id)}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                    className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
                       selected
                         ? `${colorCls} ring-2 ring-offset-1 ring-primary/30`
                         : "bg-muted text-muted-foreground border-transparent opacity-50 hover:opacity-75"
                     }`}
                   >
                     {group.name}
-                    <span className="opacity-60">({contactCount})</span>
                   </button>
                 );
               })}
@@ -225,11 +212,6 @@ export default function CampaignEditor() {
                 </span>
               )}
             </div>
-          )}
-          {formData.targetGroups.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {getRecipientCount(formData.targetGroups)} {t.campaignForm.sendConfirmRecipients}
-            </p>
           )}
         </div>
 
