@@ -92,6 +92,7 @@ sudo -u "$APP_USER" pnpm build:backend
 log "Starting API with PM2..."
 sudo -u "$APP_USER" pm2 start "${APP_DIR}/apps/backend/dist/main.js" \
   --name "$API_NAME" \
+  --cwd "${APP_DIR}/apps/backend" \
   --env production
 
 sudo -u "$APP_USER" pm2 save
@@ -100,10 +101,10 @@ env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd \
 
 # ── Nginx config ──────────────────────────────────────────────────────────────
 log "Configuring Nginx..."
-cat > /etc/nginx/conf.d/campaign-forge.conf <<'NGINX'
+cat > /etc/nginx/conf.d/campaign-forge.conf <<NGINX
 server {
     listen 80;
-    server_name _;
+    server_name ${DOMAIN};
 
     location / {
         proxy_pass         http://localhost:3001;
