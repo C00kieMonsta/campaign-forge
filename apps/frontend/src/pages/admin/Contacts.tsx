@@ -265,11 +265,20 @@ export default function Contacts() {
   const loadContacts = useCallback(async () => {
     try {
       setLoading(true);
-      const [contactsRes, groupsData] = await Promise.all([
-        api.contacts.list({ limit: 200 }),
+      const [allContacts, groupsData] = await Promise.all([
+        (async () => {
+          const items: Contact[] = [];
+          let cursor: string | undefined;
+          do {
+            const res = await api.contacts.list({ limit: 200, cursor });
+            items.push(...(res.items as Contact[]));
+            cursor = res.cursor ?? undefined;
+          } while (cursor);
+          return items;
+        })(),
         api.groups.list(),
       ]);
-      setContacts(contactsRes.items);
+      setContacts(allContacts);
       setGroups(groupsData);
     } catch (err) {
       toast({ title: String(err), variant: "destructive" });
