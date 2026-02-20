@@ -11,7 +11,7 @@ APP_DIR="/home/ec2-user/campaign-forge"
 APP_USER="ec2-user"
 API_NAME="campaign-forge-api"
 DOMAIN="api.moniquepirson.be"    # change if your subdomain differs
-ADMIN_EMAIL="antoineboxho@gmail.com"
+ADMIN_EMAIL="monpirson@gmail.com"
 
 log() { echo "[bootstrap] $*"; }
 

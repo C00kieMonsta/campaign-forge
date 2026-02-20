@@ -113,7 +113,7 @@ export const api = {
     importCsv(csv: string) {
       return request<{ ok: true; imported: number; skipped: number }>("/admin/contacts/import", {
         method: "POST",
-        body: JSON.stringify(csv),
+        body: JSON.stringify({ csv }),
       });
     },
   },

@@ -17,43 +17,27 @@ export const SAMPLE_DATA: Record<string, string> = {
 export const EMAIL_TEMPLATES = [
   {
     key: "simple" as const,
-    html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #333333; line-height: 1.6;">
-  <p>Bonjour {{firstName}},</p>
-  <p>Votre message ici.</p>
-  <p>Cordialement,<br>Monique Pirson</p>
-</div>`,
+    html: `<p>Bonjour {{firstName}},</p><p>Votre message ici.</p><p>Cordialement,<br>Monique Pirson</p>`,
   },
   {
     key: "promo" as const,
-    html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff;">
-  <div style="background-color: #c0603a; padding: 32px 24px; text-align: center;">
-    <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: bold;">Titre de la promotion</h1>
-  </div>
-  <div style="padding: 32px 24px;">
-    <p style="color: #555555; font-size: 16px; margin: 0 0 16px 0;">Bonjour {{firstName}},</p>
-    <p style="color: #555555; font-size: 16px; line-height: 1.7; margin: 0 0 24px 0;">Décrivez votre offre ici.</p>
-    <div style="text-align: center; margin: 32px 0;">
-      <a href="#" style="background-color: #c0603a; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: bold; display: inline-block;">Découvrir l'offre</a>
-    </div>
-    <p style="color: #888888; font-size: 14px; margin: 24px 0 0 0;">Cordialement,<br>Monique Pirson</p>
-  </div>
-</div>`,
+    html: `<h1 style="text-align: center"><span style="color: #c0603a">Titre de la promotion</span></h1><p>Bonjour {{firstName}},</p><p>Décrivez votre offre ici.</p><p style="text-align: center"><a href="#">Découvrir l'offre →</a></p><p>Cordialement,<br>Monique Pirson</p>`,
   },
   {
     key: "newsletter" as const,
-    html: `<div style="font-family: Georgia, serif; max-width: 600px; margin: 0 auto; background-color: #ffffff;">
-  <div style="border-bottom: 3px solid #c0603a; padding: 32px 24px; text-align: center;">
-    <h1 style="color: #333333; margin: 0; font-size: 26px;">Titre de la newsletter</h1>
-    <p style="color: #888888; font-size: 14px; margin: 8px 0 0 0;">Bonjour {{firstName}},</p>
-  </div>
-  <div style="padding: 32px 24px;">
-    <h2 style="color: #c0603a; font-size: 20px; margin: 0 0 12px 0;">Actualité 1</h2>
-    <p style="color: #555555; line-height: 1.8; margin: 0 0 24px 0;">Contenu de votre première actualité...</p>
-    <hr style="border: none; border-top: 1px solid #eeeeee; margin: 24px 0;">
-    <h2 style="color: #c0603a; font-size: 20px; margin: 0 0 12px 0;">Actualité 2</h2>
-    <p style="color: #555555; line-height: 1.8; margin: 0;">Contenu de votre deuxième actualité...</p>
-  </div>
-</div>`,
+    html: `<h1>Titre de la newsletter</h1><p>Bonjour {{firstName}},</p><h2><span style="color: #c0603a">Actualité 1</span></h2><p>Contenu de votre première actualité...</p><hr><h2><span style="color: #c0603a">Actualité 2</span></h2><p>Contenu de votre deuxième actualité...</p><p>Cordialement,<br>Monique Pirson</p>`,
+  },
+  {
+    key: "thermomixMonthly" as const,
+    html: `<h1 style="text-align: center"><span style="color: #E2001A">Action du mois Thermomix®</span></h1><p>Bonjour {{firstName}},</p><p>Ce mois-ci, nous avons une <strong>offre spéciale Thermomix®</strong> que vous ne voudrez pas manquer ! Profitez de cette opportunité unique pour découvrir de nouvelles recettes et accessoires.</p><h2><span style="color: #E2001A">🎯 L'action du mois</span></h2><p>Décrivez ici les détails de votre action mensuelle...</p><p style="text-align: center"><a href="#">Découvrir l'action →</a></p><hr><h2>🍳 La recette du mois</h2><p>Ajoutez ici une recette exclusive préparée avec le Thermomix®...</p><p>Cordialement,<br>L'équipe Thermomix® Belgium</p>`,
+  },
+  {
+    key: "thermomixChristmas" as const,
+    html: `<h1 style="text-align: center"><span style="color: #8B0000">🎄 Joyeux Noël avec Thermomix® !</span></h1><p>Bonjour {{firstName}},</p><p>La période des fêtes approche, et quoi de mieux que de préparer de <strong>délicieux repas de Noël</strong> avec votre Thermomix® ? Laissez-vous inspirer par nos recettes festives spécialement sélectionnées pour vous.</p><h2><span style="color: #8B0000">🎁 Notre offre de Noël</span></h2><p>Détaillez ici votre offre ou promotion de Noël...</p><h2>🍽️ Nos recettes de fêtes</h2><ul><li>Bûche de Noël au chocolat</li><li>Velouté de châtaignes</li><li>Saumon en croûte</li></ul><p style="text-align: center"><a href="#">Découvrir les recettes de Noël →</a></p><p>De tout cœur, Joyeux Noël ! 🎄<br>L'équipe Thermomix® Belgium</p>`,
+  },
+  {
+    key: "thermomixEaster" as const,
+    html: `<h1 style="text-align: center"><span style="color: #558B2F">🐣 Joyeuses Pâques avec Thermomix® !</span></h1><p>Bonjour {{firstName}},</p><p>Le printemps est là, et Pâques avec lui ! C'est le moment de cuisiner des <strong>recettes fraîches et colorées</strong> avec votre Thermomix®. Laissez-vous inspirer par nos idées festives pour cette belle saison.</p><h2><span style="color: #558B2F">🥚 Notre offre de Pâques</span></h2><p>Décrivez ici votre offre ou promotion de Pâques...</p><h2>🌸 Idées recettes pour Pâques</h2><ul><li>Agneau de Pâques et ses légumes de printemps</li><li>Charlotte aux fraises</li><li>Œufs en chocolat maison</li></ul><p style="text-align: center"><a href="#">Découvrir les recettes de Pâques →</a></p><p>Joyeuses Pâques ! 🐣<br>L'équipe Thermomix® Belgium</p>`,
   },
 ];
 

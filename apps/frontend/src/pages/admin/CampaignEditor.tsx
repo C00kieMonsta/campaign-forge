@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Button, Input, Label, Textarea } from "@packages/ui";
-import { ArrowLeft, Code, Eye, LayoutTemplate, Loader2, Save, Variable } from "lucide-react";
+import { Button, Input, Label } from "@packages/ui";
+import { ArrowLeft, Eye, LayoutTemplate, Loader2, Save, Variable } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import {
@@ -11,6 +12,7 @@ import {
   TEMPLATE_VARS,
   groupColorMap,
 } from "@/lib/campaign-constants";
+import TiptapEditor, { type TiptapEditorHandle } from "@/components/admin/TiptapEditor";
 
 interface Contact {
   emailLower: string;
@@ -36,49 +38,43 @@ export default function CampaignEditor() {
   const navigate = useNavigate();
   const { t } = useLanguage();
   const { toast } = useToast();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<TiptapEditorHandle>(null);
 
   const isEditing = Boolean(id);
 
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [groups, setGroups] = useState<ContactGroup[]>([]);
+  const [contacts] = useLocalStorage<Contact[]>("cf_contacts", []);
+  const [groups] = useLocalStorage<ContactGroup[]>("cf_groups", []);
 
   const [formData, setFormData] = useState(emptyForm);
+  const [isSent, setIsSent] = useState(false);
   const [viewMode, setViewMode] = useState<"editor" | "preview">("editor");
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(isEditing);
   const [isSaving, setIsSaving] = useState(false);
 
-  const loadData = useCallback(async () => {
+  const loadCampaign = useCallback(async () => {
+    if (!id) return;
     setIsLoading(true);
     try {
-      const [groupsData, contactsRes] = await Promise.all([
-        api.groups.list(),
-        api.contacts.list({ limit: 200 }),
-      ]);
-      setGroups(groupsData);
-      setContacts(contactsRes.items);
-
-      if (id) {
-        const { campaign } = await api.campaigns.get(id);
-        setFormData({
-          name: campaign.name,
-          subject: campaign.subject,
-          html: campaign.html ?? "",
-          targetGroups: campaign.targetGroups ?? [],
-        });
-      }
+      const { campaign } = await api.campaigns.get(id);
+      setIsSent(campaign.status === "sent");
+      setFormData({
+        name: campaign.name,
+        subject: campaign.subject,
+        html: campaign.html ?? "",
+        targetGroups: campaign.targetGroups ?? [],
+      });
     } catch (err) {
       console.log(JSON.stringify({ event: "CampaignEditor:loadError", error: String(err) }));
       toast({ title: String(err), variant: "destructive" });
-      if (id) navigate("/campaigns");
+      navigate("/campaigns");
     } finally {
       setIsLoading(false);
     }
   }, [id, navigate, toast]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    loadCampaign();
+  }, [loadCampaign]);
 
   const previewHtml = useMemo(() => {
     let html = formData.html;
@@ -88,20 +84,8 @@ export default function CampaignEditor() {
     return html;
   }, [formData.html]);
 
-  const insertVariable = (token: string) => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      setFormData((prev) => ({ ...prev, html: prev.html + token }));
-      return;
-    }
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const newText = formData.html.substring(0, start) + token + formData.html.substring(end);
-    setFormData((prev) => ({ ...prev, html: newText }));
-    setTimeout(() => {
-      textarea.selectionStart = textarea.selectionEnd = start + token.length;
-      textarea.focus();
-    }, 0);
+  const applyTemplate = (html: string) => {
+    editorRef.current?.setContent(html);
   };
 
   const toggleGroup = (groupId: string) => {
@@ -170,17 +154,24 @@ export default function CampaignEditor() {
           </h1>
         </div>
         <div className="flex items-center gap-2">
+          {isSent && (
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700 border border-green-200">
+              {t.campaigns.sent}
+            </span>
+          )}
           <Button variant="outline" onClick={() => navigate("/campaigns")}>
             {t.campaignForm.cancel}
           </Button>
-          <Button
-            onClick={handleSave}
-            disabled={isSaving}
-            className="gradient-terracotta text-white hover:opacity-90"
-          >
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
-            {t.campaignForm.save}
-          </Button>
+          {!isSent && (
+            <Button
+              onClick={handleSave}
+              disabled={isSaving}
+              className="gradient-terracotta text-white hover:opacity-90"
+            >
+              {isSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+              {t.campaignForm.save}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -246,7 +237,7 @@ export default function CampaignEditor() {
           )}
         </div>
 
-        {/* Editor / Preview toggle + content — fills remaining space */}
+        {/* Editor / Preview — fills remaining space */}
         <div className="flex-1 flex flex-col min-h-0 card-elevated p-4">
           <div className="flex gap-1 border-b border-border mb-4">
             <button
@@ -258,7 +249,6 @@ export default function CampaignEditor() {
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              <Code className="h-4 w-4" />
               {t.campaignForm.editor}
             </button>
             <button
@@ -277,61 +267,61 @@ export default function CampaignEditor() {
 
           {viewMode === "editor" ? (
             <div className="flex-1 flex flex-col gap-3 min-h-0">
-              {/* Template picker */}
-              <div className="space-y-2">
-                <span className="text-sm text-muted-foreground flex items-center gap-1">
-                  <LayoutTemplate className="h-4 w-4" />
-                  {t.campaignForm.templates}:
-                </span>
-                <div className="flex gap-2 flex-wrap">
-                  {EMAIL_TEMPLATES.map((tpl) => {
-                    const labelKey = `template${tpl.key.charAt(0).toUpperCase() + tpl.key.slice(1)}` as keyof typeof t.campaignForm;
-                    const descKey = `template${tpl.key.charAt(0).toUpperCase() + tpl.key.slice(1)}Desc` as keyof typeof t.campaignForm;
-                    return (
-                      <button
-                        key={tpl.key}
-                        type="button"
-                        onClick={() => setFormData((prev) => ({ ...prev, html: tpl.html }))}
-                        className="flex flex-col items-start px-3 py-2 rounded-lg border border-border bg-muted/40 hover:bg-muted hover:border-primary/40 transition-all text-left"
-                      >
-                        <span className="text-xs font-medium text-foreground">{t.campaignForm[labelKey] as string}</span>
-                        <span className="text-xs text-muted-foreground">{t.campaignForm[descKey] as string}</span>
-                      </button>
-                    );
-                  })}
+              {/* Template picker — hidden for sent campaigns */}
+              {!isSent && (
+                <div className="space-y-2">
+                  <span className="text-sm text-muted-foreground flex items-center gap-1">
+                    <LayoutTemplate className="h-4 w-4" />
+                    {t.campaignForm.templates}:
+                  </span>
+                  <div className="flex gap-2 flex-wrap">
+                    {EMAIL_TEMPLATES.map((tpl) => {
+                      const labelKey = `template${tpl.key.charAt(0).toUpperCase() + tpl.key.slice(1)}` as keyof typeof t.campaignForm;
+                      const descKey = `template${tpl.key.charAt(0).toUpperCase() + tpl.key.slice(1)}Desc` as keyof typeof t.campaignForm;
+                      return (
+                        <button
+                          key={tpl.key}
+                          type="button"
+                          onClick={() => applyTemplate(tpl.html)}
+                          className="flex flex-col items-start px-3 py-2 rounded-lg border border-border bg-muted/40 hover:bg-muted hover:border-primary/40 transition-all text-left"
+                        >
+                          <span className="text-xs font-medium text-foreground">{t.campaignForm[labelKey] as string}</span>
+                          <span className="text-xs text-muted-foreground">{t.campaignForm[descKey] as string}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {/* Variable insertion */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm text-muted-foreground flex items-center gap-1">
-                  <Variable className="h-4 w-4" />
-                  {t.campaignForm.insertVariable}:
-                </span>
-                {TEMPLATE_VARS.map((v) => (
-                  <Button
-                    key={v.key}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => insertVariable(v.token)}
-                  >
-                    {t.variables[v.key as keyof typeof t.variables]}
-                  </Button>
-                ))}
-              </div>
+              {/* Variable insertion — hidden for sent campaigns */}
+              {!isSent && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-muted-foreground flex items-center gap-1">
+                    <Variable className="h-4 w-4" />
+                    {t.campaignForm.insertVariable}:
+                  </span>
+                  {TEMPLATE_VARS.map((v) => (
+                    <Button
+                      key={v.key}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => editorRef.current?.insertContent(v.token)}
+                    >
+                      {t.variables[v.key as keyof typeof t.variables]}
+                    </Button>
+                  ))}
+                </div>
+              )}
 
-              {/* HTML textarea — grows to fill remaining space */}
-              <div className="flex-1 flex flex-col min-h-0">
-                <Label className="mb-2">{t.campaignForm.htmlBody}</Label>
-                <Textarea
-                  ref={textareaRef}
-                  value={formData.html}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, html: e.target.value }))}
-                  className="flex-1 font-mono text-sm resize-none min-h-0"
-                  style={{ height: "100%" }}
-                />
-              </div>
+              {/* Tiptap editor — grows to fill remaining space */}
+              <TiptapEditor
+                ref={editorRef}
+                content={formData.html}
+                onChange={(html) => setFormData((prev) => ({ ...prev, html }))}
+                readonly={isSent}
+              />
             </div>
           ) : (
             <div className="flex-1 flex flex-col min-h-0">

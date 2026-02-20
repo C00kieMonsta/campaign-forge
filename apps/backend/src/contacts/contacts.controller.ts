@@ -75,7 +75,7 @@ export class ContactsController {
   }
 
   @Post("import")
-  async importCsv(@Body() body: string) {
+  async importCsv(@Body("csv") body: string) {
     if (!body) throw new BadRequestException("CSV body required");
 
     const rows = csvParse(body, { columns: true, skip_empty_lines: true, trim: true }) as Record<string, string>[];
