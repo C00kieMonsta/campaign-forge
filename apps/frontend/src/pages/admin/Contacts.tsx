@@ -351,16 +351,22 @@ export default function Contacts() {
   }, [openGroupPopover, batchGroupOpen]);
 
   // Filtered contacts
-  const filtered = contacts.filter((c) => {
-    const q = searchQuery.toLowerCase();
-    const name = `${c.firstName ?? ""} ${c.lastName ?? ""}`.toLowerCase();
-    const matchesSearch =
-      !q || name.includes(q) || c.email.toLowerCase().includes(q);
-    const matchesStatus = statusFilter === "all" || c.status === statusFilter;
-    const matchesGroup =
-      groupFilter === "all" || (c.groups ?? []).includes(groupFilter);
-    return matchesSearch && matchesStatus && matchesGroup;
-  });
+  const filtered = contacts
+    .filter((c) => {
+      const q = searchQuery.toLowerCase();
+      const name = `${c.firstName ?? ""} ${c.lastName ?? ""}`.toLowerCase();
+      const matchesSearch =
+        !q || name.includes(q) || c.email.toLowerCase().includes(q);
+      const matchesStatus = statusFilter === "all" || c.status === statusFilter;
+      const matchesGroup =
+        groupFilter === "all" || (c.groups ?? []).includes(groupFilter);
+      return matchesSearch && matchesStatus && matchesGroup;
+    })
+    .sort((a, b) => {
+      const nameA = `${a.firstName ?? ""} ${a.lastName ?? ""}`.trim().toLowerCase();
+      const nameB = `${b.firstName ?? ""} ${b.lastName ?? ""}`.trim().toLowerCase();
+      return nameA.localeCompare(nameB, "fr");
+    });
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);

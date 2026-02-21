@@ -66,7 +66,7 @@ export default function Campaigns() {
       const allContacts: Contact[] = [];
       let cursor: string | undefined;
       do {
-        const res = await api.contacts.list({ limit: 1000, cursor });
+        const res = await api.contacts.list({ status: "subscribed", limit: 200, cursor });
         allContacts.push(...(res.items as Contact[]));
         cursor = res.cursor ?? undefined;
       } while (cursor);
@@ -86,9 +86,8 @@ export default function Campaigns() {
   }, [loadCampaigns]);
 
   const getRecipientCount = (targetGroups?: string[]) => {
-    const subscribed = contacts.filter((c) => c.status === "subscribed");
-    if (!targetGroups || targetGroups.length === 0) return subscribed.length;
-    return subscribed.filter((c) => c.groups?.some((g) => targetGroups.includes(g))).length;
+    if (!targetGroups || targetGroups.length === 0) return contacts.length;
+    return contacts.filter((c) => c.groups?.some((g) => targetGroups.includes(g))).length;
   };
 
   const handleDelete = async (campaign: Campaign) => {

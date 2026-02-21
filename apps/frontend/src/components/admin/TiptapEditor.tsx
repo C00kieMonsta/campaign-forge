@@ -1,10 +1,11 @@
-import { forwardRef, useImperativeHandle } from "react";
+import { forwardRef, useImperativeHandle, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import TextAlign from "@tiptap/extension-text-align";
 import Color from "@tiptap/extension-color";
 import { TextStyle } from "@tiptap/extension-text-style";
-import { AlignCenter, AlignLeft, AlignRight, Bold, Italic, Link2, List, ListOrdered } from "lucide-react";
+import Image from "@tiptap/extension-image";
+import { AlignCenter, AlignLeft, AlignRight, Bold, Image as ImageIcon, Italic, Link2, List, ListOrdered } from "lucide-react";
 
 export interface TiptapEditorHandle {
   insertContent: (text: string) => void;
@@ -18,12 +19,15 @@ interface Props {
 }
 
 const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange, readonly = false }, ref) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ link: { openOnClick: false } }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       TextStyle,
       Color,
+      Image.configure({ inline: false, allowBase64: true }),
     ],
     content,
     editable: !readonly,
@@ -40,6 +44,15 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
       onChange(html);
     },
   }));
+
+  const insertImage = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const src = e.target?.result as string;
+      editor?.chain().focus().setImage({ src }).run();
+    };
+    reader.readAsDataURL(file);
+  };
 
   const setLink = () => {
     const previous = editor?.getAttributes("link").href as string | undefined;
@@ -137,6 +150,20 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
         <ToolbarBtn onClick={setLink} active={editor.isActive("link")} title="Ajouter un lien">
           <Link2 className="h-3.5 w-3.5" />
         </ToolbarBtn>
+        <ToolbarBtn onClick={() => fileInputRef.current?.click()} title="Insérer une image">
+          <ImageIcon className="h-3.5 w-3.5" />
+        </ToolbarBtn>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) insertImage(file);
+            e.target.value = "";
+          }}
+        />
 
         <Separator />
 
