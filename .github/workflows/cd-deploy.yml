@@ -179,13 +179,15 @@ jobs:
         run: pnpm --filter @apps/backend build
 
       - name: Upload dist to EC2
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           source: "apps/backend/dist/,packages/types/dist/"
           target: "/home/ec2-user/campaign-forge/"
+          tar_dereference: true
+          overwrite: true
 
       - name: Restart backend on EC2
         uses: appleboy/ssh-action@v1.0.3
