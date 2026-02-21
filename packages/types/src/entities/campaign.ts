@@ -1,4 +1,4 @@
-export type CampaignStatus = "draft" | "sent";
+export type CampaignStatus = "draft" | "sending" | "sent";
 
 export interface Campaign {
   campaignId: string;

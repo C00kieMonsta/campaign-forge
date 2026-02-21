@@ -47,6 +47,10 @@ export class CampaignsService {
     await this.ddb.delete(this.table, { campaignId: id });
   }
 
+  async markSending(id: string): Promise<void> {
+    await this.update(id, { status: "sending" });
+  }
+
   async markSent(id: string, sentCount: number): Promise<void> {
     await this.update(id, { status: "sent", sentAt: new Date().toISOString(), sentCount });
   }

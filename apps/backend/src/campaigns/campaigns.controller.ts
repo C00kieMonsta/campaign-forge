@@ -122,6 +122,7 @@ export class CampaignsController {
   async sendCampaign(@Param("id") id: string) {
     const campaign = await this.campaigns.getOrFail(id);
     if (campaign.status === "sent") throw new BadRequestException("Campaign already sent");
+    if (campaign.status === "sending") throw new BadRequestException("Campaign is already being sent");
 
     const subscribed = await this.contacts.queryAllSubscribed();
 
@@ -133,16 +134,25 @@ export class CampaignsController {
 
     if (recipients.length === 0) throw new BadRequestException("No subscribed contacts in target groups");
 
+    await this.campaigns.markSending(id);
+
     const emails = recipients.map((c) => ({
       to: c.email,
       subject: campaign.subject,
       html: this.token.appendFooter(replaceTemplateVars(campaign.html, c), c.emailLower),
     }));
 
-    const { sent, failed } = await this.ses.sendBatch(emails);
-    await this.campaigns.markSent(id, sent);
+    // Process in the background — caller gets an immediate response
+    setImmediate(async () => {
+      try {
+        const { sent, failed } = await this.ses.sendBatch(emails);
+        await this.campaigns.markSent(id, sent);
+        console.log(JSON.stringify({ level: "info", action: "campaignSent", campaignId: id, sent, failed }));
+      } catch (err) {
+        console.log(JSON.stringify({ level: "error", action: "campaignSendFailed", campaignId: id, error: String(err) }));
+      }
+    });
 
-    console.log(JSON.stringify({ level: "info", action: "campaignSent", campaignId: id, sent, failed }));
-    return { ok: true, sentCount: sent, message: `Sent to ${sent} contacts` };
+    return { ok: true, queued: true, recipientCount: recipients.length };
   }
 }

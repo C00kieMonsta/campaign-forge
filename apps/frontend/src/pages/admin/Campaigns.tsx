@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Campaign } from "@packages/types";
 import {
@@ -52,6 +52,7 @@ export default function Campaigns() {
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [sendingCampaign, setSendingCampaign] = useState<Campaign | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadCampaigns = useCallback(async () => {
     setIsLoading(true);
@@ -84,6 +85,42 @@ export default function Campaigns() {
   useEffect(() => {
     loadCampaigns();
   }, [loadCampaigns]);
+
+  // Poll while any campaign is in "sending" state
+  useEffect(() => {
+    const hasSending = campaigns.some((c) => c.status === "sending");
+
+    if (hasSending && !pollRef.current) {
+      pollRef.current = setInterval(async () => {
+        try {
+          const { items } = await api.campaigns.list();
+          setCampaigns(items);
+          if (!items.some((c) => c.status === "sending")) {
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+            const justSent = items.find((c) => campaigns.find((prev) => prev.campaignId === c.campaignId && prev.status === "sending") && c.status === "sent");
+            if (justSent) {
+              toast({ title: `${t.campaignForm.sentSuccess} (${justSent.sentCount ?? 0})` });
+            }
+          }
+        } catch {
+          // ignore polling errors
+        }
+      }, 5000);
+    }
+
+    if (!hasSending && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [campaigns, t, toast]);
 
   const getRecipientCount = (targetGroups?: string[]) => {
     if (!targetGroups || targetGroups.length === 0) return contacts.length;
@@ -125,7 +162,7 @@ export default function Campaigns() {
   };
 
   const openSendCampaign = (campaign: Campaign) => {
-    if (campaign.status === "sent") {
+    if (campaign.status === "sent" || campaign.status === "sending") {
       toast({ title: t.campaignForm.alreadySent, variant: "destructive" });
       return;
     }
@@ -137,32 +174,18 @@ export default function Campaigns() {
     if (!sendingCampaign) return;
     setIsSending(true);
     try {
-      const { sentCount } = await api.campaigns.send(
-        sendingCampaign.campaignId
-      );
-      const now = new Date().toISOString();
+      await api.campaigns.send(sendingCampaign.campaignId);
       setCampaigns((prev) =>
         prev.map((c) =>
           c.campaignId === sendingCampaign.campaignId
-            ? {
-                ...c,
-                status: "sent" as const,
-                sentAt: now,
-                sentCount,
-                updatedAt: now
-              }
+            ? { ...c, status: "sending" as const, updatedAt: new Date().toISOString() }
             : c
         )
       );
       setSendDialogOpen(false);
-      toast({ title: `${t.campaignForm.sentSuccess} (${sentCount})` });
+      toast({ title: t.campaignForm.sendStarted });
     } catch (err) {
-      console.log(
-        JSON.stringify({
-          event: "handleSendCampaign:error",
-          error: String(err)
-        })
-      );
+      console.log(JSON.stringify({ event: "handleSendCampaign:error", error: String(err) }));
       toast({ title: String(err), variant: "destructive" });
     } finally {
       setIsSending(false);
@@ -252,14 +275,21 @@ export default function Campaigns() {
                   </TableCell>
                   <TableCell>
                     <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${
                         campaign.status === "sent"
                           ? "bg-green-100 text-green-700 border-green-200"
+                          : campaign.status === "sending"
+                          ? "bg-blue-100 text-blue-700 border-blue-200"
                           : "bg-amber-100 text-amber-700 border-amber-200"
                       }`}
                     >
+                      {campaign.status === "sending" && (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      )}
                       {campaign.status === "sent"
                         ? `${t.campaigns.sent}${campaign.sentCount ? ` (${campaign.sentCount})` : ""}`
+                        : campaign.status === "sending"
+                        ? t.campaigns.sending
                         : t.campaigns.draft}
                     </span>
                     {campaign.sentAt && (
@@ -357,37 +387,28 @@ export default function Campaigns() {
           <DialogHeader>
             <DialogTitle>{t.campaignForm.sendConfirmTitle}</DialogTitle>
           </DialogHeader>
-          {isSending ? (
-            <div className="py-8 flex flex-col items-center gap-3 text-center">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="text-sm font-medium">{t.campaignForm.sendingInProgress}</p>
-              <p className="text-xs text-muted-foreground">{t.campaignForm.sendingDoNotClose}</p>
-            </div>
-          ) : (
-            <>
-              <div className="py-4 space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  {t.campaignForm.sendConfirmMessage}
-                </p>
-                <p className="text-sm font-medium">
-                  {getRecipientCount(sendingCampaign?.targetGroups)}{" "}
-                  {t.campaignForm.sendConfirmRecipients}
-                </p>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setSendDialogOpen(false)}>
-                  {t.campaignForm.cancel}
-                </Button>
-                <Button
-                  onClick={handleSendCampaign}
-                  className="gradient-terracotta text-white hover:opacity-90"
-                >
-                  <Send className="h-4 w-4 mr-2" />
-                  {t.campaignForm.confirmSend}
-                </Button>
-              </DialogFooter>
-            </>
-          )}
+          <div className="py-4 space-y-3">
+            <p className="text-sm text-muted-foreground">
+              {t.campaignForm.sendConfirmMessage}
+            </p>
+            <p className="text-sm font-medium">
+              {getRecipientCount(sendingCampaign?.targetGroups)}{" "}
+              {t.campaignForm.sendConfirmRecipients}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSendDialogOpen(false)} disabled={isSending}>
+              {t.campaignForm.cancel}
+            </Button>
+            <Button
+              onClick={handleSendCampaign}
+              disabled={isSending}
+              className="gradient-terracotta text-white hover:opacity-90"
+            >
+              {isSending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+              {t.campaignForm.confirmSend}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

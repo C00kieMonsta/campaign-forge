@@ -68,7 +68,7 @@ export const api = {
       return request<{ ok: true }>(`/admin/campaigns/${id}`, { method: "DELETE" });
     },
     send(id: string) {
-      return request<{ ok: true; sentCount: number; message: string }>(`/admin/campaigns/${id}/send`, {
+      return request<{ ok: true; queued: true; recipientCount: number }>(`/admin/campaigns/${id}/send`, {
         method: "POST",
       });
     },

@@ -48,7 +48,7 @@ export default function CampaignEditor() {
       setGroups(groupsData);
       if (campaignData) {
         const { campaign } = campaignData;
-        setIsSent(campaign.status === "sent");
+        setIsSent(campaign.status === "sent" || campaign.status === "sending");
         setFormData({
           name: campaign.name,
           subject: campaign.subject,
