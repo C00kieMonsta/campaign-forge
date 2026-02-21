@@ -178,7 +178,16 @@ jobs:
       - name: Build backend
         run: pnpm --filter @apps/backend build
 
-      - name: Deploy to EC2 via SSH
+      - name: Upload dist to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "apps/backend/dist/,packages/types/dist/"
+          target: "/home/ec2-user/campaign-forge/"
+
+      - name: Restart backend on EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -191,9 +200,7 @@ jobs:
             PREFIX="/campaign-forge/production"
             APP_DIR="/home/ec2-user/campaign-forge"
 
-            echo "🚀 Starting backend deployment..."
-
-            echo "🔑 Re-fetching secrets from SSM..."
+            echo "🔑 Refreshing secrets from SSM..."
             ssm_get() {
               aws ssm get-parameter \
                 --region "$REGION" \
@@ -221,20 +228,11 @@ jobs:
             ENVEOF
             chmod 600 "${APP_DIR}/apps/backend/.env"
 
-            cd "$APP_DIR"
-
-            echo "📥 Pulling latest code..."
-            git pull origin main
-
-            echo "📦 Installing production dependencies only..."
-            pnpm install --frozen-lockfile --prod
-
             echo "♻️ Restarting backend with PM2..."
-            pm2 restart campaign-forge-api || pm2 start apps/backend/dist/main.js \
+            pm2 restart campaign-forge-api || pm2 start ${APP_DIR}/apps/backend/dist/main.js \
               --name campaign-forge-api \
               --cwd "${APP_DIR}/apps/backend" \
               --env production
-
             pm2 save
 
             echo "🏥 Health check..."
