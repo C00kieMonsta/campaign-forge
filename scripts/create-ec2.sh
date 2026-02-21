@@ -3,7 +3,7 @@
 #   - IAM role + instance profile (SSM read access)
 #   - Security group (SSH + HTTP + HTTPS)
 #   - Key pair (saved to ~/.ssh/)
-#   - EC2 t2.micro instance
+#   - EC2 t3.micro instance (free tier)
 #   - Elastic IP (stays yours, survives instance recreation)
 #
 # To DESTROY and recreate the instance only (keeps the Elastic IP):
@@ -15,7 +15,7 @@ REGION="${AWS_REGION:-eu-north-1}"
 INSTANCE_NAME="campaign-forge-backend"
 KEY_NAME="campaign-forge-key"
 KEY_FILE="${HOME}/.ssh/${KEY_NAME}.pem"
-INSTANCE_TYPE="t3.micro"  # free tier eligible in eu-north-1
+INSTANCE_TYPE="t3.micro"  # Free tier eligible in eu-north-1 (~$0.01/hour)
 SSM_PREFIX="/campaign-forge/production"
 
 RECREATE=false

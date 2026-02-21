@@ -226,12 +226,8 @@ jobs:
             echo "📥 Pulling latest code..."
             git pull origin main
 
-            echo "📦 Installing dependencies..."
-            pnpm install --frozen-lockfile
-
-            echo "🔨 Building packages and backend..."
-            pnpm build:packages
-            pnpm build:backend
+            echo "📦 Installing production dependencies only..."
+            pnpm install --frozen-lockfile --prod
 
             echo "♻️ Restarting backend with PM2..."
             pm2 restart campaign-forge-api || pm2 start apps/backend/dist/main.js \
