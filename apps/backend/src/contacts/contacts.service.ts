@@ -68,6 +68,15 @@ export class ContactsService {
     return this.ddb.scan(this.table, { limit: opts.limit, cursor: opts.cursor });
   }
 
+  async stats(): Promise<{ total: number; subscribed: number; unsubscribed: number }> {
+    const [total, subscribed, unsubscribed] = await Promise.all([
+      this.ddb.scanCount(this.table),
+      this.ddb.queryCount(this.table, "byStatus", "gsi1pk = :s", { ":s": "subscribed" }),
+      this.ddb.queryCount(this.table, "byStatus", "gsi1pk = :s", { ":s": "unsubscribed" }),
+    ]);
+    return { total, subscribed, unsubscribed };
+  }
+
   async queryAllSubscribed(): Promise<Contact[]> {
     const items = await this.ddb.queryAll(this.table, "byStatus", "gsi1pk = :s", { ":s": "subscribed" });
     return items as unknown as Contact[];

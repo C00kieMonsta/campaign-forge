@@ -22,6 +22,11 @@ export class ContactsController {
     return this.contacts.list(parsed.data);
   }
 
+  @Get("stats")
+  async stats() {
+    return this.contacts.stats();
+  }
+
   @Get("export")
   async exportCsv(@Res() res: Response) {
     const all = await this.contacts.scanAll();

@@ -66,6 +66,34 @@ export class DdbService {
     return { items: result.Items || [], cursor: encodeCursor(result.LastEvaluatedKey) };
   }
 
+  async queryCount(table: string, indexName: string, keyExpr: string, values: Record<string, unknown>): Promise<number> {
+    let count = 0;
+    let cursor: Record<string, unknown> | undefined;
+    do {
+      const result = await this.client.send(new QueryCommand({
+        TableName: table, IndexName: indexName,
+        KeyConditionExpression: keyExpr,
+        ExpressionAttributeValues: values,
+        Select: "COUNT",
+        ExclusiveStartKey: cursor,
+      }));
+      count += result.Count || 0;
+      cursor = result.LastEvaluatedKey;
+    } while (cursor);
+    return count;
+  }
+
+  async scanCount(table: string): Promise<number> {
+    let count = 0;
+    let cursor: Record<string, unknown> | undefined;
+    do {
+      const result = await this.client.send(new ScanCommand({ TableName: table, Select: "COUNT", ExclusiveStartKey: cursor }));
+      count += result.Count || 0;
+      cursor = result.LastEvaluatedKey;
+    } while (cursor);
+    return count;
+  }
+
   async queryAll(table: string, indexName: string, keyExpr: string, values: Record<string, unknown>) {
     const items: Record<string, unknown>[] = [];
     let cursor: Record<string, unknown> | undefined;

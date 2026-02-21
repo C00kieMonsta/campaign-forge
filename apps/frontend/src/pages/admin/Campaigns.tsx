@@ -56,14 +56,21 @@ export default function Campaigns() {
   const loadCampaigns = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [{ items }, groupsData, contactsRes] = await Promise.all([
+      const [{ items }, groupsData] = await Promise.all([
         api.campaigns.list(),
         api.groups.list(),
-        api.contacts.list({ limit: 200 }),
       ]);
       setCampaigns(items);
       setGroups(groupsData);
-      setContacts(contactsRes.items);
+
+      const allContacts: Contact[] = [];
+      let cursor: string | undefined;
+      do {
+        const res = await api.contacts.list({ limit: 1000, cursor });
+        allContacts.push(...(res.items as Contact[]));
+        cursor = res.cursor ?? undefined;
+      } while (cursor);
+      setContacts(allContacts);
     } catch (err) {
       console.log(
         JSON.stringify({ event: "loadCampaigns:error", error: String(err) })

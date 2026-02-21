@@ -86,6 +86,9 @@ export const api = {
     },
   },
   contacts: {
+    stats() {
+      return request<{ total: number; subscribed: number; unsubscribed: number }>("/admin/contacts/stats");
+    },
     list(params?: { status?: string; q?: string; limit?: number; cursor?: string }) {
       const qs = new URLSearchParams();
       if (params?.status) qs.set("status", params.status);
