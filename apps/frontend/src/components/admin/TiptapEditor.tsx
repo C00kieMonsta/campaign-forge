@@ -46,12 +46,25 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
   }));
 
   const insertImage = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const src = e.target?.result as string;
+    const img = new window.Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      const MAX_WIDTH = 800;
+      const scale = Math.min(1, MAX_WIDTH / img.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      const src = canvas.toDataURL("image/jpeg", 0.7);
       editor?.chain().focus().setImage({ src }).run();
+      URL.revokeObjectURL(url);
     };
-    reader.readAsDataURL(file);
+
+    img.src = url;
   };
 
   const setLink = () => {

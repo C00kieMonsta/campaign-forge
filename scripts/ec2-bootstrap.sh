@@ -109,6 +109,19 @@ server {
     listen 80;
     server_name NGINX_DOMAIN_PLACEHOLDER;
 
+    # Campaign send can take several minutes for large contact lists
+    location ~ ^/api/admin/campaigns/[^/]+/send$ {
+        proxy_pass             http://localhost:3001;
+        proxy_http_version     1.1;
+        proxy_set_header       Host $host;
+        proxy_set_header       X-Real-IP $remote_addr;
+        proxy_set_header       X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header       X-Forwarded-Proto $scheme;
+        proxy_read_timeout     600s;
+        proxy_send_timeout     600s;
+        client_max_body_size   1m;
+    }
+
     location / {
         proxy_pass         http://localhost:3001;
         proxy_http_version 1.1;

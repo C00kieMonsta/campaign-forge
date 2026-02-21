@@ -10,6 +10,20 @@ import {
 import { stringify as csvStringify } from "csv-stringify/sync";
 import { ContactsService } from "./contacts.service";
 
+// Extracts a plain email from optional "Display Name <email@example.com>" format
+// and rejects addresses with non-ASCII characters or missing @ that SES cannot send to.
+function normalizeEmail(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const angleMatch = raw.match(/<([^>]+)>/);
+  const address = (angleMatch ? angleMatch[1] : raw).trim();
+  const atIdx = address.indexOf("@");
+  if (atIdx < 1) return null;
+  const local = address.slice(0, atIdx);
+  const domain = address.slice(atIdx + 1);
+  if (!domain || !/^[\x20-\x7E]+$/.test(local)) return null;
+  return address;
+}
+
 @UseGuards(AdminGuard)
 @Controller("admin/contacts")
 export class ContactsController {
@@ -87,15 +101,16 @@ export class ContactsController {
     const errors: { row: number; email: string; reason: string }[] = [];
 
     for (let i = 0; i < contacts.length; i++) {
-      const { email, ...rest } = contacts[i];
-      if (!email || !email.includes("@")) {
-        errors.push({ row: i + 1, email: email || "", reason: "Invalid email" });
+      const { email: rawEmail, ...rest } = contacts[i];
+      const email = normalizeEmail(rawEmail);
+      if (!email) {
+        errors.push({ row: i + 1, email: rawEmail || "", reason: "Invalid email" });
         continue;
       }
       toImport.push({
         ...rest,
-        emailLower: email.toLowerCase().trim(),
-        email: email.trim(),
+        emailLower: email.toLowerCase(),
+        email,
         status: "subscribed",
         source: "import",
         createdAt: now,
