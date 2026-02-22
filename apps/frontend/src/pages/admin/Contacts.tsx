@@ -24,6 +24,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Download,
   MessageSquare,
   Pencil,
@@ -484,6 +485,37 @@ export default function Contacts() {
       firstName: contact.firstName ?? "",
       lastName: contact.lastName ?? "",
       email: contact.email,
+      displayName: contact.displayName ?? "",
+      email2: contact.email2 ?? "",
+      homePhone: contact.homePhone ?? "",
+      businessPhone: contact.businessPhone ?? "",
+      mobilePhone: contact.mobilePhone ?? "",
+      homeStreet: contact.homeStreet ?? "",
+      homeAddress2: contact.homeAddress2 ?? "",
+      homeCity: contact.homeCity ?? "",
+      homePostalCode: contact.homePostalCode ?? "",
+      homeCountry: contact.homeCountry ?? "",
+      businessAddress: contact.businessAddress ?? "",
+      businessAddress2: contact.businessAddress2 ?? "",
+      businessCity: contact.businessCity ?? "",
+      businessState: contact.businessState ?? "",
+      businessPostalCode: contact.businessPostalCode ?? "",
+      businessCountry: contact.businessCountry ?? "",
+      organization: contact.organization ?? "",
+      notes: contact.notes ?? "",
+      birthday: contact.birthday ?? "",
+      groups: contact.groups ?? []
+    });
+    setOpenSections({ basic: true });
+    setIsDialogOpen(true);
+  };
+
+  const openDuplicate = (contact: Contact) => {
+    setEditingContact(null);
+    setFormData({
+      firstName: contact.firstName ?? "",
+      lastName: contact.lastName ?? "",
+      email: "",
       displayName: contact.displayName ?? "",
       email2: contact.email2 ?? "",
       homePhone: contact.homePhone ?? "",
@@ -1051,6 +1083,7 @@ export default function Contacts() {
                           size="icon"
                           className="h-8 w-8"
                           onClick={() => openEdit(contact)}
+                          title="Edit"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
@@ -1058,7 +1091,17 @@ export default function Contacts() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
+                          onClick={() => openDuplicate(contact)}
+                          title="Duplicate"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
                           onClick={() => handleDelete(contact)}
+                          title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
@@ -1212,6 +1255,8 @@ export default function Contacts() {
                     value={formData.email}
                     onChange={(e) => updateField("email", e.target.value)}
                     required
+                    readOnly={!!editingContact}
+                    className={editingContact ? "bg-muted text-muted-foreground cursor-not-allowed" : ""}
                   />
                 </div>
                 <div className="space-y-1">
