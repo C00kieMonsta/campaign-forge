@@ -221,6 +221,7 @@ jobs:
             CONTACTS_TABLE=$(ssm_get CONTACTS_TABLE)
             CAMPAIGNS_TABLE=$(ssm_get CAMPAIGNS_TABLE)
             GROUPS_TABLE=$(ssm_get GROUPS_TABLE)
+            S3_BUCKET=$(ssm_get S3_BUCKET)
             SES_FROM_EMAIL=$(ssm_get SES_FROM_EMAIL)
             SES_REGION=${REGION}
             UNSUBSCRIBE_SECRET=$(ssm_get UNSUBSCRIBE_SECRET)
