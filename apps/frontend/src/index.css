@@ -77,6 +77,17 @@
 .tiptap-editor .ProseMirror ol { list-style-type: decimal; }
 .tiptap-editor .ProseMirror a { color: hsl(var(--primary)); text-decoration: underline; }
 .tiptap-editor .ProseMirror hr { border: none; border-top: 1px solid hsl(var(--border)); margin: 1em 0; }
+.tiptap-editor .ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: outline 0.15s;
+}
+.tiptap-editor .ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+}
 .tiptap-editor .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: hsl(var(--muted-foreground));

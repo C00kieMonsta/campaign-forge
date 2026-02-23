@@ -149,6 +149,10 @@ export const translations = {
       templateThermomixChristmasDesc: "Email festif de Noël",
       templateThermomixEaster: "Pâques Thermomix®",
       templateThermomixEasterDesc: "Email festif de Pâques",
+      attachments: "Pièces jointes",
+      addAttachment: "Ajouter un fichier",
+      noAttachments: "Aucune pièce jointe",
+      uploading: "Téléchargement…",
     },
     variables: {
       firstName: "Prénom",
@@ -307,6 +311,10 @@ export const translations = {
       templateThermomixChristmasDesc: "Feestelijke Kerst e-mail",
       templateThermomixEaster: "Pasen Thermomix®",
       templateThermomixEasterDesc: "Feestelijke Pasen e-mail",
+      attachments: "Bijlagen",
+      addAttachment: "Bestand toevoegen",
+      noAttachments: "Geen bijlagen",
+      uploading: "Uploaden…",
     },
     variables: {
       firstName: "Voornaam",

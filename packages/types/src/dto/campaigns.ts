@@ -7,6 +7,13 @@ import type { Campaign, CampaignStatus } from "../entities/campaign";
 
 export const campaignStatusSchema = z.enum(["draft", "sent"]);
 
+export const campaignAttachmentSchema = z.object({
+  key: z.string().min(1),
+  filename: z.string().min(1),
+  contentType: z.string().min(1),
+  size: z.number().int().positive(),
+});
+
 // ============================================================================
 // Admin API - Create Campaign
 // ============================================================================
@@ -16,6 +23,7 @@ export const createCampaignRequestSchema = z.object({
   subject: z.string().min(1, "Subject required").max(200, "Subject too long"),
   html: z.string().min(1, "HTML content required").max(500000, "HTML too large"),
   targetGroups: z.array(z.string()).optional(),
+  attachments: z.array(campaignAttachmentSchema).optional(),
 });
 
 export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>;
@@ -82,6 +90,7 @@ export const updateCampaignRequestSchema = z.object({
   subject: z.string().min(1).max(200).optional(),
   html: z.string().min(1).max(500000).optional(),
   targetGroups: z.array(z.string()).optional(),
+  attachments: z.array(campaignAttachmentSchema).optional(),
 });
 
 export type UpdateCampaignRequest = z.infer<typeof updateCampaignRequestSchema>;

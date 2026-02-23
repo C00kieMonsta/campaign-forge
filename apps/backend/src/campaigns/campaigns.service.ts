@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from "@nestjs/common";
-import type { Campaign } from "@packages/types";
+import type { Campaign, CampaignAttachment } from "@packages/types";
 import { DdbService } from "../shared/ddb.service";
 
 @Injectable()
@@ -18,7 +18,7 @@ export class CampaignsService {
     return c;
   }
 
-  async create(data: { name: string; subject: string; html: string; targetGroups?: string[] }): Promise<Campaign> {
+  async create(data: { name: string; subject: string; html: string; targetGroups?: string[]; attachments?: CampaignAttachment[] }): Promise<Campaign> {
     const now = new Date().toISOString();
     const campaign: Campaign = {
       campaignId: crypto.randomUUID(),
@@ -27,6 +27,7 @@ export class CampaignsService {
       html: data.html,
       status: "draft",
       targetGroups: data.targetGroups,
+      attachments: data.attachments,
       createdAt: now,
       updatedAt: now,
     };

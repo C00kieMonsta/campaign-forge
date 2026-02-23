@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button, Input, Label } from "@packages/ui";
-import { ArrowLeft, Eye, LayoutTemplate, Loader2, Save, Variable } from "lucide-react";
+import { ArrowLeft, Eye, FileUp, LayoutTemplate, Loader2, Paperclip, Save, Variable, X } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
-import type { ContactGroup } from "@packages/types";
+import type { CampaignAttachment, ContactGroup } from "@packages/types";
 import {
   EMAIL_TEMPLATES,
   SAMPLE_DATA,
@@ -14,11 +14,18 @@ import {
 } from "@/lib/campaign-constants";
 import TiptapEditor, { type TiptapEditorHandle } from "@/components/admin/TiptapEditor";
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 const emptyForm = {
   name: "",
   subject: "",
   html: "",
   targetGroups: [] as string[],
+  attachments: [] as CampaignAttachment[],
 };
 
 export default function CampaignEditor() {
@@ -27,6 +34,7 @@ export default function CampaignEditor() {
   const { t } = useLanguage();
   const { toast } = useToast();
   const editorRef = useRef<TiptapEditorHandle>(null);
+  const attachInputRef = useRef<HTMLInputElement>(null);
 
   const isEditing = Boolean(id);
 
@@ -37,6 +45,7 @@ export default function CampaignEditor() {
   const [viewMode, setViewMode] = useState<"editor" | "preview">("editor");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -54,6 +63,7 @@ export default function CampaignEditor() {
           subject: campaign.subject,
           html: campaign.html ?? "",
           targetGroups: campaign.targetGroups ?? [],
+          attachments: campaign.attachments ?? [],
         });
       }
     } catch (err) {
@@ -90,25 +100,46 @@ export default function CampaignEditor() {
     }));
   };
 
+  const handleAttachmentUpload = async (file: File) => {
+    setIsUploading(true);
+    try {
+      const { key, filename, contentType, size } = await api.campaigns.upload(file);
+      setFormData((prev) => ({
+        ...prev,
+        attachments: [...prev.attachments, { key, filename, contentType, size }],
+      }));
+    } catch (err) {
+      console.log(JSON.stringify({ event: "CampaignEditor:attachmentUploadError", error: String(err) }));
+      toast({ title: String(err), variant: "destructive" });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const removeAttachment = (key: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      attachments: prev.attachments.filter((a) => a.key !== key),
+    }));
+  };
+
   const handleSave = async () => {
     if (!formData.name.trim() || !formData.subject.trim()) return;
     setIsSaving(true);
     try {
+      const payload = {
+        name: formData.name.trim(),
+        subject: formData.subject.trim(),
+        html: formData.html,
+        targetGroups: formData.targetGroups,
+        attachments: formData.attachments,
+      };
+
       if (isEditing && id) {
-        await api.campaigns.update(id, {
-          name: formData.name.trim(),
-          subject: formData.subject.trim(),
-          html: formData.html,
-          targetGroups: formData.targetGroups,
-        });
+        await api.campaigns.update(id, payload);
         toast({ title: "Campaign updated" });
       } else {
-        await api.campaigns.create({
-          name: formData.name.trim(),
-          subject: formData.subject.trim(),
-          html: formData.html,
-          targetGroups: formData.targetGroups,
-        });
+        await api.campaigns.create(payload);
         toast({ title: "Campaign created" });
       }
       navigate("/campaigns");
@@ -215,6 +246,59 @@ export default function CampaignEditor() {
           )}
         </div>
 
+        {/* Attachments */}
+        <div className="space-y-2">
+          <Label className="flex items-center gap-1">
+            <Paperclip className="h-4 w-4" />
+            {t.campaignForm.attachments}
+          </Label>
+          <div className="flex flex-wrap gap-2 items-center">
+            {formData.attachments.map((att) => (
+              <span
+                key={att.key}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-muted/40 text-xs font-medium"
+              >
+                <Paperclip className="h-3 w-3 text-muted-foreground" />
+                {att.filename}
+                <span className="text-muted-foreground">({formatFileSize(att.size)})</span>
+                {!isSent && (
+                  <button type="button" onClick={() => removeAttachment(att.key)} className="ml-0.5 text-muted-foreground hover:text-destructive transition-colors">
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+            {!isSent && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => attachInputRef.current?.click()}
+                  disabled={isUploading}
+                >
+                  {isUploading
+                    ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />{t.campaignForm.uploading}</>
+                    : <><FileUp className="h-3.5 w-3.5 mr-1.5" />{t.campaignForm.addAttachment}</>}
+                </Button>
+                <input
+                  ref={attachInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleAttachmentUpload(file);
+                    e.target.value = "";
+                  }}
+                />
+              </>
+            )}
+            {formData.attachments.length === 0 && isSent && (
+              <span className="text-sm text-muted-foreground italic">{t.campaignForm.noAttachments}</span>
+            )}
+          </div>
+        </div>
+
         {/* Editor / Preview — fills remaining space */}
         <div className="flex-1 flex flex-col min-h-0 card-elevated p-4">
           <div className="flex gap-1 border-b border-border mb-4">
@@ -299,6 +383,7 @@ export default function CampaignEditor() {
                 content={formData.html}
                 onChange={(html) => setFormData((prev) => ({ ...prev, html }))}
                 readonly={isSent}
+                onAttachment={isSent ? undefined : handleAttachmentUpload}
               />
             </div>
           ) : (

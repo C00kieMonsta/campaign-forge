@@ -10,6 +10,7 @@ const schema = z.object({
   DDB_ENDPOINT: z.string().url().optional(),
   SES_FROM_EMAIL: z.string().email(),
   SES_REGION: z.string().default("eu-west-1"),
+  S3_BUCKET: z.string().min(1),
   UNSUBSCRIBE_SECRET: z.string().min(32),
   PUBLIC_BASE_URL: z.string().url(),
   ADMIN_CREDENTIALS: z.string().min(1),

@@ -1,4 +1,4 @@
-import type { Campaign, Contact, ContactGroup } from "@packages/types";
+import type { Campaign, CampaignAttachment, Contact, ContactGroup } from "@packages/types";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
 const TOKEN_KEY = "admin_token";
@@ -36,6 +36,24 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   return parseResponse<T>(res);
 }
 
+async function uploadRequest<T>(path: string, file: File): Promise<T> {
+  const token = getToken();
+  const form = new FormData();
+  form.append("file", file);
+
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}${path}`, { method: "POST", headers, body: form });
+
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error("Unauthorized");
+  }
+
+  return parseResponse<T>(res);
+}
+
 async function publicRequest<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -52,17 +70,23 @@ export const api = {
     get(id: string) {
       return request<{ ok: true; campaign: Campaign }>(`/admin/campaigns/${id}`);
     },
-    create(data: { name: string; subject: string; html: string; targetGroups?: string[] }) {
+    create(data: { name: string; subject: string; html: string; targetGroups?: string[]; attachments?: CampaignAttachment[] }) {
       return request<{ ok: true; campaign: Campaign }>("/admin/campaigns", {
         method: "POST",
         body: JSON.stringify(data),
       });
     },
-    update(id: string, data: Partial<{ name: string; subject: string; html: string; targetGroups: string[] }>) {
+    update(id: string, data: Partial<{ name: string; subject: string; html: string; targetGroups: string[]; attachments: CampaignAttachment[] }>) {
       return request<{ ok: true; campaign: Campaign }>(`/admin/campaigns/${id}`, {
         method: "PATCH",
         body: JSON.stringify(data),
       });
+    },
+    upload(file: File) {
+      return uploadRequest<{ ok: true; key: string; url: string; filename: string; contentType: string; size: number }>(
+        "/admin/campaigns/upload",
+        file,
+      );
     },
     delete(id: string) {
       return request<{ ok: true }>(`/admin/campaigns/${id}`, { method: "DELETE" });

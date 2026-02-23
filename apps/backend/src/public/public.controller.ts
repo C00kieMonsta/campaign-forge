@@ -1,15 +1,29 @@
-import { Controller, Get, Post, Query, Body, BadRequestException, Res } from "@nestjs/common";
+import { Controller, Get, Post, Param, Query, Body, BadRequestException, Res, NotFoundException } from "@nestjs/common";
 import { Response } from "express";
 import { subscribeRequestSchema, unsubscribeQuerySchema, type Contact } from "@packages/types";
 import { ContactsService } from "../contacts/contacts.service";
+import { S3Service } from "../shared/s3.service";
 import { TokenService } from "../shared/token.service";
 
 @Controller("public")
 export class PublicController {
   constructor(
     private contacts: ContactsService,
+    private s3: S3Service,
     private token: TokenService,
   ) {}
+
+  @Get("uploads/:key")
+  async getUpload(@Param("key") key: string, @Res() res: Response) {
+    try {
+      const { body, contentType } = await this.s3.get(key);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      return res.send(body);
+    } catch {
+      throw new NotFoundException("File not found");
+    }
+  }
 
   @Post("subscribe")
   async subscribe(@Body() body: unknown) {

@@ -1,11 +1,35 @@
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import TextAlign from "@tiptap/extension-text-align";
 import Color from "@tiptap/extension-color";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Image from "@tiptap/extension-image";
-import { AlignCenter, AlignLeft, AlignRight, Bold, Image as ImageIcon, Italic, Link2, List, ListOrdered } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Bold, Image as ImageIcon, Italic, Link2, List, ListOrdered, Paperclip } from "lucide-react";
+import { api } from "@/lib/api";
+
+const ResizableImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: {
+        default: null,
+        parseHTML: (el) => el.getAttribute("width") || el.style.width || null,
+        renderHTML: (attrs) => {
+          if (!attrs.width) return {};
+          return { width: attrs.width, style: `width: ${attrs.width}` };
+        },
+      },
+    };
+  },
+});
+
+const IMAGE_WIDTHS = [
+  { label: "25%", value: "25%" },
+  { label: "50%", value: "50%" },
+  { label: "75%", value: "75%" },
+  { label: "100%", value: "100%" },
+] as const;
 
 export interface TiptapEditorHandle {
   insertContent: (text: string) => void;
@@ -16,10 +40,13 @@ interface Props {
   content: string;
   onChange: (html: string) => void;
   readonly?: boolean;
+  onAttachment?: (file: File) => void;
 }
 
-const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange, readonly = false }, ref) => {
+const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange, readonly = false, onAttachment }, ref) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachInputRef = useRef<HTMLInputElement>(null);
+  const uploadingRef = useRef(false);
 
   const editor = useEditor({
     extensions: [
@@ -27,7 +54,7 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       TextStyle,
       Color,
-      Image.configure({ inline: false, allowBase64: true }),
+      ResizableImage.configure({ inline: false }),
     ],
     content,
     editable: !readonly,
@@ -45,27 +72,24 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
     },
   }));
 
-  const insertImage = (file: File) => {
-    const img = new window.Image();
-    const url = URL.createObjectURL(file);
-
-    img.onload = () => {
-      const MAX_WIDTH = 800;
-      const scale = Math.min(1, MAX_WIDTH / img.width);
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
-
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-      const src = canvas.toDataURL("image/jpeg", 0.7);
-      editor?.chain().focus().setImage({ src }).run();
-      URL.revokeObjectURL(url);
-    };
-
-    img.src = url;
+  const insertImage = async (file: File) => {
+    if (uploadingRef.current) return;
+    uploadingRef.current = true;
+    try {
+      const { url } = await api.campaigns.upload(file);
+      editor?.chain().focus().setImage({ src: url }).run();
+    } catch (err) {
+      console.log(JSON.stringify({ event: "TiptapEditor:uploadError", error: String(err) }));
+    } finally {
+      uploadingRef.current = false;
+    }
   };
+
+  const setImageWidth = useCallback((width: string) => {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    editor.chain().focus().updateAttributes("image", { width }).setNodeSelection(from === to ? from : from).run();
+  }, [editor]);
 
   const setLink = () => {
     const previous = editor?.getAttributes("link").href as string | undefined;
@@ -81,6 +105,9 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
   if (!editor) {
     return <div className="flex-1 border border-border rounded-lg bg-muted/20 animate-pulse" />;
   }
+
+  const isImageSelected = editor.isActive("image");
+  const currentWidth = isImageSelected ? (editor.getAttributes("image").width as string | null) : null;
 
   return (
     <div className="border border-border rounded-lg overflow-hidden flex flex-col flex-1 min-h-0">
@@ -177,6 +204,23 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
             e.target.value = "";
           }}
         />
+        {onAttachment && (
+          <>
+            <ToolbarBtn onClick={() => attachInputRef.current?.click()} title="Joindre un fichier">
+              <Paperclip className="h-3.5 w-3.5" />
+            </ToolbarBtn>
+            <input
+              ref={attachInputRef}
+              type="file"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onAttachment(file);
+                e.target.value = "";
+              }}
+            />
+          </>
+        )}
 
         <Separator />
 
@@ -197,6 +241,22 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
             onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
           />
         </label>
+
+        {isImageSelected && (
+          <>
+            <Separator />
+            {IMAGE_WIDTHS.map((w) => (
+              <ToolbarBtn
+                key={w.value}
+                onClick={() => setImageWidth(w.value)}
+                active={currentWidth === w.value}
+                title={`Largeur ${w.label}`}
+              >
+                <span className="text-[10px] font-semibold">{w.label}</span>
+              </ToolbarBtn>
+            ))}
+          </>
+        )}
       </div>}
 
       <div className={`flex-1 overflow-auto p-4 min-h-0 ${readonly ? "bg-muted/20" : ""}`}>

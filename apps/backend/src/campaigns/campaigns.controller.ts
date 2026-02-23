@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Patch, Delete, Query, Param, Body, BadRequestException, UseGuards } from "@nestjs/common";
+import { Controller, Get, Post, Patch, Delete, Query, Param, Body, BadRequestException, UseGuards, UseInterceptors, UploadedFile } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { AdminGuard } from "../auth/admin.guard";
 import { z } from "zod";
 import {
@@ -15,9 +16,11 @@ const directTestSendSchema = z.object({
   html: z.string().min(1),
 });
 import type { Contact } from "@packages/types";
+import type { CampaignAttachment } from "@packages/types";
 import { CampaignsService } from "./campaigns.service";
 import { ContactsService } from "../contacts/contacts.service";
-import { SesService } from "../shared/ses.service";
+import { S3Service } from "../shared/s3.service";
+import { SesService, type EmailAttachment } from "../shared/ses.service";
 import { TokenService } from "../shared/token.service";
 
 function replaceTemplateVars(html: string, contact: Pick<Contact, "firstName" | "lastName" | "email" | "displayName" | "organization">): string {
@@ -43,9 +46,40 @@ export class CampaignsController {
   constructor(
     private campaigns: CampaignsService,
     private contacts: ContactsService,
+    private s3: S3Service,
     private ses: SesService,
     private token: TokenService,
   ) {}
+
+  private async fetchAttachments(meta: CampaignAttachment[]): Promise<EmailAttachment[]> {
+    if (meta.length === 0) return [];
+    return Promise.all(
+      meta.map(async (a) => {
+        const { body } = await this.s3.get(a.key);
+        return { filename: a.filename, content: body, contentType: a.contentType };
+      }),
+    );
+  }
+
+  @Post("upload")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024 } }))
+  async upload(@UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException("No file provided");
+
+    const ext = file.originalname.split(".").pop()?.toLowerCase() ?? "bin";
+    const key = `${crypto.randomUUID()}.${ext}`;
+
+    await this.s3.upload(key, file.buffer, file.mimetype);
+
+    return {
+      ok: true,
+      key,
+      url: this.s3.publicUrl(key),
+      filename: file.originalname,
+      contentType: file.mimetype,
+      size: file.size,
+    };
+  }
 
   @Get()
   async list(@Query() query: Record<string, string>) {
@@ -83,6 +117,7 @@ export class CampaignsController {
     if (parsed.data.subject !== undefined) updates.subject = parsed.data.subject;
     if (parsed.data.html !== undefined) updates.html = parsed.data.html;
     if (parsed.data.targetGroups !== undefined) updates.targetGroups = parsed.data.targetGroups;
+    if (parsed.data.attachments !== undefined) updates.attachments = parsed.data.attachments;
 
     if (Object.keys(updates).length === 0) return { ok: true, campaign: existing };
     await this.campaigns.update(id, updates);
@@ -114,7 +149,8 @@ export class CampaignsController {
     const campaign = await this.campaigns.getOrFail(id);
     const html = this.token.appendFooter(replaceTemplateVars(campaign.html, SAMPLE_CONTACT), parsed.data.email.toLowerCase());
 
-    await this.ses.send(parsed.data.email, `[TEST] ${campaign.subject}`, html);
+    const attachmentBuffers = await this.fetchAttachments(campaign.attachments ?? []);
+    await this.ses.sendWithAttachments(parsed.data.email, `[TEST] ${campaign.subject}`, html, attachmentBuffers);
     return { ok: true, message: `Test sent to ${parsed.data.email}` };
   }
 
@@ -142,10 +178,14 @@ export class CampaignsController {
       html: this.token.appendFooter(replaceTemplateVars(campaign.html, c), c.emailLower),
     }));
 
-    // Process in the background — caller gets an immediate response
+    const attachmentMeta = campaign.attachments ?? [];
+
     setImmediate(async () => {
       try {
-        const { sent, failed } = await this.ses.sendBatch(emails);
+        const attachmentBuffers = await this.fetchAttachments(attachmentMeta);
+        console.log(JSON.stringify({ level: "info", action: "campaignSendStart", campaignId: id, recipients: emails.length, attachments: attachmentBuffers.length }));
+
+        const { sent, failed } = await this.ses.sendBatch(emails, attachmentBuffers);
         await this.campaigns.markSent(id, sent);
         console.log(JSON.stringify({ level: "info", action: "campaignSent", campaignId: id, sent, failed }));
       } catch (err) {
