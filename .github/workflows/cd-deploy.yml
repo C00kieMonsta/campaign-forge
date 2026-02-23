@@ -184,7 +184,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "apps/backend/dist/,packages/types/dist/"
+          source: "apps/backend/dist/,apps/backend/package.json,packages/types/dist/,packages/types/package.json,package.json,pnpm-lock.yaml,pnpm-workspace.yaml"
           target: "/home/ec2-user/campaign-forge/"
           tar_dereference: true
           overwrite: true
@@ -230,6 +230,16 @@ jobs:
             JWT_SECRET=$(ssm_get JWT_SECRET)
             ENVEOF
             chmod 600 "${APP_DIR}/apps/backend/.env"
+
+            echo "📦 Installing backend runtime dependencies..."
+            if ! command -v pnpm >/dev/null 2>&1; then
+              sudo corepack enable
+              corepack prepare pnpm@10.8.0 --activate
+            fi
+            cd "${APP_DIR}"
+            export HUSKY=0
+            export CI=true
+            pnpm install --prod --frozen-lockfile --ignore-scripts --filter @apps/backend...
 
             echo "♻️ Restarting backend with PM2..."
             pm2 restart campaign-forge-api || pm2 start ${APP_DIR}/apps/backend/dist/main.js \
