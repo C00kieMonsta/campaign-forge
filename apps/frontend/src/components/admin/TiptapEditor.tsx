@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useImperativeHandle, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
+import { Extension } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import TextAlign from "@tiptap/extension-text-align";
 import Color from "@tiptap/extension-color";
@@ -24,11 +25,41 @@ const ResizableImage = Image.extend({
   },
 });
 
+const FontSize = Extension.create({
+  name: "fontSize",
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["textStyle"],
+        attributes: {
+          fontSize: {
+            default: null,
+            parseHTML: (element) => element.style.fontSize || null,
+            renderHTML: (attributes) => {
+              if (!attributes.fontSize) return {};
+              return { style: `font-size: ${attributes.fontSize}` };
+            },
+          },
+        },
+      },
+    ];
+  },
+});
+
 const IMAGE_WIDTHS = [
   { label: "25%", value: "25%" },
   { label: "50%", value: "50%" },
   { label: "75%", value: "75%" },
   { label: "100%", value: "100%" },
+] as const;
+
+const FONT_SIZES = [
+  { label: "12px", value: "12px" },
+  { label: "14px", value: "14px" },
+  { label: "16px", value: "16px" },
+  { label: "18px", value: "18px" },
+  { label: "20px", value: "20px" },
+  { label: "24px", value: "24px" },
 ] as const;
 
 export interface TiptapEditorHandle {
@@ -53,6 +84,7 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
       StarterKit.configure({ link: { openOnClick: false } }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       TextStyle,
+      FontSize,
       Color,
       ResizableImage.configure({ inline: false }),
     ],
@@ -108,10 +140,34 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
 
   const isImageSelected = editor.isActive("image");
   const currentWidth = isImageSelected ? (editor.getAttributes("image").width as string | null) : null;
+  const currentFontSize = (editor.getAttributes("textStyle").fontSize as string | undefined) ?? "";
 
   return (
     <div className="border border-border rounded-lg overflow-hidden flex flex-col flex-1 min-h-0">
       {!readonly && <div className="flex flex-wrap gap-0.5 p-1.5 border-b border-border bg-muted/30 shrink-0">
+        <select
+          title="Taille du texte"
+          value={currentFontSize}
+          onChange={(e) => {
+            const size = e.target.value;
+            if (size) {
+              editor.chain().focus().setMark("textStyle", { fontSize: size }).run();
+              return;
+            }
+            editor.chain().focus().setMark("textStyle", { fontSize: null }).removeEmptyTextStyle().run();
+          }}
+          className="h-7 px-2 rounded border border-border bg-background text-xs text-foreground"
+        >
+          <option value="">Taille</option>
+          {FONT_SIZES.map((size) => (
+            <option key={size.value} value={size.value}>
+              {size.label}
+            </option>
+          ))}
+        </select>
+
+        <Separator />
+
         <ToolbarBtn
           onClick={() => editor.chain().focus().toggleBold().run()}
           active={editor.isActive("bold")}
