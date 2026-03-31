@@ -13,11 +13,15 @@ export class DataStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
 
+    const isProd = props.stage === "prod";
+
     this.contactsTable = new dynamodb.Table(this, "ContactsTable", {
       tableName: `cf-contacts-${props.stage}`,
       partitionKey: { name: "emailLower", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: props.stage === "prod" ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      pointInTimeRecovery: isProd,
+      deletionProtection: isProd,
+      removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     });
 
     this.contactsTable.addGlobalSecondaryIndex({
@@ -30,7 +34,9 @@ export class DataStack extends cdk.Stack {
       tableName: `cf-campaigns-${props.stage}`,
       partitionKey: { name: "campaignId", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: props.stage === "prod" ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      pointInTimeRecovery: isProd,
+      deletionProtection: isProd,
+      removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     });
   }
 }
