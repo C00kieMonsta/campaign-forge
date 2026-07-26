@@ -3,11 +3,17 @@ import { useNavigate } from "react-router-dom";
 import type { Campaign } from "@packages/types";
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Input,
   Label,
   Table,
@@ -17,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@packages/ui";
-import { Loader2, Pencil, Plus, Send, TestTube, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, MoreHorizontal, Plus, Send, TestTube, Trash2 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
@@ -44,6 +50,7 @@ export default function Campaigns() {
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [showSent, setShowSent] = useState(false);
 
   const [testDialogOpen, setTestDialogOpen] = useState(false);
   const [testEmail, setTestEmail] = useState("");
@@ -52,6 +59,10 @@ export default function Campaigns() {
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [sendingCampaign, setSendingCampaign] = useState<Campaign | null>(null);
   const [isSending, setIsSending] = useState(false);
+
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletingCampaign, setDeletingCampaign] = useState<Campaign | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadCampaigns = useCallback(async () => {
@@ -127,14 +138,26 @@ export default function Campaigns() {
     return contacts.filter((c) => c.groups?.some((g) => targetGroups.includes(g))).length;
   };
 
-  const handleDelete = async (campaign: Campaign) => {
+  const openDeleteCampaign = (campaign: Campaign) => {
+    setDeletingCampaign(campaign);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!deletingCampaign) return;
+    setIsDeleting(true);
     try {
-      await api.campaigns.delete(campaign.campaignId);
-      setCampaigns((prev) => prev.filter((c) => c.campaignId !== campaign.campaignId));
-      toast({ title: "Campaign deleted" });
+      await api.campaigns.delete(deletingCampaign.campaignId);
+      setCampaigns((prev) =>
+        prev.filter((c) => c.campaignId !== deletingCampaign.campaignId)
+      );
+      setDeleteDialogOpen(false);
+      toast({ title: t.campaigns.deleted });
     } catch (err) {
       console.log(JSON.stringify({ event: "handleDelete:error", error: String(err) }));
       toast({ title: String(err), variant: "destructive" });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -201,19 +224,37 @@ export default function Campaigns() {
       minute: "2-digit"
     });
 
+  const sentCampaignsCount = campaigns.filter((c) => c.status === "sent").length;
+  const visibleCampaigns = showSent
+    ? campaigns
+    : campaigns.filter((c) => c.status !== "sent");
+  const sendingToAllContacts =
+    !sendingCampaign?.targetGroups || sendingCampaign.targetGroups.length === 0;
+
   return (
     <div className="animate-fade-up">
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-serif font-bold text-foreground">
           {t.campaigns.title}
         </h1>
-        <Button
-          onClick={() => navigate("/campaigns/new")}
-          className="gradient-terracotta text-white hover:opacity-90"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          {t.campaigns.create}
-        </Button>
+        <div className="flex items-center gap-4">
+          {sentCampaignsCount > 0 && (
+            <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+              <Checkbox
+                checked={showSent}
+                onCheckedChange={(checked) => setShowSent(checked === true)}
+              />
+              {t.campaigns.showSent} ({sentCampaignsCount})
+            </label>
+          )}
+          <Button
+            onClick={() => navigate("/campaigns/new")}
+            className="gradient-terracotta text-white hover:opacity-90"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            {t.campaigns.create}
+          </Button>
+        </div>
       </div>
 
       <div className="card-elevated">
@@ -224,6 +265,10 @@ export default function Campaigns() {
         ) : campaigns.length === 0 ? (
           <div className="p-12 text-center text-muted-foreground">
             {t.campaigns.noCampaigns}
+          </div>
+        ) : visibleCampaigns.length === 0 ? (
+          <div className="p-12 text-center text-muted-foreground">
+            {t.campaigns.noVisibleCampaigns}
           </div>
         ) : (
           <Table>
@@ -239,21 +284,38 @@ export default function Campaigns() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {campaigns.map((campaign) => (
-                <TableRow key={campaign.campaignId}>
-                  <TableCell className="font-medium">{campaign.name}</TableCell>
-                  <TableCell>{campaign.subject}</TableCell>
+              {visibleCampaigns.map((campaign) => (
+                <TableRow
+                  key={campaign.campaignId}
+                  onClick={() =>
+                    navigate(`/campaigns/${campaign.campaignId}/edit`)
+                  }
+                  className="cursor-pointer"
+                >
+                  <TableCell className="font-medium">
+                    <div className="max-w-[200px] truncate" title={campaign.name}>
+                      {campaign.name}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div
+                      className="max-w-[280px] truncate"
+                      title={campaign.subject}
+                    >
+                      {campaign.subject}
+                    </div>
+                  </TableCell>
                   <TableCell>
                     {(() => {
                       const tg = campaign.targetGroups ?? [];
                       if (tg.length === 0)
                         return (
-                          <span className="text-xs text-muted-foreground italic">
+                          <span className="block max-w-[220px] truncate text-xs text-muted-foreground italic">
                             {t.campaignForm.allContacts}
                           </span>
                         );
                       return (
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-1 max-w-[220px]">
                           {tg.map((gId) => {
                             const group = groups.find((g) => g.id === gId);
                             if (!group) return null;
@@ -298,45 +360,48 @@ export default function Campaigns() {
                       </span>
                     )}
                   </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1.5">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => navigate(`/campaigns/${campaign.campaignId}/edit`)}
-                        title={t.campaignForm.editTitle}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(campaign)}
-                        title="Delete"
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
-                      {campaign.status === "draft" && (
-                        <>
+                  <TableCell className="text-right w-px whitespace-nowrap">
+                    <div
+                      className="flex justify-end"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
                           <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openTestSend(campaign)}
-                            className="text-xs"
+                            variant="ghost"
+                            size="icon"
+                            title={t.campaigns.actions}
                           >
-                            <TestTube className="h-3.5 w-3.5 mr-1" />
-                            {t.campaignForm.testSend}
+                            <MoreHorizontal className="h-4 w-4" />
                           </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => openSendCampaign(campaign)}
-                            className="gradient-terracotta text-white hover:opacity-90 text-xs"
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {campaign.status === "draft" && (
+                            <>
+                              <DropdownMenuItem
+                                onClick={() => openTestSend(campaign)}
+                              >
+                                <TestTube className="h-4 w-4" />
+                                {t.campaignForm.testSend}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => openSendCampaign(campaign)}
+                              >
+                                <Send className="h-4 w-4" />
+                                {t.campaignForm.confirmSend}
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                            </>
+                          )}
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onClick={() => openDeleteCampaign(campaign)}
                           >
-                            <Send className="h-3.5 w-3.5 mr-1" />
-                            {t.campaignForm.confirmSend}
-                          </Button>
-                        </>
-                      )}
+                            <Trash2 className="h-4 w-4" />
+                            {t.campaigns.delete}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -395,6 +460,12 @@ export default function Campaigns() {
               {getRecipientCount(sendingCampaign?.targetGroups)}{" "}
               {t.campaignForm.sendConfirmRecipients}
             </p>
+            {sendingToAllContacts && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>{t.campaignForm.sendConfirmAllWarning}</span>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendDialogOpen(false)} disabled={isSending}>
@@ -407,6 +478,49 @@ export default function Campaigns() {
             >
               {isSending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
               {t.campaignForm.confirmSend}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Campaign Confirmation Dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          if (!isDeleting) setDeleteDialogOpen(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t.campaigns.deleteConfirmTitle}</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 space-y-2">
+            <p className="text-sm text-muted-foreground">
+              {t.campaigns.deleteConfirmMessage}
+            </p>
+            {deletingCampaign && (
+              <p className="text-sm font-medium">{deletingCampaign.name}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteDialogOpen(false)}
+              disabled={isDeleting}
+            >
+              {t.campaignForm.cancel}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Trash2 className="h-4 w-4 mr-2" />
+              )}
+              {t.campaigns.delete}
             </Button>
           </DialogFooter>
         </DialogContent>

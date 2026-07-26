@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button, Input, Label } from "@packages/ui";
-import { ArrowLeft, Eye, FileUp, LayoutTemplate, Loader2, Paperclip, Save, Variable, X } from "lucide-react";
+import { ArrowLeft, Code2, Eye, FileUp, LayoutTemplate, Loader2, Paperclip, Save, Variable, X } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
@@ -42,7 +42,7 @@ export default function CampaignEditor() {
 
   const [formData, setFormData] = useState(emptyForm);
   const [isSent, setIsSent] = useState(false);
-  const [viewMode, setViewMode] = useState<"editor" | "preview">("editor");
+  const [viewMode, setViewMode] = useState<"editor" | "preview" | "source">("editor");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -87,8 +87,14 @@ export default function CampaignEditor() {
     return html;
   }, [formData.html]);
 
-  const applyTemplate = (html: string) => {
-    editorRef.current?.setContent(html);
+  const applyTemplate = (tpl: { html: string; fullHtml?: true }) => {
+    if (tpl.fullHtml) {
+      setFormData((prev) => ({ ...prev, html: tpl.html }));
+      setViewMode("source");
+    } else {
+      editorRef.current?.setContent(tpl.html);
+      setViewMode("editor");
+    }
   };
 
   const toggleGroup = (groupId: string) => {
@@ -325,6 +331,18 @@ export default function CampaignEditor() {
               <Eye className="h-4 w-4" />
               {t.campaignForm.preview}
             </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("source")}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                viewMode === "source"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Code2 className="h-4 w-4" />
+              {t.campaignForm.source}
+            </button>
           </div>
 
           {viewMode === "editor" ? (
@@ -344,7 +362,7 @@ export default function CampaignEditor() {
                         <button
                           key={tpl.key}
                           type="button"
-                          onClick={() => applyTemplate(tpl.html)}
+                          onClick={() => applyTemplate(tpl)}
                           className="flex flex-col items-start px-3 py-2 rounded-lg border border-border bg-muted/40 hover:bg-muted hover:border-primary/40 transition-all text-left"
                         >
                           <span className="text-xs font-medium text-foreground">{t.campaignForm[labelKey] as string}</span>
@@ -386,13 +404,23 @@ export default function CampaignEditor() {
                 onAttachment={isSent ? undefined : handleAttachmentUpload}
               />
             </div>
-          ) : (
+          ) : viewMode === "preview" ? (
             <div className="flex-1 flex flex-col min-h-0">
               <iframe
                 title="preview"
                 sandbox=""
                 srcDoc={previewHtml}
                 className="flex-1 w-full border border-border rounded-lg"
+              />
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col min-h-0">
+              <textarea
+                value={formData.html}
+                onChange={(e) => setFormData((prev) => ({ ...prev, html: e.target.value }))}
+                readOnly={isSent}
+                spellCheck={false}
+                className="flex-1 w-full font-mono text-xs p-3 border border-border rounded-lg resize-none bg-muted/20 focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
           )}
