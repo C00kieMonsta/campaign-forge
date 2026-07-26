@@ -263,12 +263,26 @@ export default function Campaigns() {
             <Loader2 className="h-4 w-4 animate-spin" />
           </div>
         ) : campaigns.length === 0 ? (
-          <div className="p-12 text-center text-muted-foreground">
-            {t.campaigns.noCampaigns}
+          <div className="p-12 text-center text-muted-foreground flex flex-col items-center gap-4">
+            <span>{t.campaigns.noCampaigns}</span>
+            <Button
+              onClick={() => navigate("/campaigns/new")}
+              className="gradient-terracotta text-white hover:opacity-90"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              {t.campaigns.create}
+            </Button>
           </div>
         ) : visibleCampaigns.length === 0 ? (
-          <div className="p-12 text-center text-muted-foreground">
-            {t.campaigns.noVisibleCampaigns}
+          <div className="p-12 text-center text-muted-foreground flex flex-col items-center gap-4">
+            <span>{t.campaigns.noVisibleCampaigns}</span>
+            <Button
+              onClick={() => navigate("/campaigns/new")}
+              className="gradient-terracotta text-white hover:opacity-90"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              {t.campaigns.create}
+            </Button>
           </div>
         ) : (
           <Table>
