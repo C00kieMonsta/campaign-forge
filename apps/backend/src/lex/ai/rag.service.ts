@@ -27,6 +27,17 @@ interface ChunkRow {
   content: string;
 }
 
+interface PageRowResult {
+  id: string;
+  document_id: string;
+  filename: string;
+  page_number: number | null;
+  page_label: string;
+  char_start: number;
+  char_end: number;
+  text: string;
+}
+
 const CANDIDATE_LIMIT = 40;
 
 /**
@@ -62,14 +73,23 @@ export class RagService {
   ) {}
 
   /**
-   * Chunks for pages the user explicitly pinned in the viewer, in document order.
+   * The exact text of the pages the user pinned, in document order.
    *
-   * This is a deliberate bypass of ranking: when the lawyer says "these pages", the answer must
-   * be grounded in those pages, not in whatever the embedding happens to consider similar. An
-   * empty `pages` array pins the whole document.
+   * Reads the PAGE index rather than chunks, which fixes two things the chunk-based version got
+   * wrong. Chunks overlap and span page boundaries, so pinning page 6 returned a whole 4000-char
+   * chunk covering pages 4-8 — labelled "p. 4", so the answer cited the wrong page — and pinning
+   * [2, 40] selected every chunk in between, because the range filter was an envelope rather than
+   * a set membership test.
    *
-   * Still hard-scoped to the owner, the workspace and lifecycle_state='active', so a pin can
-   * neither reach another user's document nor resurrect a superseded duplicate.
+   * A deliberate bypass of ranking: when the lawyer says "these pages", the answer must be
+   * grounded in those pages, not in whatever the embedding considers similar. An empty `pages`
+   * array pins the whole document.
+   *
+   * Falls back to chunks for a document with no page index yet (page_index_version = 0), so this
+   * works before any backfill has run.
+   *
+   * Still hard-scoped to owner + workspace + lifecycle_state='active', so a pin can neither reach
+   * another user's document nor resurrect a superseded duplicate.
    */
   async retrievePinned(
     ownerEmail: string,
@@ -84,43 +104,52 @@ export class RagService {
 
     for (const pin of pins) {
       if (budget <= 0) break;
-      // Page ranges overlap the request when page_from <= max(pages) AND page_to >= min(pages).
-      // A chunk spanning a page boundary is therefore included for either page — correct, since
-      // its text genuinely appears on both.
+
+      // Set membership on the ordinal, not a range envelope: pinning [2, 40] must return two
+      // pages, not thirty-nine.
       const pageFilter = pin.pages.length
-        ? `AND c.page_from <= $4 AND c.page_to >= $5`
+        ? `AND p.ordinal = ANY($4::int[])`
         : "";
       const params: unknown[] = [workspaceId, ownerEmail, pin.documentId];
-      if (pin.pages.length) {
-        params.push(Math.max(...pin.pages), Math.min(...pin.pages));
-      }
+      if (pin.pages.length) params.push(pin.pages);
 
-      const res = await this.pg.query<ChunkRow>(
-        `SELECT c.id, c.document_id, d.filename, c.page_from, c.page_to,
-                c.char_start, c.char_end, c.content
-         FROM lex_document_chunks c
-         JOIN lex_documents d ON d.id = c.document_id
-         WHERE c.workspace_id = $1 AND c.owner_email = $2 AND c.document_id = $3
+      const pages = await this.pg.query<PageRowResult>(
+        `SELECT p.id, p.document_id, d.filename, p.page_number, p.page_label,
+                p.char_start, p.char_end, p.text
+         FROM lex_document_pages p
+         JOIN lex_documents d ON d.id = p.document_id
+         WHERE p.workspace_id = $1 AND p.owner_email = $2 AND p.document_id = $3
            AND d.lifecycle_state = 'active'
            ${pageFilter}
-         ORDER BY c.chunk_index ASC`,
+         ORDER BY p.ordinal ASC`,
         params
       );
 
-      for (const r of res.rows) {
+      if (pages.rows.length === 0) {
+        // No page index for this document yet — fall back to the chunk path so pinning still works
+        // during the rollout.
+        out.push(
+          ...(await this.pinnedFromChunks(ownerEmail, workspaceId, pin, budget))
+        );
+        budget = Math.max(
+          0,
+          maxTotalChars - out.reduce((n, c) => n + c.content.length, 0)
+        );
+        continue;
+      }
+
+      for (const r of pages.rows) {
         if (budget <= 0) break;
-        // Keep only pages actually asked for: the range filter above is inclusive of chunks that
-        // merely touch the range, so a chunk covering pages 6-10 is dropped when only 7 was
-        // pinned and it contributes nothing from 7 alone.
-        if (pin.pages.length && !coversAnyPage(r, pin.pages)) continue;
-        const content = r.content.slice(0, budget);
+        const content = r.text.slice(0, budget);
         budget -= content.length;
         out.push({
           chunkId: r.id,
           documentId: r.document_id,
           filename: r.filename,
-          pageFrom: r.page_from,
-          pageTo: r.page_to,
+          // The page's OWN number, so a quote from page 6 is cited as page 6. NULL for a format
+          // with no pages (a section of a docx), where inventing a number would be a lie.
+          pageFrom: r.page_number,
+          pageTo: r.page_number,
           charStart: r.char_start,
           charEnd: r.char_end,
           content,
@@ -130,6 +159,55 @@ export class RagService {
       }
     }
 
+    return out;
+  }
+
+  /** Pre-page-index fallback: the previous chunk-based pinning, kept for un-indexed documents. */
+  private async pinnedFromChunks(
+    ownerEmail: string,
+    workspaceId: string,
+    pin: LexPin,
+    budget: number
+  ): Promise<RetrievedChunk[]> {
+    const pageFilter = pin.pages.length
+      ? `AND c.page_from <= $4 AND c.page_to >= $5`
+      : "";
+    const params: unknown[] = [workspaceId, ownerEmail, pin.documentId];
+    if (pin.pages.length) {
+      params.push(Math.max(...pin.pages), Math.min(...pin.pages));
+    }
+
+    const res = await this.pg.query<ChunkRow>(
+      `SELECT c.id, c.document_id, d.filename, c.page_from, c.page_to,
+              c.char_start, c.char_end, c.content
+       FROM lex_document_chunks c
+       JOIN lex_documents d ON d.id = c.document_id
+       WHERE c.workspace_id = $1 AND c.owner_email = $2 AND c.document_id = $3
+         AND d.lifecycle_state = 'active'
+         ${pageFilter}
+       ORDER BY c.chunk_index ASC`,
+      params
+    );
+
+    const out: RetrievedChunk[] = [];
+    let left = budget;
+    for (const r of res.rows) {
+      if (left <= 0) break;
+      if (pin.pages.length && !coversAnyPage(r, pin.pages)) continue;
+      const content = r.content.slice(0, left);
+      left -= content.length;
+      out.push({
+        chunkId: r.id,
+        documentId: r.document_id,
+        filename: r.filename,
+        pageFrom: r.page_from,
+        pageTo: r.page_to,
+        charStart: r.char_start,
+        charEnd: r.char_end,
+        content,
+        score: Number.POSITIVE_INFINITY
+      });
+    }
     return out;
   }
 

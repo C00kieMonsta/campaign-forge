@@ -61,8 +61,8 @@ function splitText(node: MdNode, maxIndex: number): MdNode[] | null {
   return out;
 }
 
-function walk(node: MdNode, maxIndex: number): void {
-  if (!node.children) return;
+function walk(node: MdNode | undefined, maxIndex: number): void {
+  if (!node?.children) return;
   const next: MdNode[] = [];
   for (const child of node.children) {
     if (OPAQUE.has(child.type)) {
@@ -85,11 +85,17 @@ function walk(node: MdNode, maxIndex: number): void {
 }
 
 /**
- * remark plugin factory. `maxIndex` is the number of sources known for the message — markers
- * above it are left as plain text.
+ * A unified/remark PLUGIN: it takes options and returns the transformer. Register it in the tuple
+ * form — `[remarkCitationMarkers, { maxIndex }]` — never pre-invoked, or unified calls the
+ * transformer itself with no arguments.
+ *
+ * `maxIndex` is the number of sources known for the message; markers above it stay plain text.
+ * Options are optional and the tree is checked, so a mis-registration degrades to "no citation
+ * chips" instead of throwing inside render and blanking the conversation.
  */
-export function remarkCitationMarkers({ maxIndex }: { maxIndex: number }) {
-  return (tree: MdNode): void => {
+export function remarkCitationMarkers(options?: { maxIndex?: number }) {
+  const maxIndex = options?.maxIndex ?? 0;
+  return (tree?: MdNode): void => {
     if (maxIndex > 0) walk(tree, maxIndex);
   };
 }

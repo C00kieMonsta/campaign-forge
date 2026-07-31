@@ -2,7 +2,9 @@ import { memo, useMemo, type ReactNode } from "react";
 import type { LexCitationEvent } from "@packages/types";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { PluggableList } from "unified";
 import { remarkCitationMarkers } from "@/lib/remark-citation-markers";
+import { MarkdownBoundary } from "./MarkdownBoundary";
 
 // Only these protocols may appear in a link the model produced. Everything else (javascript:,
 // data:) is rendered as inert text.
@@ -30,8 +32,12 @@ export const MarkdownMessage = memo(function MarkdownMessage({
     return map;
   }, [citations]);
 
-  const plugins = useMemo(
-    () => [remarkGfm, remarkCitationMarkers({ maxIndex: citations.length })],
+  // The TUPLE form is required: unified treats each entry as a PLUGIN and calls it with the
+  // options to obtain a transformer. Passing `remarkCitationMarkers({...})` handed it an
+  // already-built transformer, which unified then called with no arguments — so the transformer
+  // received `tree === undefined` and threw, taking the whole conversation view down with it.
+  const plugins = useMemo<PluggableList>(
+    () => [remarkGfm, [remarkCitationMarkers, { maxIndex: citations.length }]],
     [citations.length]
   );
 
@@ -72,9 +78,11 @@ export const MarkdownMessage = memo(function MarkdownMessage({
 
   return (
     <div className="lex-markdown">
-      <ReactMarkdown remarkPlugins={plugins} components={components}>
-        {content}
-      </ReactMarkdown>
+      <MarkdownBoundary content={content}>
+        <ReactMarkdown remarkPlugins={plugins} components={components}>
+          {content}
+        </ReactMarkdown>
+      </MarkdownBoundary>
     </div>
   );
 });

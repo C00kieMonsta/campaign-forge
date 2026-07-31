@@ -29,6 +29,14 @@ export interface ParsedDocument {
    * killed three documents of the first real bundle.
    */
   droppedChars: number;
+  /**
+   * What the `pages` array actually is, so the page index can label rows honestly.
+   * The parser is the only place that knows: routing is by MAGIC BYTES, so a file named .docx can
+   * be a real multi-page PDF and the filename cannot be trusted to decide this.
+   */
+  pageKind: "page" | "sheet" | "blob";
+  /** Sheet names, index-aligned with `pages`, when pageKind is 'sheet'. */
+  sheetNames?: string[];
 }
 
 const IMAGE_RE = /\.(jpe?g|png|webp|gif|tiff?|bmp)$/i;
@@ -760,7 +768,12 @@ export function resolveParseRoute(
  */
 function parsed(
   pages: string[],
-  options: { pageCount?: number; needsOcr?: boolean } = {}
+  options: {
+    pageCount?: number;
+    needsOcr?: boolean;
+    pageKind?: "page" | "sheet" | "blob";
+    sheetNames?: string[];
+  } = {}
 ): ParsedDocument {
   const clean = pages.map(sanitizeForStorage);
   const dropped = pages.reduce(
@@ -772,7 +785,10 @@ function parsed(
     pageCount: options.pageCount ?? Math.max(1, clean.length),
     needsOcr: options.needsOcr ?? clean.join("").trim().length === 0,
     needsTranscription: false,
-    droppedChars: dropped
+    droppedChars: dropped,
+    // Default by shape: several elements are genuine pages, a single element is one text blob.
+    pageKind: options.pageKind ?? (clean.length > 1 ? "page" : "blob"),
+    sheetNames: options.sheetNames
   };
 }
 
@@ -824,7 +840,11 @@ function parseXlsx(buffer: Buffer, filename: string): ParsedDocument {
     const pages = wb.SheetNames.map(
       (name) => `# ${name}\n${XLSX.utils.sheet_to_csv(wb.Sheets[name])}`
     );
-    return parsed(pages, { pageCount: Math.max(1, pages.length) });
+    return parsed(pages, {
+      pageCount: Math.max(1, pages.length),
+      pageKind: "sheet",
+      sheetNames: wb.SheetNames
+    });
   } catch (err) {
     throw new Error(
       `Could not read "${filename}" as a spreadsheet (${message(err)}). Re-export it as .xlsx or CSV.`
@@ -854,7 +874,10 @@ export async function parseDocument(
         pageCount: 1,
         needsOcr: false,
         needsTranscription: true,
-        droppedChars: 0
+        droppedChars: 0,
+        // No text yet — the worker decides the real kind once Whisper returns ('blob': speech has
+        // no pages).
+        pageKind: "blob"
       };
     case "image":
       return {
@@ -862,7 +885,9 @@ export async function parseDocument(
         pageCount: 1,
         needsOcr: true,
         needsTranscription: false,
-        droppedChars: 0
+        droppedChars: 0,
+        // No text yet — OCR will return one entry per scanned page, so the worker sets 'page'.
+        pageKind: "page"
       };
     case "pdf":
       return parsePdf(buffer, filename);

@@ -22,6 +22,7 @@ import {
 } from "./chunker";
 import { parseDocument } from "./document-parser";
 import { MistralOcrService } from "./mistral-ocr.service";
+import { assertPageRoundTrip, buildPageRows } from "./pager";
 
 const POLL_INTERVAL_MS = 5000;
 const EMBED_BATCH = 64;
@@ -62,6 +63,9 @@ interface DocRow {
 interface TextSource {
   pages: string[];
   pageCount: number;
+  /** What `pages` is, so the page index labels rows honestly rather than inventing page numbers. */
+  pageKind: "page" | "sheet" | "blob";
+  sheetNames?: string[];
 }
 
 /**
@@ -232,6 +236,11 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    // 2b. Page index. Built from the SAME pageRanges the chunks were offset against, so the two
+    //     grains agree and a citation resolved through one resolves through the other. No model
+    //     calls, so 'ready' latency is unchanged.
+    await this.writePageRows(doc, fullText, pageRanges, parsed);
+
     // 3. Embed + store (idempotent: clear any prior chunks first)
     await this.setStatus(documentId, "embedding");
     await this.pg.query(
@@ -297,6 +306,70 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Writes the per-page index: exact text, exact char span, honest label, continuity flag and a
+   * per-page fingerprint. No model calls.
+   *
+   * Rebuilt wholesale (DELETE then INSERT) rather than merged, because the offsets are only
+   * meaningful against the fullText they were derived from — a partial update would leave rows
+   * pointing into text that has moved.
+   */
+  private async writePageRows(
+    doc: DocRow,
+    fullText: string,
+    pageRanges: { start: number; end: number }[],
+    source: TextSource
+  ): Promise<void> {
+    const rows = buildPageRows(fullText, pageRanges, {
+      kind: source.pageKind,
+      sheetNames: source.sheetNames
+    });
+    assertPageRoundTrip(fullText, rows);
+
+    await this.pg.query(
+      `DELETE FROM lex_document_pages WHERE document_id = $1`,
+      [doc.id]
+    );
+    for (const row of rows) {
+      await this.pg.query(
+        `INSERT INTO lex_document_pages
+           (document_id, workspace_id, owner_email, ordinal, page_number, page_label,
+            page_origin, char_start, char_end, text, char_count, token_count,
+            text_fingerprint, continues_into_next)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [
+          doc.id,
+          doc.workspace_id,
+          doc.owner_email,
+          row.ordinal,
+          row.pageNumber,
+          row.pageLabel,
+          row.pageOrigin,
+          row.charStart,
+          row.charEnd,
+          row.text,
+          row.charCount,
+          row.tokenCount,
+          row.textFingerprint,
+          row.continuesIntoNext
+        ]
+      );
+    }
+
+    await this.pg.query(
+      `UPDATE lex_documents SET page_index_version = 1, page_index_error = NULL WHERE id = $1`,
+      [doc.id]
+    );
+    this.logger.log(
+      JSON.stringify({
+        action: "lexPageIndexBuilt",
+        documentId: doc.id,
+        pages: rows.length,
+        origin: rows[0]?.pageOrigin
+      })
+    );
+  }
+
+  /**
    * Records the document's content hashes and, if another document in the workspace already has
    * the same content, marks this one as a duplicate of it.
    *
@@ -353,9 +426,14 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
       [doc.id, primary.id]
     );
     // Any chunks from a previous ingest of this row must go, or a superseded document could
-    // still be reached if the lifecycle filter is ever relaxed.
+    // still be reached if the lifecycle filter is ever relaxed. Page rows go with them: a
+    // duplicate must not be page-routable either.
     await this.pg.query(
       `DELETE FROM lex_document_chunks WHERE document_id = $1`,
+      [doc.id]
+    );
+    await this.pg.query(
+      `DELETE FROM lex_document_pages WHERE document_id = $1`,
       [doc.id]
     );
     this.logger.log(
@@ -428,8 +506,18 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
    * content` true, and it is what stops a NUL byte from aborting the chunk INSERT with
    * `invalid byte sequence for encoding "UTF8": 0x00`.
    */
-  private textSource(pages: string[], pageCount: number): TextSource {
-    return { pages: pages.map(sanitizeForStorage), pageCount };
+  private textSource(
+    pages: string[],
+    pageCount: number,
+    pageKind: TextSource["pageKind"] = "page",
+    sheetNames?: string[]
+  ): TextSource {
+    return {
+      pages: pages.map(sanitizeForStorage),
+      pageCount,
+      pageKind,
+      sheetNames
+    };
   }
 
   /** Re-index of a hand-corrected transcript: the text is already in the row, no API spend. */
@@ -438,7 +526,8 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
     if (transcript.length === 0)
       throw new Error("no stored transcript to re-index");
     // Sanitised too: rows written before this guard existed can still hold control characters.
-    return this.textSource([transcript], 1);
+    // 'blob': a transcript has no pages, so it is sectioned rather than given page numbers.
+    return this.textSource([transcript], 1, "blob");
   }
 
   /**
@@ -485,7 +574,8 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
          WHERE id = $1`,
         [doc.id, transcript, durationSeconds]
       );
-      return this.textSource([transcript], 1);
+      // 'blob': speech has no pages; sectioning it is honest, "p. 1" would not be.
+      return this.textSource([transcript], 1, "blob");
     }
 
     if (parsed.needsOcr) {
@@ -508,10 +598,16 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
         );
         return null; // OCR yielded nothing usable
       }
-      return this.textSource(ocrPages, ocrPages.length);
+      // OCR yields one entry per scanned page, so these are genuine pages.
+      return this.textSource(ocrPages, ocrPages.length, "page");
     }
 
-    return this.textSource(parsed.pages, parsed.pageCount);
+    return this.textSource(
+      parsed.pages,
+      parsed.pageCount,
+      parsed.pageKind,
+      parsed.sheetNames
+    );
   }
 
   private async summarize(
