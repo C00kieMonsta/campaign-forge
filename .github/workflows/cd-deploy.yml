@@ -273,6 +273,9 @@ jobs:
             append_if_set DATABASE_URL "$(ssm_get_optional DATABASE_URL)"
             append_if_set OPENAI_API_KEY_SECRET_ARN "$(ssm_get_optional OPENAI_API_KEY_SECRET_ARN)"
             append_if_set LEX_DOCUMENTS_BUCKET "$(ssm_get_optional LEX_DOCUMENTS_BUCKET)"
+            # Without this the OCR path is silently dormant: MistralOcrService.isConfigured()
+            # returns false and every scanned PDF parks at needs_ocr instead of being read.
+            append_if_set MISTRAL_API_KEY "$(ssm_get_optional MISTRAL_API_KEY)"
 
             chmod 600 "${APP_DIR}/apps/backend/.env"
 
