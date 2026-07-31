@@ -202,7 +202,12 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "apps/backend/dist/,apps/backend/package.json,packages/types/dist/,packages/types/package.json,package.json,pnpm-lock.yaml,pnpm-workspace.yaml"
+          # Every workspace package.json must ship, not just the backend's: `pnpm install
+          # --frozen-lockfile` validates the lockfile against ALL workspace projects, so a stale
+          # apps/frontend/package.json on the box fails the install the moment a frontend
+          # dependency changes (ERR_PNPM_OUTDATED_LOCKFILE) — even though the backend does not
+          # use it. apps/backend/migrations/ ships so schema changes can be applied on the box.
+          source: "apps/backend/dist/,apps/backend/package.json,apps/backend/migrations/,apps/frontend/package.json,apps/landing/package.json,packages/types/dist/,packages/types/package.json,packages/ui/package.json,packages/utils/package.json,infrastructure/package.json,package.json,pnpm-lock.yaml,pnpm-workspace.yaml"
           target: "/home/ec2-user/campaign-forge/"
           tar_dereference: true
           overwrite: true
@@ -280,6 +285,25 @@ jobs:
             export HUSKY=0
             export CI=true
             pnpm install --prod --frozen-lockfile --ignore-scripts --filter @apps/backend...
+
+            # ── Schema migrations, BEFORE the new code starts ──────────────────────
+            # Ordering is not cosmetic: a build whose ingestion worker selects
+            # lex_ingestion_jobs.mode, or whose chat path reads the authorities tables,
+            # fails every Lex request if it boots against an older schema. Running here
+            # means a migration failure aborts the deploy while the OLD code is still
+            # serving, and the dist.prev rollback below is never even needed.
+            # Skipped entirely when DATABASE_URL is absent — that is a Campaigns-only
+            # box with Lex dormant, and there is no Lex schema to migrate.
+            DB_URL=$(grep '^DATABASE_URL=' "${APP_DIR}/apps/backend/.env" | cut -d= -f2-)
+            if [ -n "$DB_URL" ]; then
+              echo "🗄️ Applying database migrations..."
+              cd "${APP_DIR}/apps/backend"
+              DATABASE_URL="$DB_URL" pnpm exec node-pg-migrate up
+              cd "${APP_DIR}"
+              echo "✅ Migrations applied"
+            else
+              echo "ℹ️ DATABASE_URL not set — Lex dormant, no migrations to apply"
+            fi
 
             echo "♻️ Restarting backend with PM2..."
             pm2 restart campaign-forge-api || pm2 start ${APP_DIR}/apps/backend/dist/main.js \
