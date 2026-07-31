@@ -142,6 +142,59 @@ export interface LexDocumentChunk {
   tokenCount?: number | null;
 }
 
+// ── Per-page index ────────────────────────────────────────────────────────────────────
+// Documents ingested before the per-page index existed have no page rows, so pinning a page falls
+// back to the coarse chunk path and a quote can be filed under the wrong page number. The backfill
+// (ingestion mode 'pages') rebuilds the exact page grain from the stored S3 object, re-using the
+// existing chunks and embeddings — no re-embedding and no paid call. These types are the API over
+// that migration; the page rows themselves are never surfaced (retrieval reads them, the client
+// addresses pages by number).
+
+/**
+ * A document the free backfill cannot index, with the worker's reason. The blocking case is a
+ * scan whose text only OCR can recover: OCR costs money AND is non-deterministic, so its output
+ * could not be verified against the already-indexed chunks anyway — the fix is a full re-ingest,
+ * which is a decision for the user, not something a maintenance job should spend on its own.
+ */
+export interface LexPageIndexBlockedDocument {
+  documentId: string;
+  filename: string;
+  error: string;
+}
+
+/**
+ * Progress of the per-page index across ALL of the user's case files, counted over the documents
+ * the backfill actually targets (parse_status 'ready' AND lifecycle_state 'active'). `indexed`,
+ * `pending` and `blocked` are disjoint and sum to `total`.
+ *
+ * Account-wide, not per workspace, because the rebuild it reports on is account-wide: a
+ * workspace-scoped readout beside that button would show one case file frozen while another drains.
+ */
+export interface LexPageIndexStatus {
+  total: number;
+  /** Has an exact page index; pinning a page returns that page. */
+  indexed: number;
+  /** No index yet — still served by the coarse chunk fallback. */
+  pending: number;
+  /**
+   * How many of the un-indexed documents (`pending`, plus any `blocked` one being retried) have a
+   * 'pages' job queued or running. Not a fourth bucket: it is what distinguishes "the worker is
+   * chewing through the queue" from "the worker is down and these numbers will never move".
+   */
+  queued: number;
+  /** No index, with a recorded reason. Every one of these needs a decision from the user. */
+  blocked: number;
+  /** Bounded sample of the blocked documents, so the payload stays pollable. */
+  blockedDocuments: LexPageIndexBlockedDocument[];
+  /** True when `blocked` exceeds the sample returned above. */
+  blockedTruncated: boolean;
+}
+
+/** How many documents the backfill request actually enqueued (already-queued ones are skipped). */
+export interface LexPageIndexBackfill {
+  queued: number;
+}
+
 export interface LexConversation {
   id: string;
   workspaceId: string;

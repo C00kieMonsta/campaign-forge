@@ -22,7 +22,12 @@ import {
 } from "./chunker";
 import { parseDocument } from "./document-parser";
 import { MistralOcrService } from "./mistral-ocr.service";
-import { assertPageRoundTrip, buildPageRows } from "./pager";
+import {
+  assertPageRoundTrip,
+  buildPageRows,
+  firstSpanMismatch,
+  pageTextHash
+} from "./pager";
 
 const POLL_INTERVAL_MS = 5000;
 const EMBED_BATCH = 64;
@@ -33,6 +38,22 @@ const SUMMARY_INPUT_CHARS = 12000;
 const POOL_SIZE = 3;
 
 /**
+ * How long a claimed job may sit with no progress before another worker may take it back.
+ *
+ * A job is claimed by flipping it to 'running', so a deploy or an OOM kill mid-flight strands up to
+ * POOL_SIZE jobs in that state with no worker behind them. Nothing noticed before: the enqueue
+ * guards skip documents with a job 'queued' or 'running', so a stranded job silently excluded its
+ * document from every later enqueue — a bulk backfill would report a count quietly short by three
+ * and those documents would never be indexed, with nothing anywhere saying why.
+ *
+ * Generous, because the longest legitimate step is OCR of a large scan, and reclaiming a job that
+ * is genuinely still running would duplicate that spend. LexTasks uses the same pattern.
+ */
+const STALE_CLAIM_SECONDS = 30 * 60;
+/** After this many claims a job is failed rather than reclaimed, so a poison job cannot loop. */
+const MAX_JOB_ATTEMPTS = 3;
+
+/**
  * full        — derive the text from the S3 source (parse / OCR / transcribe), then index.
  * reindex     — reuse the stored transcript (hand-corrected by the user), then index. Skips the
  *               transcription spend, which is the whole point of storing the transcript.
@@ -40,8 +61,14 @@ const POOL_SIZE = 3;
  *               chunks. Chunks and embeddings are left untouched, and neither OCR nor
  *               transcription is paid for again. Used to bring existing documents into line
  *               after the owner changes their pinned language.
+ * pages       — build ONLY the per-page index of a document that is already indexed. Costs
+ *               nothing at all: the text comes from the stored transcript or the S3 text layer,
+ *               and no step of it embeds, summarizes, OCRs or transcribes. Backfills the
+ *               documents ingested before the page index existed, which sit at
+ *               page_index_version = 0 and therefore still answer a pinned page through the
+ *               coarse chunk grain.
  */
-type JobMode = "full" | "reindex" | "resummarize";
+type JobMode = "full" | "reindex" | "resummarize" | "pages";
 
 interface JobRow {
   id: string;
@@ -110,6 +137,18 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try {
+      // Before claiming anything, take back jobs abandoned by a previous process — otherwise their
+      // documents are permanently invisible to the enqueue guards. Best-effort by design: a failure
+      // here must not stop the queue draining.
+      await this.reclaimStaleJobs().catch((err) =>
+        this.logger.warn(
+          JSON.stringify({
+            level: "warn",
+            action: "lexIngestReclaimFailed",
+            error: String(err)
+          })
+        )
+      );
       // Run POOL_SIZE workers concurrently; each drains until the queue is empty. Distinct
       // jobs are guaranteed by the FOR UPDATE SKIP LOCKED claim.
       await Promise.all(
@@ -125,6 +164,63 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
       );
     } finally {
       this.running = false;
+    }
+  }
+
+  /**
+   * Requeues jobs left 'running' by a process that died, or fails them once they have burned
+   * through MAX_JOB_ATTEMPTS.
+   *
+   * A failed job also marks its document, but ONLY for the modes that leave it genuinely unusable.
+   * A 'pages' or 'resummarize' job that dies has changed nothing a reader can see — the document is
+   * still indexed and still answers questions — so flipping it to parse_status 'failed' would
+   * report a working document as broken because a maintenance pass was interrupted.
+   */
+  private async reclaimStaleJobs(): Promise<void> {
+    const res = await this.pg.query<{
+      id: string;
+      document_id: string;
+      mode: JobMode;
+      status: string;
+      attempts: number;
+    }>(
+      `UPDATE lex_ingestion_jobs
+         SET status = CASE WHEN attempts >= $2 THEN 'failed' ELSE 'queued' END,
+             last_error = CASE WHEN attempts >= $2
+                               THEN 'Interrupted repeatedly without completing.'
+                               ELSE last_error END,
+             locked_at = NULL,
+             updated_at = now()
+       WHERE status = 'running'
+         -- COALESCE, not a bare locked_at: NULL there would make the comparison NULL and the row
+         -- unreclaimable, which is precisely the state this exists to clean up.
+         AND COALESCE(locked_at, updated_at) < now() - make_interval(secs => $1)
+       RETURNING id, document_id, mode, status, attempts`,
+      [STALE_CLAIM_SECONDS, MAX_JOB_ATTEMPTS]
+    );
+
+    for (const job of res.rows) {
+      this.logger.warn(
+        JSON.stringify({
+          level: "warn",
+          action: "lexIngestJobReclaimed",
+          jobId: job.id,
+          documentId: job.document_id,
+          mode: job.mode,
+          attempts: job.attempts,
+          outcome: job.status
+        })
+      );
+      if (
+        job.status === "failed" &&
+        (job.mode === "full" || job.mode === "reindex")
+      ) {
+        await this.setStatus(
+          job.document_id,
+          "failed",
+          "Processing was interrupted repeatedly. Use Retry to try again."
+        );
+      }
     }
   }
 
@@ -164,6 +260,7 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
           level: "error",
           action: "lexIngestFailed",
           documentId: job.document_id,
+          mode: job.mode,
           error: msg
         })
       );
@@ -171,7 +268,13 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
         `UPDATE lex_ingestion_jobs SET status = 'failed', last_error = $2, updated_at = now() WHERE id = $1`,
         [job.id, msg]
       );
-      await this.setStatus(job.document_id, "failed", msg);
+      // Only the modes that PRODUCE the document's indexed text may declare the document failed.
+      // 'pages' and 'resummarize' refresh metadata alongside a document that is already indexed and
+      // already answering questions, so failing one must not repaint a working file as broken —
+      // a maintenance action that can break the thing it maintains is worse than no action.
+      if (job.mode === "full" || job.mode === "reindex") {
+        await this.setStatus(job.document_id, "failed", msg);
+      }
     }
     return true;
   }
@@ -195,6 +298,13 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
     );
     if (docRes.rows.length === 0) throw new Error("document row vanished");
     const doc = docRes.rows[0];
+
+    // Page-index-only rebuild. Routed first, and before anything that costs money: this mode's
+    // whole reason to exist is that it is free, so it must never fall through into a paid step.
+    if (mode === "pages") {
+      await this.buildPageIndexOnly(doc);
+      return;
+    }
 
     // Metadata-only refresh: reuse the indexed text, leave chunks and embeddings alone.
     if (mode === "resummarize") {
@@ -306,12 +416,186 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Builds (or rebuilds) ONLY the per-page index of an already-indexed document, for free.
+   *
+   * Why it exists: a document ingested before the page index existed sits at page_index_version = 0
+   * with no page rows, so RagService.retrievePinned falls back to the chunk grain — pinning p. 6
+   * hands the model a 4000-char chunk covering pp. 4-8, and a quote from p. 8 is filed as "p. 4".
+   *
+   * Why it re-derives the text instead of reusing the chunks: page boundaries are NOT recoverable
+   * from them. Measured over 361 recoverable boundaries in the real corpus, ZERO were exact and the
+   * median uncertainty was 2204 chars against a median page of 2285 — a full page out. Page rows
+   * built that way would label text "p. 7" that is really p. 6 or p. 8, and that text goes into a
+   * Belgian court filing.
+   *
+   * Nothing about the document is touched except the page rows and page_index_version /
+   * page_index_error: no re-embedding, no re-summarizing, no paid API call of any kind.
+   */
+  private async buildPageIndexOnly(doc: DocRow): Promise<void> {
+    try {
+      const source = await this.freePageText(doc);
+      if (!source) return; // reason already recorded by freePageText
+
+      const { fullText, pageRanges } = buildFullText(source.pages);
+      if (fullText.trim().length === 0) {
+        await this.stopPageIndex(
+          doc,
+          `No text could be read from "${doc.filename}", so page numbers cannot be added to it. Use this document's retry action to process it again.`
+        );
+        return;
+      }
+
+      // Verify the re-derivation against what is already indexed. The chunks were stored with
+      // offsets into the fullText of their own ingest, so they are a free, exact witness to it.
+      const indexed = await this.pg.query<{
+        chunk_index: number;
+        content: string;
+        char_start: number | null;
+        char_end: number | null;
+      }>(
+        `SELECT chunk_index, content, char_start, char_end FROM lex_document_chunks
+         WHERE document_id = $1 ORDER BY chunk_index ASC`,
+        [doc.id]
+      );
+      if (indexed.rows.length === 0) {
+        // Nothing to stay consistent with, so nothing may be written: page rows offset against
+        // unverified text are exactly what this mode refuses to produce.
+        await this.stopPageIndex(
+          doc,
+          `"${doc.filename}" has no indexed text, so there is nothing to check a page numbering against. That is expected for a document set aside as a duplicate; otherwise use its retry action to process it.`
+        );
+        return;
+      }
+      const mismatch = firstSpanMismatch(
+        fullText,
+        indexed.rows.map((c) => ({
+          chunkIndex: c.chunk_index,
+          charStart: c.char_start,
+          charEnd: c.char_end,
+          content: c.content
+        }))
+      );
+      if (mismatch) {
+        await this.stopPageIndex(
+          doc,
+          `The text read from "${doc.filename}" today no longer matches the text that was indexed, so adding page numbers could point a citation at the wrong passage. Use this document's retry action to process it again.`,
+          `chunk ${mismatch.chunkIndex} does not round-trip`
+        );
+        return;
+      }
+
+      await this.writePageRows(doc, fullText, pageRanges, source);
+      this.logger.log(
+        JSON.stringify({
+          action: "lexPageIndexBackfilled",
+          documentId: doc.id,
+          filename: doc.filename,
+          chunksVerified: indexed.rows.length
+        })
+      );
+    } catch (err) {
+      // Deliberately swallowed. processOne's failure handler sets parse_status = 'failed', which
+      // would drop a document that is currently answering questions out of every retrieval path —
+      // an unreadable S3 object or a parser throw is not a reason to break a working document over
+      // an index it does not have today.
+      await this.stopPageIndex(
+        doc,
+        `The page index for "${doc.filename}" could not be built. The document itself is unchanged and keeps working as before.`,
+        err
+      );
+    }
+  }
+
+  /**
+   * Acquires the document text for a 'pages' job without spending anything, or records why it
+   * cannot and returns null.
+   *
+   * Both refusals are refusals of a PAID step, and both would be futile anyway: OCR and Whisper are
+   * non-deterministic, so a second pass would not reproduce the text the chunks were built from and
+   * would fail the verify step. Only a full re-ingest — which re-chunks against the new text — can
+   * page-index those documents.
+   */
+  private async freePageText(doc: DocRow): Promise<TextSource | null> {
+    // A voice note's indexed text IS its stored transcript (both 'full' and 'reindex' index from
+    // it, and the user may have hand-corrected it), so reusing it reproduces the same fullText.
+    const transcript = (doc.transcript ?? "").trim();
+    if (transcript.length > 0) return this.textSource([transcript], 1, "blob");
+
+    const { body } = await this.s3.get(doc.s3_key);
+    const parsed = await parseDocument(
+      body,
+      doc.content_type ?? "",
+      doc.filename
+    );
+
+    if (parsed.needsOcr) {
+      await this.stopPageIndex(
+        doc,
+        `"${doc.filename}" is a scan, so page-exact citations for it need its text to be read from the image again. Use this document's retry action if you need them; until then it keeps answering exactly as it does today.`
+      );
+      return null;
+    }
+    if (parsed.needsTranscription) {
+      await this.stopPageIndex(
+        doc,
+        `"${doc.filename}" is an audio recording and its transcript is no longer stored, so it would have to be transcribed again. Use this document's retry action if you need page-exact citations from it; until then it keeps answering exactly as it does today.`
+      );
+      return null;
+    }
+
+    return this.textSource(
+      parsed.pages,
+      parsed.pageCount,
+      parsed.pageKind,
+      parsed.sheetNames
+    );
+  }
+
+  /**
+   * Records why the page index could not be built, and returns normally so the job completes.
+   *
+   * A stop is an OUTCOME, not a crash: the document keeps its chunks, embeddings, summary and
+   * 'ready' status and keeps answering through the chunk grain, exactly as before the backfill ran.
+   * Failing the job instead would retry it forever and mark the document failed.
+   *
+   * page_index_error is the only column written — not even updated_at, which would make a
+   * background backfill look like the user touched all 56 documents. The message is read by a
+   * practitioner, not an engineer, so it names the file and the action that fixes it; the technical
+   * detail goes to the log line instead.
+   */
+  private async stopPageIndex(
+    doc: DocRow,
+    reason: string,
+    detail?: unknown
+  ): Promise<void> {
+    await this.pg.query(
+      `UPDATE lex_documents SET page_index_error = $2 WHERE id = $1`,
+      [doc.id, reason]
+    );
+    this.logger.warn(
+      JSON.stringify({
+        level: "warn",
+        action: "lexPageIndexSkipped",
+        documentId: doc.id,
+        filename: doc.filename,
+        reason,
+        ...(detail === undefined ? {} : { detail: String(detail) })
+      })
+    );
+  }
+
+  /**
    * Writes the per-page index: exact text, exact char span, honest label, continuity flag and a
    * per-page fingerprint. No model calls.
    *
    * Rebuilt wholesale (DELETE then INSERT) rather than merged, because the offsets are only
    * meaningful against the fullText they were derived from — a partial update would leave rows
    * pointing into text that has moved.
+   *
+   * All of it in ONE transaction, because the DELETE has a side effect outside this table:
+   * lex_citations.page_id is ON DELETE SET NULL, so it unanchors every page-anchored citation of
+   * the document. A crash between the DELETE and the last INSERT would otherwise leave a half
+   * index, unanchored citations, and page_index_version still claiming the state it had before.
    */
   private async writePageRows(
     doc: DocRow,
@@ -325,40 +609,69 @@ export class IngestionWorker implements OnModuleInit, OnModuleDestroy {
     });
     assertPageRoundTrip(fullText, rows);
 
-    await this.pg.query(
-      `DELETE FROM lex_document_pages WHERE document_id = $1`,
-      [doc.id]
-    );
-    for (const row of rows) {
-      await this.pg.query(
-        `INSERT INTO lex_document_pages
-           (document_id, workspace_id, owner_email, ordinal, page_number, page_label,
-            page_origin, char_start, char_end, text, char_count, token_count,
-            text_fingerprint, continues_into_next)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+    await this.pg.withTransaction(async (client) => {
+      await client.query(
+        `DELETE FROM lex_document_pages WHERE document_id = $1`,
+        [doc.id]
+      );
+      for (const row of rows) {
+        await client.query(
+          `INSERT INTO lex_document_pages
+             (document_id, workspace_id, owner_email, ordinal, page_number, page_label,
+              page_origin, char_start, char_end, text, char_count, token_count,
+              text_fingerprint, continues_into_next)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          [
+            doc.id,
+            doc.workspace_id,
+            doc.owner_email,
+            row.ordinal,
+            row.pageNumber,
+            row.pageLabel,
+            row.pageOrigin,
+            row.charStart,
+            row.charEnd,
+            row.text,
+            row.charCount,
+            row.tokenCount,
+            row.textFingerprint,
+            row.continuesIntoNext
+          ]
+        );
+      }
+
+      // Re-point the citations the DELETE just unanchored, but ONLY at a rebuilt page that still
+      // holds the exact text the citation was made against. A page whose text moved must LOSE its
+      // anchor and fall back to its char offsets rather than keep claiming a page it no longer
+      // quotes. One statement, so a 400-page rebuild does not become 400 extra round trips.
+      //
+      // The hashes are computed in Node and shipped in as arrays because pgcrypto is not installed
+      // (no digest() in SQL), and because lex_document_pages.text_fingerprint is the wrong hash for
+      // a staleness test — see pageTextHash.
+      await client.query(
+        `UPDATE lex_citations c
+            SET page_id = p.id
+           FROM lex_document_pages p
+           JOIN unnest($2::int[], $3::text[]) AS fresh(ordinal, text_hash)
+             ON fresh.ordinal = p.ordinal
+          WHERE p.document_id = $1
+            AND c.document_id = $1
+            AND c.page_id IS NULL
+            AND c.page_ordinal = p.ordinal
+            AND c.page_text_hash = fresh.text_hash`,
         [
           doc.id,
-          doc.workspace_id,
-          doc.owner_email,
-          row.ordinal,
-          row.pageNumber,
-          row.pageLabel,
-          row.pageOrigin,
-          row.charStart,
-          row.charEnd,
-          row.text,
-          row.charCount,
-          row.tokenCount,
-          row.textFingerprint,
-          row.continuesIntoNext
+          rows.map((r) => r.ordinal),
+          rows.map((r) => pageTextHash(r.text))
         ]
       );
-    }
 
-    await this.pg.query(
-      `UPDATE lex_documents SET page_index_version = 1, page_index_error = NULL WHERE id = $1`,
-      [doc.id]
-    );
+      await client.query(
+        `UPDATE lex_documents SET page_index_version = 1, page_index_error = NULL WHERE id = $1`,
+        [doc.id]
+      );
+    });
+
     this.logger.log(
       JSON.stringify({
         action: "lexPageIndexBuilt",

@@ -1,4 +1,52 @@
+const fs = require("fs");
 const path = require("path");
+
+/**
+ * Names of the ESM-only packages in the dependency closure of `roots`.
+ *
+ * The markdown stack (react-markdown → unified → micromark, ~80 packages) publishes ESM only, so
+ * requiring it from a CommonJS test throws "Unexpected token 'export'" unless Jest is told to
+ * transform it. Deriving the list beats hardcoding one: adding a remark plugin pulls in a fresh
+ * handful of micromark utilities, and a stale hardcoded list fails as a confusing parse error in
+ * an unrelated test. Costs a few dozen package.json reads at config load.
+ */
+function esmOnlyDependencies(roots) {
+  const seen = new Set();
+  const esm = new Set();
+
+  // Node's own lookup: walk up from `fromDir` trying <dir>/node_modules/<name>. Necessary because a
+  // package can be nested — pnpm puts a second copy under unified/node_modules/ when versions
+  // diverge, and that copy is ESM even where the hoisted one is not.
+  const resolvePackage = (name, fromDir) => {
+    let dir = fromDir;
+    for (;;) {
+      const candidate = path.join(dir, "node_modules", name);
+      if (fs.existsSync(path.join(candidate, "package.json"))) return candidate;
+      const parent = path.dirname(dir);
+      if (parent === dir) return null;
+      dir = parent;
+    }
+  };
+
+  const visit = (name, fromDir) => {
+    const dir = resolvePackage(name, fromDir);
+    if (!dir || seen.has(dir)) return; // Not installed, or already walked.
+    seen.add(dir);
+    let pkg;
+    try {
+      pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    } catch {
+      return;
+    }
+    // The name is what lands in the pattern, and the pattern matches any node_modules/<name>
+    // segment — so one entry covers the hoisted copy and every nested one.
+    if (pkg.type === "module") esm.add(name);
+    for (const dep of Object.keys(pkg.dependencies || {})) visit(dep, dir);
+  };
+
+  roots.forEach((name) => visit(name, __dirname));
+  return [...esm];
+}
 
 // Root Jest configuration for the monorepo
 const config = {
@@ -65,12 +113,29 @@ const config = {
           {
             useESM: true,
             tsconfig: {
-              jsx: "react-jsx"
+              jsx: "react-jsx",
+              // The transformed markdown stack default-imports CJS packages (unified does
+              // `import extend from "extend"`). Without interop that compiles to `extend_1.default`,
+              // which is undefined for a module that has no __esModule marker. Vite/esbuild does
+              // this shimming natively, so only the test transform needs it stated.
+              esModuleInterop: true
             }
           }
         ]
       },
-      transformIgnorePatterns: ["node_modules/(?!(react-resizable-panels)/)"],
+      // node_modules is left untransformed except for the ESM-only markdown stack, which has to be
+      // transpiled so the Markdown renderer can be tested against the REAL unified pipeline. That
+      // matters: the citation-plugin bug that blanked the conversation view was in how the plugin
+      // was handed to unified, which testing the plugin in isolation cannot catch.
+      transformIgnorePatterns: [
+        `node_modules/(?!(${[
+          "react-resizable-panels",
+          ...esmOnlyDependencies(["react-markdown", "remark-gfm"])
+        ]
+          // A scoped name contains a slash, which would otherwise close the path group early.
+          .map((name) => name.replace(/\//g, "\\/"))
+          .join("|")})/)`
+      ],
       extensionsToTreatAsEsm: [".ts", ".tsx"]
     },
     // Utils package configuration

@@ -2,10 +2,28 @@ import { Injectable } from "@nestjs/common";
 import type { LexPin } from "@packages/types";
 import { OpenAiService } from "../../shared/openai.service";
 import { PgService } from "../../shared/pg.service";
+import { pageTextHash } from "../documents/pager";
 import { reciprocalRankFusion } from "./rag-fusion";
 
+/**
+ * A retrieved span of a document, carrying the provenance a citation is filed against.
+ *
+ * The anchor is TWO mutually exclusive fields rather than one id, because a chunk and a page live
+ * in different tables and lex_citations has a separate foreign key per table. Carrying both in a
+ * single `chunkId` is what let a lex_document_pages id be INSERTed into lex_citations.chunk_id,
+ * whose FK targets lex_document_chunks: Postgres 23503 inside the finalize transaction, which
+ * rolled back `status = 'complete'` and destroyed an answer the user had already watched stream in.
+ * Exactly one of chunkId / pageId is non-null.
+ */
 export interface RetrievedChunk {
-  chunkId: string;
+  /** lex_document_chunks id. Null when this span came from the page index. */
+  chunkId: string | null;
+  /** lex_document_pages id. Null when this span came from a chunk. */
+  pageId: string | null;
+  /** The page's reading-order ordinal, and the hash of the exact text, so a filed citation can
+   *  detect that the page it points at has since been rebuilt with different text. */
+  pageOrdinal: number | null;
+  pageTextHash: string | null;
   documentId: string;
   filename: string;
   pageFrom: number | null;
@@ -14,6 +32,49 @@ export interface RetrievedChunk {
   charEnd: number | null;
   content: string;
   score: number;
+}
+
+/**
+ * Stable identity for a retrieved span, for dedup and for the "is this pinned" test.
+ *
+ * Prefixed by table: a chunk id and a page id are both UUIDs and could never collide in practice,
+ * but an unprefixed key would silently compare across id spaces, which is the same category of
+ * mistake as the FK bug above.
+ */
+export function sourceKey(c: RetrievedChunk): string {
+  return c.chunkId ? `chunk:${c.chunkId}` : `page:${c.pageId}`;
+}
+
+/**
+ * True when a searched chunk's text is already covered by one of the pinned spans.
+ *
+ * Compares CHAR SPANS, not ids. Once a document has a page index, a pinned page and a searched
+ * chunk of the same passage are rows in different tables with different ids, so an id-based test
+ * silently stops matching and the same text is sent twice under two different [n] markers —
+ * paying tokens for it and inviting the model to cite the weaker anchor.
+ */
+function overlapsPinned(c: RetrievedChunk, pinned: RetrievedChunk[]): boolean {
+  if (c.charStart === null || c.charEnd === null) return false;
+  return pinned.some(
+    (p) =>
+      p.documentId === c.documentId &&
+      p.charStart !== null &&
+      p.charEnd !== null &&
+      // Half-open intervals: touching end-to-start is not an overlap.
+      c.charStart! < p.charEnd &&
+      p.charStart < c.charEnd!
+  );
+}
+
+/** Drops searched spans already covered by a pin, by identity or by char-span overlap. */
+export function withoutPinned(
+  searched: RetrievedChunk[],
+  pinned: RetrievedChunk[]
+): RetrievedChunk[] {
+  const keys = new Set(pinned.map(sourceKey));
+  return searched.filter(
+    (c) => !keys.has(sourceKey(c)) && !overlapsPinned(c, pinned)
+  );
 }
 
 interface ChunkRow {
@@ -31,6 +92,7 @@ interface PageRowResult {
   id: string;
   document_id: string;
   filename: string;
+  ordinal: number;
   page_number: number | null;
   page_label: string;
   char_start: number;
@@ -114,7 +176,7 @@ export class RagService {
       if (pin.pages.length) params.push(pin.pages);
 
       const pages = await this.pg.query<PageRowResult>(
-        `SELECT p.id, p.document_id, d.filename, p.page_number, p.page_label,
+        `SELECT p.id, p.document_id, d.filename, p.ordinal, p.page_number, p.page_label,
                 p.char_start, p.char_end, p.text
          FROM lex_document_pages p
          JOIN lex_documents d ON d.id = p.document_id
@@ -143,7 +205,15 @@ export class RagService {
         const content = r.text.slice(0, budget);
         budget -= content.length;
         out.push({
-          chunkId: r.id,
+          // A PAGE anchor: chunkId stays null so this id can never reach lex_citations.chunk_id.
+          chunkId: null,
+          pageId: r.id,
+          pageOrdinal: r.ordinal,
+          // Hashed from the FULL page text, not the budget-truncated `content`, and with
+          // pageTextHash — the same function the page-index rebuild re-anchors on. The row's own
+          // text_fingerprint is a different thing (normalised, and null under 200 chars), so using
+          // it here would make every re-anchor after a rebuild miss.
+          pageTextHash: pageTextHash(r.text),
           documentId: r.document_id,
           filename: r.filename,
           // The page's OWN number, so a quote from page 6 is cited as page 6. NULL for a format
@@ -198,6 +268,9 @@ export class RagService {
       left -= content.length;
       out.push({
         chunkId: r.id,
+        pageId: null,
+        pageOrdinal: null,
+        pageTextHash: null,
         documentId: r.document_id,
         filename: r.filename,
         pageFrom: r.page_from,
@@ -249,6 +322,9 @@ export class RagService {
     return reciprocalRankFusion([vecRes.rows, ftsRes.rows], { topK }).map(
       ({ item: r, score }) => ({
         chunkId: r.id,
+        pageId: null,
+        pageOrdinal: null,
+        pageTextHash: null,
         documentId: r.document_id,
         filename: r.filename,
         pageFrom: r.page_from,

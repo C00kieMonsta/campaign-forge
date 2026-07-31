@@ -341,7 +341,20 @@ export const translations = {
         "Changer de langue n'affecte que les nouveaux documents. Relancez les résumés pour mettre à jour ceux déjà traités (sans nouvelle OCR ni transcription).",
       resummarize: "Relancer les résumés",
       resummarizeQueued: "Résumés relancés",
-      resummarizeNone: "Aucun document à mettre à jour"
+      resummarizeNone: "Aucun document à mettre à jour",
+      pageIndex: "Index des pages",
+      pageIndexHint:
+        "Une citation ne peut indiquer « p. 6 » que si les pages du document sont indexées. Sans cet index, la page annoncée peut se tromper d'une ou deux pages. La reconstruction est gratuite : le texte est relu depuis le fichier d'origine, sans nouvelle OCR, transcription ni ré-indexation.",
+      pageIndexIndexed: "Pages exactes",
+      pageIndexPending: "À indexer",
+      pageIndexQueuedNow: "En cours",
+      pageIndexBlocked: "Bloqués",
+      pageIndexRebuild: "Reconstruire l'index des pages",
+      pageIndexQueued: "Index des pages en reconstruction",
+      pageIndexNone: "Tous les documents sont déjà indexés",
+      pageIndexBlockedHint:
+        "Ces documents n'ont pas pu être indexés gratuitement. Le motif est indiqué sous chaque fichier : le plus souvent parce que leur texte n'existe que via une OCR ou une transcription, qui nécessite un nouveau traitement complet et payant.",
+      pageIndexBlockedTruncated: "Seuls les 50 premiers fichiers sont listés."
     },
     logout: "Déconnexion"
   },
@@ -685,7 +698,21 @@ export const translations = {
         "Een taalwijziging geldt alleen voor nieuwe documenten. Vernieuw de samenvattingen om al verwerkte documenten bij te werken (zonder nieuwe OCR of transcriptie).",
       resummarize: "Samenvattingen vernieuwen",
       resummarizeQueued: "Samenvattingen vernieuwd",
-      resummarizeNone: "Geen documenten om bij te werken"
+      resummarizeNone: "Geen documenten om bij te werken",
+      pageIndex: "Pagina-index",
+      pageIndexHint:
+        "Een citaat kan alleen “p. 6” vermelden als de pagina's van het document geïndexeerd zijn. Zonder die index kan de vermelde pagina er een of twee naast zitten. Heropbouwen is gratis: de tekst wordt opnieuw uit het originele bestand gelezen, zonder nieuwe OCR, transcriptie of herindexering.",
+      pageIndexIndexed: "Exacte pagina's",
+      pageIndexPending: "Te indexeren",
+      pageIndexQueuedNow: "Bezig",
+      pageIndexBlocked: "Geblokkeerd",
+      pageIndexRebuild: "Pagina-index heropbouwen",
+      pageIndexQueued: "Pagina-index wordt heropgebouwd",
+      pageIndexNone: "Alle documenten zijn al geïndexeerd",
+      pageIndexBlockedHint:
+        "Deze documenten konden niet gratis geïndexeerd worden. De reden staat onder elk bestand: meestal omdat hun tekst alleen via OCR of transcriptie bestaat, wat een volledige, betaalde herverwerking vereist.",
+      pageIndexBlockedTruncated:
+        "Alleen de eerste 50 bestanden worden weergegeven."
     },
     logout: "Uitloggen"
   }

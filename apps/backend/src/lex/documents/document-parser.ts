@@ -806,6 +806,12 @@ async function parsePdf(
     const pages = Array.isArray(text) ? text : [text];
     return parsed(pages, {
       pageCount: totalPages ?? pages.length,
+      // Stated, not inferred: pdf.js told us these are pages, and `parsed`'s shape heuristic would
+      // call a ONE-page PDF a blob. That is not cosmetic — a blob gets divided into §-sections, so
+      // a 1-page filing would be indexed as §1/§2 and pinning "page 1" (which is what the viewer
+      // offers, since pdf.js reports numPages = 1) would return only the first section, silently
+      // handing the model half the page as though it were all of it.
+      pageKind: "page",
       // An empty text layer means a scan, not a failure → OCR owns it from here.
       needsOcr: pages.join("").trim().length === 0
     });

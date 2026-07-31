@@ -8,6 +8,7 @@ import type {
 } from "@packages/types";
 import { OpenAiService } from "../../shared/openai.service";
 import { PgService } from "../../shared/pg.service";
+import { sourceKey } from "../ai/rag.service";
 import { WorkspacesService } from "../workspaces/workspaces.service";
 import { extractCitedIndexes } from "./citation-markers";
 import { ContextAssembler } from "./context-assembler.service";
@@ -253,7 +254,9 @@ export class ConversationsService {
       const s = sources[n - 1];
       return {
         index: n,
-        chunkId: s.chunkId,
+        // The opaque source key, not a raw id — see lexCitationEventSchema. The real anchors go
+        // to their own typed columns in the INSERT below.
+        chunkId: sourceKey(s),
         documentId: s.documentId,
         filename: s.filename,
         pageFrom: s.pageFrom,
@@ -277,14 +280,24 @@ export class ConversationsService {
           if (c.index === undefined) continue;
           const s = sources[c.index - 1];
           if (!s) continue;
+          // chunk_id and page_id are separate foreign keys to separate tables, and RetrievedChunk
+          // sets exactly one of them. Writing a page's id into chunk_id raises 23503 INSIDE this
+          // transaction, which rolls back the `status = 'complete'` above — the user watches a
+          // complete answer stream in and then finds the message stuck pending, with the money
+          // already spent. page_ordinal + page_text_hash travel with the page id so a later
+          // rebuild of the page index can re-anchor this citation, or honestly refuse to.
           await client.query(
             `INSERT INTO lex_citations
-               (owner_email, message_id, chunk_id, document_id, quote, page_from, page_to, char_start, char_end)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+               (owner_email, message_id, chunk_id, page_id, page_ordinal, page_text_hash,
+                document_id, quote, page_from, page_to, char_start, char_end)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
             [
               ownerEmail,
               assistantId,
               s.chunkId,
+              s.pageId,
+              s.pageOrdinal,
+              s.pageTextHash,
               s.documentId,
               s.content.slice(0, 240),
               s.pageFrom,

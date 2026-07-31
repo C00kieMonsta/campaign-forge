@@ -8,6 +8,9 @@ import {
 import type {
   LexDocument,
   LexLifecycleState,
+  LexPageIndexBackfill,
+  LexPageIndexBlockedDocument,
+  LexPageIndexStatus,
   LexParseStatus,
   LexTranscript,
   LexUploadSlot,
@@ -68,6 +71,29 @@ interface TranscriptRow {
   duration_seconds: number | null;
   parse_status: LexParseStatus;
   updated_at: Date;
+}
+
+/**
+ * Blocked documents are named so the user knows which files to re-ingest, but the list is capped:
+ * this endpoint is polled while a backfill runs, and a bundle where every scan needs OCR would
+ * otherwise return the whole workspace on every poll.
+ */
+const PAGE_INDEX_BLOCKED_SAMPLE = 50;
+/** Enough of the worker's message to name the cause; page_index_error has no length limit. */
+const PAGE_INDEX_ERROR_CHARS = 400;
+
+interface PageIndexCountsRow {
+  total: number;
+  indexed: number;
+  pending: number;
+  queued: number;
+  blocked: number;
+}
+
+interface BlockedPageIndexRow {
+  id: string;
+  filename: string;
+  page_index_error: string;
 }
 
 function asStringArray(v: unknown): string[] {
@@ -380,6 +406,143 @@ export class DocumentsService {
       })
     );
     return { queued: res.rows.length };
+  }
+
+  /**
+   * Queues the per-page index backfill (mode 'pages') for the documents indexed before that index
+   * existed. Those documents have no page rows, so pinning page 6 falls back to the chunk path and
+   * hands the model a 4000-char window spanning pp. 4-8 — a quote from p. 8 then gets filed as
+   * "p. 4". The job re-derives the text from the stored S3 object and re-uses the existing chunks,
+   * embeddings and summary: no re-embedding, no OCR, no transcription, no paid call.
+   *
+   * The scope is narrow on purpose — a document qualifies only when it is retrievable AND has no
+   * index:
+   *   parse_status = 'ready'       anything else (needs_ocr, failed, still uploading) has no chunks,
+   *                               and the job's safety check is precisely "do the re-derived page
+   *                               offsets still slice back to every stored chunk". With nothing to
+   *                               verify against there is nothing to keep consistent, so such a
+   *                               document can only fail — the fix is a full re-ingest, not this.
+   *   lifecycle_state = 'active'   excludes the superseded duplicates. markIfDuplicate deletes a
+   *                               duplicate's chunks AND its page rows so it is not page-routable;
+   *                               writing page rows back would re-arm exactly what that removed and
+   *                               let one fact be cited from two copies of the same annex.
+   *   page_index_version = 0       an indexed document is left alone. A rebuild costs an S3 GET and
+   *                               a parse for no gain, and it DELETEs page rows that live citations
+   *                               may be anchored to (page_id is ON DELETE SET NULL).
+   *
+   * Note the version column alone is not proof that page rows exist — a document indexed and then
+   * re-ingested as a duplicate keeps page_index_version = 1 with zero rows — but such a document is
+   * 'duplicate'/'superseded' and so is already outside this scope twice over.
+   *
+   * A document that previously failed the backfill (page_index_error set, version still 0) DOES
+   * come back through here: the retry is free, and what blocked it can have been fixed outside
+   * SQL's view. pageIndexStatus is what tells the user which files stay stuck.
+   */
+  async buildPageIndexAll(ownerEmail: string): Promise<LexPageIndexBackfill> {
+    const res = await this.pg.query<{ id: string }>(
+      `INSERT INTO lex_ingestion_jobs (document_id, workspace_id, mode)
+       SELECT d.id, d.workspace_id, 'pages'
+       FROM lex_documents d
+       WHERE d.owner_email = $1
+         AND d.parse_status = 'ready'
+         AND d.lifecycle_state = 'active'
+         AND d.page_index_version = 0
+         -- Any mode, not only 'pages': a queued 'full' or 'reindex' writes the page rows itself, so
+         -- a 'pages' job behind it is wasted work — and one racing it would build the index against
+         -- text the other job is still replacing.
+         AND NOT EXISTS (
+           SELECT 1 FROM lex_ingestion_jobs j
+           WHERE j.document_id = d.id AND j.status IN ('queued', 'running')
+         )
+       RETURNING id`,
+      [ownerEmail]
+    );
+    this.logger.log(
+      JSON.stringify({
+        action: "lexBuildPageIndexAll",
+        ownerEmail,
+        queued: res.rows.length
+      })
+    );
+    return { queued: res.rows.length };
+  }
+
+  /**
+   * Progress readout for the backfill: a bulk job over a whole case file is unusable without one,
+   * and the blocked list is the only place the user learns WHICH files need a paid re-ingest
+   * (page_index_error is written by the worker and surfaced nowhere else).
+   *
+   * Counted over the same population the backfill targets — ready + active — so the three states
+   * are disjoint and sum to `total`; a document outside that scope is not "pending", it is simply
+   * not part of this migration.
+   */
+  async pageIndexStatus(ownerEmail: string): Promise<LexPageIndexStatus> {
+    const counts = await this.pg.query<PageIndexCountsRow>(
+      // ::int on every count because an unqualified count() is int8, which node-postgres hands
+      // back as a string — these are read straight into a numeric wire type.
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE d.page_index_version > 0)::int AS indexed,
+              count(*) FILTER (
+                WHERE d.page_index_version = 0 AND d.page_index_error IS NULL
+              )::int AS pending,
+              -- Blocked means "no index, and we know why". The version = 0 conjunct is what keeps
+              -- the buckets disjoint: the worker clears the error when it succeeds, so the two are
+              -- mutually exclusive today, but an error left behind next to a built index is stale
+              -- and the built index is what retrieval actually uses.
+              count(*) FILTER (
+                WHERE d.page_index_version = 0 AND d.page_index_error IS NOT NULL
+              )::int AS blocked,
+              -- Not a fourth bucket: un-indexed documents (pending, or a blocked one being
+              -- retried) with work in flight. The only signal that distinguishes "the worker is
+              -- chewing through the queue" from "the worker is down and nothing will ever move".
+              count(*) FILTER (
+                WHERE EXISTS (
+                  SELECT 1 FROM lex_ingestion_jobs j
+                  WHERE j.document_id = d.id AND j.mode = 'pages'
+                    AND j.status IN ('queued', 'running')
+                )
+              )::int AS queued
+       FROM lex_documents d
+       WHERE d.owner_email = $1
+         AND d.parse_status = 'ready' AND d.lifecycle_state = 'active'`,
+      [ownerEmail]
+    );
+    // An aggregate with no GROUP BY always returns exactly one row.
+    const row = counts.rows[0];
+
+    // Second read only when there is something to name — the healthy case (and every poll after a
+    // clean backfill) stays a single query.
+    const blockedDocuments: LexPageIndexBlockedDocument[] = [];
+    if (row.blocked > 0) {
+      const res = await this.pg.query<BlockedPageIndexRow>(
+        // Alphabetical rather than newest-first: the user reconciles this list against the folder
+        // they uploaded, and the cap means the order decides what they get to see.
+        `SELECT d.id, d.filename, left(d.page_index_error, $2) AS page_index_error
+         FROM lex_documents d
+         WHERE d.owner_email = $1
+           AND d.parse_status = 'ready' AND d.lifecycle_state = 'active'
+           AND d.page_index_version = 0 AND d.page_index_error IS NOT NULL
+         ORDER BY d.filename ASC
+         LIMIT $3`,
+        [ownerEmail, PAGE_INDEX_ERROR_CHARS, PAGE_INDEX_BLOCKED_SAMPLE]
+      );
+      for (const r of res.rows)
+        blockedDocuments.push({
+          documentId: r.id,
+          filename: r.filename,
+          error: r.page_index_error
+        });
+    }
+
+    return {
+      total: row.total,
+      indexed: row.indexed,
+      pending: row.pending,
+      queued: row.queued,
+      blocked: row.blocked,
+      blockedDocuments,
+      blockedTruncated: row.blocked > blockedDocuments.length
+    };
   }
 
   /** Re-runs speech-to-text on the stored audio, discarding the current transcript. */

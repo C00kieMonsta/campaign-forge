@@ -97,6 +97,33 @@ export class DocumentsController {
     return this.documents.resummarizeAll(user.email);
   }
 
+  /**
+   * Backfill the per-page index for every document indexed before it existed, across all of the
+   * user's workspaces (like resummarize-all, and for the same reason: the gap is an account-wide
+   * migration, not something to run case by case). Free — no re-embedding, no paid call — and safe
+   * to press twice: already-queued documents are skipped.
+   */
+  // Its own resource rather than "documents/…": every sibling here is "documents/:id/…", so a
+  // literal segment under documents/ is one declaration-order mistake away from being swallowed by
+  // @Get("documents/:id") and answering with a Postgres uuid-syntax 500 instead of a 404.
+  @Post("page-index/rebuild")
+  async buildPageIndexAll(@CurrentUser() user: AuthUser) {
+    return this.documents.buildPageIndexAll(user.email);
+  }
+
+  /**
+   * How far the per-page backfill has got, and the documents it cannot index. Account-wide, to
+   * match the rebuild it reports on — a workspace-scoped readout next to an account-wide button
+   * would show one case file's counters standing still while another's queue drains.
+   *
+   * Cheap enough to poll while the queue empties: two aggregate reads, and the blocked list is
+   * only fetched when there is one.
+   */
+  @Get("page-index")
+  async pageIndexStatus(@CurrentUser() user: AuthUser) {
+    return this.documents.pageIndexStatus(user.email);
+  }
+
   /** Re-run speech-to-text on the stored audio (one-off, discards the current transcript). */
   @Post("documents/:id/retranscribe")
   async retranscribe(@CurrentUser() user: AuthUser, @Param("id") id: string) {

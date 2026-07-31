@@ -230,6 +230,14 @@ export type SaveArtifactRequest = z.infer<typeof saveArtifactRequestSchema>;
 export const lexCitationEventSchema = z.object({
   /** 1-based marker index the assistant used inline, e.g. [1]. */
   index: z.number().optional(),
+  /**
+   * OPAQUE source identity, table-prefixed ("chunk:<uuid>" / "page:<uuid>") — NOT a foreign key.
+   * A cited span can live in lex_document_chunks or lex_document_pages, which are different tables
+   * with different foreign keys in lex_citations, so this field cannot be a bare id. The prefix is
+   * deliberate: if anyone does try to use it as an FK, Postgres rejects it as invalid uuid syntax
+   * rather than silently violating a constraint mid-transaction, which is how the untyped version
+   * of this field cost a user a complete answer.
+   */
   chunkId: z.string(),
   documentId: z.string(),
   filename: z.string().optional(),

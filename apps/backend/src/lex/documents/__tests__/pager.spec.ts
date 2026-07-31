@@ -1,9 +1,11 @@
-import { buildFullText } from "../chunker";
+import { buildFullText, chunkText } from "../chunker";
 import {
   assertPageRoundTrip,
   buildPageRows,
   continuesInto,
   fingerprintOf,
+  firstSpanMismatch,
+  pageTextHash,
   quoteSpanIn
 } from "../pager";
 
@@ -143,6 +145,101 @@ describe("pager", () => {
     it("returns null for text too short to identify", () => {
       expect(fingerprintOf("p. 4")).toBeNull();
       expect(fingerprintOf("")).toBeNull();
+    });
+  });
+
+  describe("pageTextHash", () => {
+    it("is stable for the same exact text", () => {
+      const text = "Le défendeur reconnaît une créance de 1 500 €.";
+      expect(pageTextHash(text)).toBe(pageTextHash(text));
+      expect(pageTextHash(text)).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    // The whole job of this hash is to notice that a rebuilt page no longer holds the text a
+    // citation was made against. fingerprintOf collapses exactly these differences, so a page
+    // re-exported with different spacing or casing would keep an anchor it no longer earns.
+    it("separates texts that fingerprintOf deliberately conflates", () => {
+      const a = "Reçu de dépôt recommandé ".repeat(20);
+      const b = a.toUpperCase().replace(/ /g, "  ");
+      expect(fingerprintOf(a)).toBe(fingerprintOf(b));
+      expect(pageTextHash(a)).not.toBe(pageTextHash(b));
+    });
+
+    // fingerprintOf returns null under 200 normalised chars, which is most signature pages and
+    // every short section. A nullable hash cannot anchor anything, so this one is never null.
+    it("hashes text far too short to fingerprint", () => {
+      expect(fingerprintOf("p. 4")).toBeNull();
+      expect(pageTextHash("p. 4")).toMatch(/^[0-9a-f]{64}$/);
+      expect(pageTextHash("")).toMatch(/^[0-9a-f]{64}$/);
+      expect(pageTextHash("p. 4")).not.toBe(pageTextHash("p. 5"));
+    });
+  });
+
+  describe("firstSpanMismatch", () => {
+    // The gate on page-indexing an already-indexed document: the chunks are a free, exact witness
+    // to the fullText they were offset against, so a re-derivation that still slices them out is
+    // the same text and page rows built from it agree with the chunk grain.
+    it("passes when every stored chunk still slices out of the re-derived text", () => {
+      const { fullText, pageRanges } = buildFullText([
+        "Page one text.",
+        "Page two text.",
+        "Page three text."
+      ]);
+      const spans = chunkText(fullText, pageRanges).map((c) => ({
+        chunkIndex: c.chunkIndex,
+        charStart: c.charStart,
+        charEnd: c.charEnd,
+        content: c.content
+      }));
+      expect(firstSpanMismatch(fullText, spans)).toBeNull();
+    });
+
+    // One character of drift is enough: the same quote would then resolve to different source
+    // through the page grain than through the chunk grain, depending only on whether the document
+    // happened to be pinned.
+    it("names the first chunk that no longer slices out, even for a one-char shift", () => {
+      const { fullText } = buildFullText(["Conclusions en réplique."]);
+      const shifted = " " + fullText;
+      const mismatch = firstSpanMismatch(shifted, [
+        {
+          chunkIndex: 0,
+          charStart: 0,
+          charEnd: fullText.length,
+          content: fullText
+        }
+      ]);
+      expect(mismatch?.chunkIndex).toBe(0);
+    });
+
+    it("reports the FIRST offending chunk, not the last", () => {
+      const fullText = "aaaaXbbbb";
+      const mismatch = firstSpanMismatch(fullText, [
+        { chunkIndex: 0, charStart: 0, charEnd: 4, content: "aaaa" },
+        { chunkIndex: 1, charStart: 4, charEnd: 5, content: "Y" },
+        { chunkIndex: 2, charStart: 5, charEnd: 9, content: "zzzz" }
+      ]);
+      expect(mismatch?.chunkIndex).toBe(1);
+    });
+
+    // char_start / char_end are nullable columns. A span that cannot be checked has not been
+    // verified, and "not verified" must never be treated as "verified".
+    it("treats a NULL offset as a mismatch rather than as a pass", () => {
+      expect(
+        firstSpanMismatch("anything", [
+          { chunkIndex: 7, charStart: null, charEnd: 8, content: "anything" }
+        ])?.chunkIndex
+      ).toBe(7);
+      expect(
+        firstSpanMismatch("anything", [
+          { chunkIndex: 7, charStart: 0, charEnd: null, content: "anything" }
+        ])?.chunkIndex
+      ).toBe(7);
+    });
+
+    // A document with no chunks vacuously "passes" here — which is why the caller must reject the
+    // empty case itself rather than reading null as a verification.
+    it("returns null for an empty span list", () => {
+      expect(firstSpanMismatch("anything", [])).toBeNull();
     });
   });
 

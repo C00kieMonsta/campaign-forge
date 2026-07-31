@@ -2,7 +2,12 @@ import { Injectable, Logger } from "@nestjs/common";
 import type { LexPin } from "@packages/types";
 import type OpenAI from "openai";
 import { PgService } from "../../shared/pg.service";
-import { RagService, type RetrievedChunk } from "../ai/rag.service";
+import {
+  RagService,
+  sourceKey,
+  withoutPinned,
+  type RetrievedChunk
+} from "../ai/rag.service";
 import {
   AuthoritiesService,
   type RetrievedArticle
@@ -90,10 +95,11 @@ export class ContextAssembler {
     // fills the remaining slots, skipping anything the pins already cover so a source is never
     // listed twice under two different [n] markers.
     const pinned = await this.rag.retrievePinned(ownerEmail, workspaceId, pins);
-    const pinnedChunkIds = new Set(pinned.map((c) => c.chunkId));
-    const searched = (
-      await this.rag.retrieve(ownerEmail, workspaceId, query, TOP_K)
-    ).filter((c) => !pinnedChunkIds.has(c.chunkId));
+    const pinnedKeys = new Set(pinned.map(sourceKey));
+    const searched = withoutPinned(
+      await this.rag.retrieve(ownerEmail, workspaceId, query, TOP_K),
+      pinned
+    );
 
     const searchSlots = Math.max(
       MIN_SEARCH_SLOTS,
@@ -145,11 +151,11 @@ export class ContextAssembler {
           .map(
             (s, i) =>
               `[${i + 1}] (${s.filename}${s.pageFrom ? `, p.${s.pageFrom}` : ""})` +
-              `${pinnedChunkIds.has(s.chunkId) ? " [PINNED BY THE USER]" : ""}:\n` +
+              `${pinnedKeys.has(sourceKey(s)) ? " [PINNED BY THE USER]" : ""}:\n` +
               // Pinned text is never truncated by the per-chunk cap — retrievePinned already
               // applied its own total budget, and clipping a page the user pointed at is worse
               // than a slightly longer prompt.
-              (pinnedChunkIds.has(s.chunkId)
+              (pinnedKeys.has(sourceKey(s))
                 ? s.content
                 : s.content.slice(0, MAX_CHUNK_CHARS))
           )

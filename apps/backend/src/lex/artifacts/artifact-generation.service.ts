@@ -9,7 +9,7 @@ import type {
 } from "@packages/types";
 import { z } from "zod";
 import { OpenAiService } from "../../shared/openai.service";
-import { RagService, type RetrievedChunk } from "../ai/rag.service";
+import { RagService, sourceKey, type RetrievedChunk } from "../ai/rag.service";
 import { languageName } from "../settings/language-instruction";
 import { SettingsService } from "../settings/settings.service";
 import { VerificationService, type ClaimDraft } from "./verification.service";
@@ -75,7 +75,7 @@ export class ArtifactGenerationService {
         citation:
           verdict.status === "supported" && verdict.source
             ? {
-                chunkId: verdict.source.chunkId,
+                chunkId: sourceKey(verdict.source),
                 documentId: verdict.source.documentId,
                 filename: verdict.source.filename,
                 pageFrom: verdict.source.pageFrom,

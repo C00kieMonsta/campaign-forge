@@ -16,6 +16,8 @@ import type {
   LexDocument,
   LexLanguage,
   LexMessage,
+  LexPageIndexBackfill,
+  LexPageIndexStatus,
   LexParseStatus,
   LexTask,
   LexTranscript,
@@ -458,6 +460,18 @@ export const api = {
           "/admin/lex/documents/resummarize-all",
           { method: "POST" }
         );
+      },
+      /**
+       * Builds the per-page index for documents ingested before it existed. Free: re-derives the
+       * text from S3, no re-embedding and no model call, so it is safe to fire from a button.
+       */
+      rebuildPageIndex() {
+        return request<LexPageIndexBackfill>("/admin/lex/page-index/rebuild", {
+          method: "POST"
+        });
+      },
+      pageIndexStatus() {
+        return request<LexPageIndexStatus>("/admin/lex/page-index");
       },
       get(id: string) {
         return request<{ document: LexDocument }>(`/admin/lex/documents/${id}`);

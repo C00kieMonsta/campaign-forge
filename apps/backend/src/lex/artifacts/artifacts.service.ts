@@ -14,7 +14,7 @@ import type {
 } from "@packages/types";
 import type { PoolClient } from "pg";
 import { PgService } from "../../shared/pg.service";
-import type { RetrievedChunk } from "../ai/rag.service";
+import { sourceKey, type RetrievedChunk } from "../ai/rag.service";
 import { WorkspacesService } from "../workspaces/workspaces.service";
 import {
   ArtifactGenerationService,
@@ -150,7 +150,7 @@ export class ArtifactsService {
     });
 
     const packByChunk = new Map<string, RetrievedChunk>();
-    for (const c of generated.pack) packByChunk.set(c.chunkId, c);
+    for (const c of generated.pack) packByChunk.set(sourceKey(c), c);
 
     const artifactStatus: LexArtifact["status"] =
       generated.verificationStatus === "verified" ? "verified" : "draft";
@@ -298,15 +298,25 @@ export class ArtifactsService {
       const contentHash = source
         ? createHash("sha256").update(source.content).digest("hex")
         : null;
+      // The anchors come from the RESOLVED source, never from claim.citation.chunkId — that field
+      // is an opaque table-prefixed identity (see lexCitationEventSchema), not a uuid, and it is
+      // also whatever was persisted in the artifact body, which may name a span this pack no
+      // longer contains. An unresolvable claim is filed with NULL anchors and keeps its quote:
+      // a citation that admits it is unanchored beats one pointing at a row that is not there.
       await client.query(
         `INSERT INTO lex_citations
-           (owner_email, artifact_version_id, claim_id, chunk_id, document_id, quote, page_from, page_to, char_start, char_end, chunk_content_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+           (owner_email, artifact_version_id, claim_id, chunk_id, page_id, page_ordinal,
+            page_text_hash, document_id, quote, page_from, page_to, char_start, char_end,
+            chunk_content_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
         [
           ownerEmail,
           artifactVersionId,
           claim.claimId,
-          claim.citation.chunkId,
+          source?.chunkId ?? null,
+          source?.pageId ?? null,
+          source?.pageOrdinal ?? null,
+          source?.pageTextHash ?? null,
           claim.citation.documentId,
           claim.citation.quote,
           claim.citation.pageFrom,

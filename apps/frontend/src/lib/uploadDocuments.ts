@@ -4,18 +4,12 @@ import {
   type LexDocument
 } from "@packages/types";
 import { api } from "./api";
+import { toUploadCandidates, type UploadCandidate } from "./uploadCandidates";
 
-// How many files are PUT to S3 at once. Enough to saturate a normal connection without opening
-// 50 sockets and starving the app's own API calls.
-const PUT_CONCURRENCY = 4;
-
-export interface UploadCandidate {
-  file: File;
-  /** Folder path the file came from, when a folder was dropped. */
-  sourcePath?: string;
-  /** Filename as it will be stored (folder-prefixed when it came from a folder). */
-  filename: string;
-}
+// Re-exported so existing importers keep working; the implementation lives in a module with no
+// import.meta.env dependency so it can be unit-tested.
+export { toUploadCandidates };
+export type { UploadCandidate };
 
 export interface UploadOutcome {
   documents: LexDocument[];
@@ -25,31 +19,9 @@ export interface UploadOutcome {
   failed: string[];
 }
 
-/**
- * Flattens a picked FileList into upload candidates.
- *
- * A dropped folder arrives as a flat FileList where each File carries its relative path in
- * `webkitRelativePath`. The path is folded into the filename (so "Pièces/2024/dagvaarding.pdf"
- * becomes "Pièces › 2024 › dagvaarding.pdf") because the rest of the system — the timeline, the
- * chat's source chips, citations in generated documents — identifies a document by its filename
- * alone. A bare "dagvaarding.pdf" among 50 files from 8 folders would be unidentifiable.
- * The untouched path is also kept in `sourcePath` for filtering.
- */
-export function toUploadCandidates(files: File[]): UploadCandidate[] {
-  return files.map((file) => {
-    const relative = file.webkitRelativePath || "";
-    // The first segment of webkitRelativePath is the dropped folder itself; keep it, it is the
-    // most meaningful label ("Pièces adverses"). Drop only the filename segment.
-    const segments = relative.split("/").filter(Boolean).slice(0, -1);
-    return {
-      file,
-      sourcePath: relative || undefined,
-      filename: segments.length
-        ? `${segments.join(" › ")} › ${file.name}`
-        : file.name
-    };
-  });
-}
+// How many files are PUT to S3 at once. Enough to saturate a normal connection without opening
+// 50 sockets and starving the app's own API calls.
+const PUT_CONCURRENCY = 4;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];

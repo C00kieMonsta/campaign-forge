@@ -60,6 +60,56 @@ export function fingerprintOf(text: string): string | null {
 }
 
 /**
+ * sha256 of the EXACT page text — the staleness detector for a citation's page anchor
+ * (lex_citations.page_text_hash), mirroring what chunk_content_hash does for the chunk grain.
+ *
+ * Deliberately NOT `fingerprintOf`, whose two properties are both wrong for this job: it collapses
+ * case, whitespace, quotes and dashes (so a page whose text materially changed in those respects
+ * would still be judged unchanged and keep an anchor it no longer earns), and it returns null under
+ * MIN_FINGERPRINT_CHARS (so a signature page or a short section could never be anchored at all).
+ *
+ * Any future writer of page-anchored citations MUST hash with this same function: the re-anchor
+ * after a page-index rebuild compares against it, so a different hash silently drops every anchor.
+ */
+export function pageTextHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** A stored chunk's anchor, as read back from lex_document_chunks. */
+export interface IndexedSpan {
+  chunkIndex: number;
+  charStart: number | null;
+  charEnd: number | null;
+  content: string;
+}
+
+/**
+ * Returns the first span that does not slice back out of `fullText`, or null when every one does.
+ *
+ * This is the gate on building a page index for a document that is ALREADY indexed. Page rows are
+ * nothing but offsets into a fullText, so if the text re-derived today differs by one character from
+ * the text the chunks were built against, the same quote resolves to different source through the
+ * two grains — and which one answers depends on whether the document happens to be pinned. For a
+ * tool whose output is filed in court that is not a tolerable ambiguity, so the re-derivation is
+ * checked against the chunks rather than trusted.
+ *
+ * NULL offsets count as a mismatch: char_start/char_end are nullable, and a span that cannot be
+ * checked has not been verified.
+ */
+export function firstSpanMismatch(
+  fullText: string,
+  spans: IndexedSpan[]
+): IndexedSpan | null {
+  for (const span of spans) {
+    if (span.charStart === null || span.charEnd === null) return span;
+    if (fullText.slice(span.charStart, span.charEnd) !== span.content) {
+      return span;
+    }
+  }
+  return null;
+}
+
+/**
  * Abbreviations whose trailing period is NOT a sentence end. Belgian filings are dense with them,
  * and "…conformément à l'art." / "374 du Code civil" split across two pages is a continuation that
  * a naive full-stop test would miss — leaving the article number stranded from its article.
