@@ -1,16 +1,18 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Button, Input, Label } from "@packages/ui";
 import { Lock } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
-import { Button, Input, Label } from "@packages/ui";
+import { useActiveApp } from "@/superapp/ActiveAppContext";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const { login } = useAuth();
   const { t } = useLanguage();
+  const { app } = useActiveApp();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -18,7 +20,7 @@ export default function LoginPage() {
     e.preventDefault();
     const success = await login(email, password);
     if (success) {
-      navigate("/dashboard");
+      navigate(app.basePath);
     } else {
       toast({ title: t.login.error, variant: "destructive" });
     }

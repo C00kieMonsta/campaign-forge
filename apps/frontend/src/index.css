@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -38,29 +38,80 @@
 }
 
 @layer base {
-  * { @apply border-border; }
-  body { @apply bg-background text-foreground font-sans antialiased; }
-  h1, h2, h3, h4, h5, h6 { @apply font-serif; }
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-serif;
+  }
 }
 
 @layer components {
   .gradient-hero {
-    background: linear-gradient(135deg, hsl(140 20% 97%) 0%, hsl(140 18% 92%) 50%, hsl(140 20% 90%) 100%);
+    background: linear-gradient(
+      135deg,
+      hsl(140 20% 97%) 0%,
+      hsl(140 18% 92%) 50%,
+      hsl(140 20% 90%) 100%
+    );
   }
   .gradient-terracotta {
-    background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(142 65% 28%) 100%);
+    background: linear-gradient(
+      135deg,
+      hsl(var(--primary)) 0%,
+      hsl(142 65% 28%) 100%
+    );
   }
   .card-elevated {
     @apply bg-card rounded-xl shadow-lg border border-border/50;
   }
-  .animate-fade-up { animation: fadeUp 0.6s ease-out forwards; }
-  .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
-  .animate-scale-in { animation: scaleIn 0.5s ease-out forwards; }
+  .animate-fade-up {
+    animation: fadeUp 0.6s ease-out forwards;
+  }
+  .animate-fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+  }
+  .animate-scale-in {
+    animation: scaleIn 0.5s ease-out forwards;
+  }
 }
 
-@keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
 
 /* Tiptap / ProseMirror editor */
 .tiptap-editor .ProseMirror {
@@ -69,14 +120,38 @@
   line-height: 1.7;
   color: hsl(var(--foreground));
 }
-.tiptap-editor .ProseMirror > * + * { margin-top: 0.65em; }
-.tiptap-editor .ProseMirror h1 { font-size: 1.6em; font-weight: 700; margin-top: 0.8em; }
-.tiptap-editor .ProseMirror h2 { font-size: 1.3em; font-weight: 600; margin-top: 0.8em; }
-.tiptap-editor .ProseMirror ul, .tiptap-editor .ProseMirror ol { padding-left: 1.5rem; }
-.tiptap-editor .ProseMirror ul { list-style-type: disc; }
-.tiptap-editor .ProseMirror ol { list-style-type: decimal; }
-.tiptap-editor .ProseMirror a { color: hsl(var(--primary)); text-decoration: underline; }
-.tiptap-editor .ProseMirror hr { border: none; border-top: 1px solid hsl(var(--border)); margin: 1em 0; }
+.tiptap-editor .ProseMirror > * + * {
+  margin-top: 0.65em;
+}
+.tiptap-editor .ProseMirror h1 {
+  font-size: 1.6em;
+  font-weight: 700;
+  margin-top: 0.8em;
+}
+.tiptap-editor .ProseMirror h2 {
+  font-size: 1.3em;
+  font-weight: 600;
+  margin-top: 0.8em;
+}
+.tiptap-editor .ProseMirror ul,
+.tiptap-editor .ProseMirror ol {
+  padding-left: 1.5rem;
+}
+.tiptap-editor .ProseMirror ul {
+  list-style-type: disc;
+}
+.tiptap-editor .ProseMirror ol {
+  list-style-type: decimal;
+}
+.tiptap-editor .ProseMirror a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+}
+.tiptap-editor .ProseMirror hr {
+  border: none;
+  border-top: 1px solid hsl(var(--border));
+  margin: 1em 0;
+}
 .tiptap-editor .ProseMirror img {
   max-width: 100%;
   height: auto;
@@ -94,4 +169,130 @@
   float: left;
   height: 0;
   pointer-events: none;
+}
+
+/* Assistant replies are rendered from Markdown (see MarkdownMessage). Hand-rolled rather than
+   @tailwindcss/typography: only a chat bubble needs prose styling, and the plugin's scale
+   fights the compact bubble layout. Sizes inherit the bubble's text-sm. */
+.lex-markdown > *:first-child {
+  margin-top: 0;
+}
+.lex-markdown > *:last-child {
+  margin-bottom: 0;
+}
+.lex-markdown p {
+  margin: 0.5em 0;
+  line-height: 1.6;
+}
+.lex-markdown h1,
+.lex-markdown h2,
+.lex-markdown h3,
+.lex-markdown h4 {
+  font-family: var(--font-serif, inherit);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1em 0 0.4em;
+}
+.lex-markdown h1 {
+  font-size: 1.25em;
+}
+.lex-markdown h2 {
+  font-size: 1.15em;
+}
+.lex-markdown h3 {
+  font-size: 1.05em;
+}
+.lex-markdown h4 {
+  font-size: 1em;
+}
+.lex-markdown ul,
+.lex-markdown ol {
+  margin: 0.5em 0;
+  padding-left: 1.25em;
+}
+.lex-markdown ul {
+  list-style: disc;
+}
+.lex-markdown ol {
+  list-style: decimal;
+}
+.lex-markdown li {
+  margin: 0.2em 0;
+}
+.lex-markdown li > ul,
+.lex-markdown li > ol {
+  margin: 0.2em 0;
+}
+.lex-markdown a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+}
+.lex-markdown strong {
+  font-weight: 600;
+}
+.lex-markdown em {
+  font-style: italic;
+}
+.lex-markdown hr {
+  border: none;
+  border-top: 1px solid hsl(var(--border));
+  margin: 1em 0;
+}
+.lex-markdown blockquote {
+  margin: 0.6em 0;
+  padding: 0.1em 0 0.1em 0.8em;
+  border-left: 3px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+.lex-markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  background: hsl(var(--muted));
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+.lex-markdown pre {
+  margin: 0.6em 0;
+  padding: 0.7em 0.8em;
+  background: hsl(var(--muted));
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.lex-markdown pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+.lex-markdown table {
+  width: 100%;
+  margin: 0.6em 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+  display: block;
+  overflow-x: auto;
+}
+.lex-markdown th,
+.lex-markdown td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.35em 0.55em;
+  text-align: left;
+}
+.lex-markdown th {
+  background: hsl(var(--muted));
+  font-weight: 600;
+}
+
+/* Inline source markers ([1], [2], …) produced by remark-citation-markers. */
+.lex-markdown .lex-cite {
+  display: inline-block;
+  margin-left: 0.15em;
+  padding: 0 0.3em;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground) / 0.75);
+  font-size: 0.7em;
+  font-style: normal;
+  line-height: 1.6;
+  vertical-align: super;
+  cursor: help;
 }

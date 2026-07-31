@@ -1,0 +1,26 @@
+# Local dev Postgres + pgvector for the Lex app. NOT for production.
+#
+#   docker compose -f docker-compose.lex-dev.yml up -d
+#   DATABASE_URL=postgresql://lex:lex@localhost:5433/lex pnpm --filter @apps/backend migrate
+#
+# (Port 5433 avoids clashing with a local Postgres on 5432.)
+services:
+  lex-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: lex-postgres-dev
+    environment:
+      POSTGRES_USER: lex
+      POSTGRES_PASSWORD: lex
+      POSTGRES_DB: lex
+    ports:
+      - "5433:5432"
+    volumes:
+      - lex-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lex -d lex"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  lex-pgdata:

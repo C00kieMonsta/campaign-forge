@@ -69,7 +69,7 @@ export default function CampaignEditor() {
     } catch (err) {
       console.log(JSON.stringify({ event: "CampaignEditor:loadError", error: String(err) }));
       toast({ title: String(err), variant: "destructive" });
-      if (id) navigate("/campaigns");
+      if (id) navigate("/campaigns/mailings");
     } finally {
       setIsLoading(false);
     }
@@ -148,7 +148,7 @@ export default function CampaignEditor() {
         await api.campaigns.create(payload);
         toast({ title: "Campaign created" });
       }
-      navigate("/campaigns");
+      navigate("/campaigns/mailings");
     } catch (err) {
       console.log(JSON.stringify({ event: "CampaignEditor:saveError", error: String(err) }));
       toast({ title: String(err), variant: "destructive" });
@@ -170,7 +170,7 @@ export default function CampaignEditor() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/campaigns")}>
+          <Button variant="ghost" size="icon" onClick={() => navigate("/campaigns/mailings")}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <h1 className="text-2xl font-serif font-bold text-foreground">
@@ -183,7 +183,7 @@ export default function CampaignEditor() {
               {t.campaigns.sent}
             </span>
           )}
-          <Button variant="outline" onClick={() => navigate("/campaigns")}>
+          <Button variant="outline" onClick={() => navigate("/campaigns/mailings")}>
             {t.campaignForm.cancel}
           </Button>
           {!isSent && (

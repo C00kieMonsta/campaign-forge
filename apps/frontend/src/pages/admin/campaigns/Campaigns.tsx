@@ -248,7 +248,7 @@ export default function Campaigns() {
             </label>
           )}
           <Button
-            onClick={() => navigate("/campaigns/new")}
+            onClick={() => navigate("/campaigns/mailings/new")}
             className="gradient-terracotta text-white hover:opacity-90"
           >
             <Plus className="h-4 w-4 mr-2" />
@@ -266,7 +266,7 @@ export default function Campaigns() {
           <div className="p-12 text-center text-muted-foreground flex flex-col items-center gap-4">
             <span>{t.campaigns.noCampaigns}</span>
             <Button
-              onClick={() => navigate("/campaigns/new")}
+              onClick={() => navigate("/campaigns/mailings/new")}
               className="gradient-terracotta text-white hover:opacity-90"
             >
               <Plus className="h-4 w-4 mr-2" />
@@ -277,7 +277,7 @@ export default function Campaigns() {
           <div className="p-12 text-center text-muted-foreground flex flex-col items-center gap-4">
             <span>{t.campaigns.noVisibleCampaigns}</span>
             <Button
-              onClick={() => navigate("/campaigns/new")}
+              onClick={() => navigate("/campaigns/mailings/new")}
               className="gradient-terracotta text-white hover:opacity-90"
             >
               <Plus className="h-4 w-4 mr-2" />
@@ -302,7 +302,7 @@ export default function Campaigns() {
                 <TableRow
                   key={campaign.campaignId}
                   onClick={() =>
-                    navigate(`/campaigns/${campaign.campaignId}/edit`)
+                    navigate(`/campaigns/mailings/${campaign.campaignId}/edit`)
                   }
                   className="cursor-pointer"
                 >

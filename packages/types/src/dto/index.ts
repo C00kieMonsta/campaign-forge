@@ -3,3 +3,4 @@ export * from "./primitives";
 export * from "./common";
 export * from "./contacts";
 export * from "./campaigns";
+export * from "./lex";

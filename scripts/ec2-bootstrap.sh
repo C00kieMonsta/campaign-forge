@@ -24,6 +24,15 @@ ssm_get() {
     --query Parameter.Value \
     --output text
 }
+# Returns empty (not a failure) when the param is absent — for optional Lex keys.
+ssm_get_optional() {
+  aws ssm get-parameter \
+    --region "$REGION" \
+    --name "${SSM_PREFIX}/$1" \
+    --with-decryption \
+    --query Parameter.Value \
+    --output text 2>/dev/null || true
+}
 
 # ── System packages ───────────────────────────────────────────────────────────
 log "Installing system packages..."
@@ -55,6 +64,10 @@ UNSUBSCRIBE_SECRET=$(ssm_get "UNSUBSCRIBE_SECRET")
 PUBLIC_BASE_URL=$(ssm_get "PUBLIC_BASE_URL")
 ADMIN_CREDENTIALS=$(ssm_get "ADMIN_CREDENTIALS")
 JWT_SECRET=$(ssm_get "JWT_SECRET")
+# Optional Lex keys (absent until Phase 1 provisions the Lex infra)
+DATABASE_URL=$(ssm_get_optional "DATABASE_URL")
+OPENAI_API_KEY_SECRET_ARN=$(ssm_get_optional "OPENAI_API_KEY_SECRET_ARN")
+LEX_DOCUMENTS_BUCKET=$(ssm_get_optional "LEX_DOCUMENTS_BUCKET")
 
 # ── Clone repo ────────────────────────────────────────────────────────────────
 log "Cloning repository..."
@@ -80,6 +93,11 @@ PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
 ADMIN_CREDENTIALS=${ADMIN_CREDENTIALS}
 JWT_SECRET=${JWT_SECRET}
 EOF
+# Append optional Lex keys only when present, so an empty value never fails startup.
+append_if_set() { if [ -n "$2" ]; then echo "$1=$2" >> "${APP_DIR}/apps/backend/.env"; fi; }
+append_if_set DATABASE_URL "$DATABASE_URL"
+append_if_set OPENAI_API_KEY_SECRET_ARN "$OPENAI_API_KEY_SECRET_ARN"
+append_if_set LEX_DOCUMENTS_BUCKET "$LEX_DOCUMENTS_BUCKET"
 chown "$APP_USER:$APP_USER" "${APP_DIR}/apps/backend/.env"
 chmod 600 "${APP_DIR}/apps/backend/.env"
 
@@ -120,6 +138,22 @@ server {
         proxy_read_timeout     600s;
         proxy_send_timeout     600s;
         client_max_body_size   1m;
+    }
+
+    # Lex chat uses Server-Sent Events: disable buffering and allow long-lived streams.
+    # (Endpoint arrives in Phase 3; this block is harmless until then.)
+    location ~ ^/api/admin/lex/conversations/[^/]+/messages/stream$ {
+        proxy_pass                http://localhost:3001;
+        proxy_http_version        1.1;
+        proxy_set_header          Host $host;
+        proxy_set_header          X-Real-IP $remote_addr;
+        proxy_set_header          X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header          X-Forwarded-Proto $scheme;
+        proxy_buffering           off;
+        proxy_cache               off;
+        proxy_read_timeout        600s;
+        proxy_send_timeout        600s;
+        chunked_transfer_encoding on;
     }
 
     location / {

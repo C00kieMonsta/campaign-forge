@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      migrations: ${{ steps.filter.outputs.migrations }}
       landing: ${{ steps.filter.outputs.landing }}
       packages: ${{ steps.filter.outputs.packages }}
       infra: ${{ steps.filter.outputs.infra }}
@@ -24,6 +26,7 @@ jobs:
         with:
           files: |
             apps/frontend/**
+            apps/backend/**
             apps/landing/**
             packages/**
             infrastructure/**
@@ -37,7 +40,19 @@ jobs:
             else
               echo "frontend=false" >> $GITHUB_OUTPUT
             fi
-            
+
+            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -qE "apps/backend|packages/"; then
+              echo "backend=true" >> $GITHUB_OUTPUT
+            else
+              echo "backend=false" >> $GITHUB_OUTPUT
+            fi
+
+            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -qE "apps/backend/migrations/"; then
+              echo "migrations=true" >> $GITHUB_OUTPUT
+            else
+              echo "migrations=false" >> $GITHUB_OUTPUT
+            fi
+
             if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -qE "apps/landing"; then
               echo "landing=true" >> $GITHUB_OUTPUT
             else
@@ -57,6 +72,8 @@ jobs:
             fi
           else
             echo "frontend=false" >> $GITHUB_OUTPUT
+            echo "backend=false" >> $GITHUB_OUTPUT
+            echo "migrations=false" >> $GITHUB_OUTPUT
             echo "landing=false" >> $GITHUB_OUTPUT
             echo "packages=false" >> $GITHUB_OUTPUT
             echo "infra=false" >> $GITHUB_OUTPUT
@@ -82,6 +99,64 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+  test-backend:
+    name: Test Backend (if changed)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Build workspace packages
+        uses: ./.github/actions/build-packages
+
+      - name: Run type check
+        run: pnpm --filter @apps/backend run type-check
+
+      - name: Run backend tests
+        run: pnpm --filter @apps/backend test
+
+  test-migrations:
+    name: Validate Migrations (if changed)
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: lex
+          POSTGRES_PASSWORD: lex
+          POSTGRES_DB: lex
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lex -d lex"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-env
+
+      - name: Run migrations against real pgvector
+        working-directory: apps/backend
+        env:
+          DATABASE_URL: postgresql://lex:lex@localhost:5432/lex
+        run: pnpm migrate
+
+      - name: Assert schema + pgvector extension exist
+        working-directory: apps/backend
+        env:
+          DATABASE_URL: postgresql://lex:lex@localhost:5432/lex
+        run: |
+          node -e "const {Client}=require('pg');const c=new Client({connectionString:process.env.DATABASE_URL});(async()=>{await c.connect();const ext=await c.query(\"select 1 from pg_extension where extname='vector'\");const t=await c.query(\"select 1 from information_schema.tables where table_name='lex_document_chunks'\");if(!ext.rowCount||!t.rowCount){console.error('missing vector extension or lex_* tables');process.exit(1);}console.log('migrations validated');await c.end();})().catch((e)=>{console.error(e);process.exit(1);});"
 
   test-frontend:
     name: Test Frontend (if changed)
@@ -154,7 +229,7 @@ jobs:
   # Summary job
   pr-checks-complete:
     name: PR Checks Complete
-    needs: [changes, test-packages, test-frontend, test-landing, validate-infra]
+    needs: [changes, test-packages, test-backend, test-migrations, test-frontend, test-landing, validate-infra]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -162,11 +237,14 @@ jobs:
         run: |
           echo "📊 PR Check Results:"
           echo "Frontend changed: ${{ needs.changes.outputs.frontend }}"
+          echo "Backend changed: ${{ needs.changes.outputs.backend }}"
           echo "Landing changed: ${{ needs.changes.outputs.landing }}"
           echo "Packages changed: ${{ needs.changes.outputs.packages }}"
           echo "Infrastructure changed: ${{ needs.changes.outputs.infra }}"
           echo ""
           if [[ "${{ needs.test-packages.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-backend.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-migrations.result }}" == "failure" ]] || \
              [[ "${{ needs.test-frontend.result }}" == "failure" ]] || \
              [[ "${{ needs.test-landing.result }}" == "failure" ]] || \
              [[ "${{ needs.validate-infra.result }}" == "failure" ]]; then

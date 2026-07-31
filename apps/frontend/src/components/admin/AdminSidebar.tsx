@@ -1,20 +1,25 @@
+import { LogOut, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Mail, LogOut, ChefHat, Tags } from "lucide-react";
-import { useLanguage } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { Language } from "@/i18n/translations";
-
-const menuItems = [
-  { path: "/dashboard", icon: LayoutDashboard, labelKey: "dashboard" as const },
-  { path: "/contacts", icon: Users, labelKey: "contacts" as const },
-  { path: "/groups", icon: Tags, labelKey: "groups" as const },
-  { path: "/campaigns", icon: Mail, labelKey: "campaigns" as const },
-];
+import { useActiveApp } from "@/superapp/ActiveAppContext";
+import { isNavItemActive } from "@/superapp/registry";
+import AppSwitcher from "./AppSwitcher";
 
 const languages: { value: Language; label: string }[] = [
   { value: "fr", label: "FR" },
-  { value: "nl", label: "NL" },
+  { value: "nl", label: "NL" }
 ];
+
+const navItemClass = (isActive: boolean, collapsed: boolean) =>
+  `flex items-center rounded-lg text-sm font-medium transition-colors ${
+    collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5"
+  } ${
+    isActive
+      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+      : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+  }`;
 
 function LanguageSwitcher() {
   const { language, setLanguage } = useLanguage();
@@ -38,66 +43,103 @@ function LanguageSwitcher() {
   );
 }
 
-export default function AdminSidebar() {
+/**
+ * The shell's one sidebar: brand, app switcher, then the nav of whichever app is active. Items that
+ * belong to no single app (settings, language, logout) sit below the divider so switching apps
+ * visibly changes only the middle section.
+ *
+ * Collapses to an icon rail. Every label becomes a `title` in that state, so nothing is
+ * unreachable — collapsing trades discoverability for width, not function.
+ */
+export default function AdminSidebar({
+  collapsed,
+  onToggle
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
   const location = useLocation();
   const navigate = useNavigate();
   const { t } = useLanguage();
   const { logout } = useAuth();
+  const { app } = useActiveApp();
 
   const handleLogout = () => {
     logout();
     navigate("/login");
   };
 
-  const menuLabels: Record<string, string> = {
-    dashboard: t.dashboard.title,
-    contacts: t.dashboard.contacts,
-    groups: t.dashboard.groups,
-    campaigns: t.dashboard.campaigns,
-  };
-
   return (
-    <aside className="w-64 shrink-0 min-h-screen bg-sidebar text-sidebar-foreground flex flex-col">
-      <div className="p-6">
-        <div className="flex items-center gap-3 mb-2">
-          <ChefHat className="h-8 w-8 text-sidebar-primary" />
-          <div>
-            <h1 className="text-lg font-serif font-bold">Monique</h1>
-            <p className="text-xs text-sidebar-foreground/60">Admin Panel</p>
-          </div>
+    <aside
+      className={`${collapsed ? "w-16" : "w-64"} shrink-0 min-h-screen bg-sidebar text-sidebar-foreground flex flex-col transition-[width] duration-200`}
+    >
+      <div className={`pt-6 pb-4 space-y-2 ${collapsed ? "px-2" : "px-3"}`}>
+        {!collapsed ? (
+          <p className="px-3 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-sidebar-foreground/40">
+            Monique
+          </p>
+        ) : null}
+        <div className="flex items-center gap-1">
+          {collapsed ? null : (
+            <div className="min-w-0 flex-1">
+              <AppSwitcher />
+            </div>
+          )}
+          <button
+            onClick={onToggle}
+            title={collapsed ? t.nav.expandSidebar : t.nav.collapseSidebar}
+            aria-label={collapsed ? t.nav.expandSidebar : t.nav.collapseSidebar}
+            className={`shrink-0 rounded-lg p-2 text-sidebar-foreground/50 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground ${collapsed ? "mx-auto" : ""}`}
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="h-5 w-5" />
+            ) : (
+              <PanelLeftClose className="h-5 w-5" />
+            )}
+          </button>
         </div>
       </div>
 
-      <nav className="flex-1 px-3 space-y-1">
-        {menuItems.map((item) => {
-          const isActive = location.pathname === item.path;
-          return (
-            <Link
-              key={item.path}
-              to={item.path}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              }`}
-            >
-              <item.icon className="h-5 w-5" />
-              {menuLabels[item.labelKey]}
-            </Link>
-          );
-        })}
+      <nav className={`flex-1 space-y-1 ${collapsed ? "px-2" : "px-3"}`}>
+        {app.nav.map((item) => (
+          <Link
+            key={item.path}
+            to={item.path}
+            title={collapsed ? item.label(t) : undefined}
+            className={navItemClass(
+              isNavItemActive(item, location.pathname),
+              collapsed
+            )}
+          >
+            <item.icon className="h-5 w-5 shrink-0" />
+            {collapsed ? null : item.label(t)}
+          </Link>
+        ))}
       </nav>
 
-      <div className="p-4 space-y-3 border-t border-sidebar-border">
-        <div className="flex justify-center">
-          <LanguageSwitcher />
-        </div>
+      <div
+        className={`space-y-3 border-t border-sidebar-border ${collapsed ? "p-2" : "p-3"}`}
+      >
+        <Link
+          to="/settings"
+          title={collapsed ? t.settings.title : undefined}
+          className={navItemClass(location.pathname === "/settings", collapsed)}
+        >
+          <Settings className="h-5 w-5 shrink-0" />
+          {collapsed ? null : t.settings.title}
+        </Link>
+        {collapsed ? null : (
+          <div className="flex justify-center">
+            <LanguageSwitcher />
+          </div>
+        )}
         <button
           onClick={handleLogout}
-          className="flex items-center gap-3 px-3 py-2.5 w-full rounded-lg text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"
+          title={collapsed ? t.logout : undefined}
+          className={`${navItemClass(false, collapsed)} w-full`}
         >
-          <LogOut className="h-5 w-5" />
-          {t.logout}
+          <LogOut className="h-5 w-5 shrink-0" />
+          {collapsed ? null : t.logout}
         </button>
       </div>
     </aside>

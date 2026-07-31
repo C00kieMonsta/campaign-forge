@@ -4,18 +4,24 @@ import { BrowserRouter } from "react-router-dom";
 import { Toaster } from "@/components/Toaster";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { LanguageProvider } from "@/contexts/LanguageContext";
+import { LexStoreProvider } from "@/store/LexStoreProvider";
+import { ActiveAppProvider } from "@/superapp/ActiveAppContext";
 import App from "./App";
 import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
-      <LanguageProvider>
-        <AuthProvider>
-          <Toaster />
-          <App />
-        </AuthProvider>
-      </LanguageProvider>
+      <ActiveAppProvider>
+        <LanguageProvider>
+          <AuthProvider>
+            <Toaster />
+            <LexStoreProvider>
+              <App />
+            </LexStoreProvider>
+          </AuthProvider>
+        </LanguageProvider>
+      </ActiveAppProvider>
     </BrowserRouter>
   </StrictMode>
 );

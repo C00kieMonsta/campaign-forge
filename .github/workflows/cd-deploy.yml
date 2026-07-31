@@ -178,6 +178,24 @@ jobs:
       - name: Build backend
         run: pnpm --filter @apps/backend build
 
+      - name: Backup current backend on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 60s
+          script: |
+            set -e
+            APP_DIR="/home/ec2-user/campaign-forge"
+            if [ -d "${APP_DIR}/apps/backend/dist" ]; then
+              rm -rf "${APP_DIR}/apps/backend/dist.prev"
+              cp -r "${APP_DIR}/apps/backend/dist" "${APP_DIR}/apps/backend/dist.prev"
+              echo "✅ Backed up current dist → dist.prev (for rollback)"
+            else
+              echo "ℹ️ No existing dist to back up (first deploy)"
+            fi
+
       - name: Upload dist to EC2
         uses: appleboy/scp-action@v1.0.0
         with:
@@ -211,6 +229,16 @@ jobs:
                 --query "Parameter.Value" \
                 --output text
             }
+            # Returns empty (not a failure) when the param does not exist yet — used for
+            # optional Lex keys that only appear once the Lex infra is provisioned.
+            ssm_get_optional() {
+              aws ssm get-parameter \
+                --region "$REGION" \
+                --name "${PREFIX}/$1" \
+                --with-decryption \
+                --query "Parameter.Value" \
+                --output text 2>/dev/null || true
+            }
 
             cat > "${APP_DIR}/apps/backend/.env" <<ENVEOF
             NODE_ENV=production
@@ -229,6 +257,18 @@ jobs:
             ADMIN_CREDENTIALS=$(ssm_get ADMIN_CREDENTIALS)
             JWT_SECRET=$(ssm_get JWT_SECRET)
             ENVEOF
+
+            # ── Optional Lex keys ────────────────────────────────────────────────────
+            # Appended ONLY when the SSM param exists, so an empty value never lands in
+            # .env. (An empty `DATABASE_URL=` line would fail the backend's config
+            # validation and crash the shared process, taking Campaigns down.)
+            append_if_set() {
+              if [ -n "$2" ]; then echo "$1=$2" >> "${APP_DIR}/apps/backend/.env"; fi
+            }
+            append_if_set DATABASE_URL "$(ssm_get_optional DATABASE_URL)"
+            append_if_set OPENAI_API_KEY_SECRET_ARN "$(ssm_get_optional OPENAI_API_KEY_SECRET_ARN)"
+            append_if_set LEX_DOCUMENTS_BUCKET "$(ssm_get_optional LEX_DOCUMENTS_BUCKET)"
+
             chmod 600 "${APP_DIR}/apps/backend/.env"
 
             echo "📦 Installing backend runtime dependencies..."
@@ -248,11 +288,37 @@ jobs:
               --env production
             pm2 save
 
-            echo "🏥 Health check..."
-            sleep 3
-            curl -f http://localhost:3001/health || echo "⚠️ Health check failed (may need a moment)"
+            echo "🏥 Health check (blocking)..."
+            HEALTH_OK=0
+            for i in $(seq 1 15); do
+              if curl -fsS http://localhost:3001/health >/dev/null 2>&1; then
+                HEALTH_OK=1; echo "✅ Health check passed (attempt ${i})"; break
+              fi
+              echo "…waiting for backend to become healthy (${i}/15)"
+              sleep 4
+            done
 
-            echo "✅ Backend deployed"
+            if [ "$HEALTH_OK" -ne 1 ]; then
+              echo "❌ Health check FAILED — backend did not become healthy"
+              echo "----- last 60 lines of API error log -----"
+              tail -n 60 /home/ec2-user/.pm2/logs/campaign-forge-api-error.log 2>/dev/null || true
+              if [ -d "${APP_DIR}/apps/backend/dist.prev" ]; then
+                echo "⏪ Rolling back to the previous dist to keep the live app up..."
+                rm -rf "${APP_DIR}/apps/backend/dist"
+                cp -r "${APP_DIR}/apps/backend/dist.prev" "${APP_DIR}/apps/backend/dist"
+                pm2 restart campaign-forge-api || true
+                sleep 5
+                if curl -fsS http://localhost:3001/health >/dev/null 2>&1; then
+                  echo "✅ Rolled back to the previous version successfully"
+                else
+                  echo "⚠️ Rollback restart still unhealthy — manual intervention required"
+                fi
+              fi
+              # Fail the deploy loudly instead of reporting success over a crash-loop.
+              exit 1
+            fi
+
+            echo "✅ Backend deployed and healthy"
 
   # ─── Summary ────────────────────────────────────────────────────────────────
   deployment-complete:

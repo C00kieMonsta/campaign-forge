@@ -49,18 +49,14 @@ module.exports = {
     "*.config.mjs"
   ],
   overrides: [
-    // Frontend-specific rules
+    // Frontend-specific rules (Vite + React). This is NOT a Next.js app, so it uses the
+    // base TypeScript + Prettier config with a browser env. (React/react-hooks lint
+    // plugins can be added later if we want React-specific rules.)
     {
       files: ["apps/frontend/**/*.{ts,tsx}"],
       env: {
         browser: true,
         es2022: true
-      },
-      extends: ["next/core-web-vitals", "next/typescript"],
-      rules: {
-        // React-specific rules
-        "react/prop-types": "off",
-        "react/react-in-jsx-scope": "off"
       }
     },
     // Backend-specific rules

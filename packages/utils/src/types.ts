@@ -1,12 +1,7 @@
 import { z } from "zod";
-import { RESOURCE_STATUSES_VALUES } from "@packages/types";
 
 // Basic primitive types
 export const Uuid = z.string().uuid();
-
-// Project status enum (only one needed from the old statuses)
-export const ProjectStatus = z.enum(RESOURCE_STATUSES_VALUES);
-export type TProjectStatus = z.infer<typeof ProjectStatus>;
 
 // JSON Schema types for input/output
 export type JsonSchemaType =

@@ -28,6 +28,20 @@ put_param() {
   echo "  ✓ ${PREFIX}/${name}"
 }
 
+# Stores a param only when a non-empty value is provided; otherwise leaves any existing
+# SSM value untouched. Used for optional/backfill keys (S3_BUCKET, Lex keys).
+put_param_optional() {
+  local name="$1"
+  local value="$2"
+  local type="${3:-SecureString}"
+
+  if [[ -z "$value" || "$value" == "null" ]]; then
+    echo "  – ${PREFIX}/${name} (skipped — not provided)"
+    return 0
+  fi
+  put_param "$name" "$value" "$type"
+}
+
 get_json_field() {
   local json="$1"
   local field="$2"
@@ -38,6 +52,13 @@ echo "=== Campaign Forge — SSM Parameter Setup ==="
 echo "Region: $REGION"
 echo "Prefix: $PREFIX"
 echo ""
+
+# Optional / backfill params — default to empty so both branches below and the store
+# section stay valid under `set -u`.
+s3_bucket=""
+database_url=""
+openai_secret_arn=""
+lex_docs_bucket=""
 
 # Check for --file flag
 if [[ "${1:-}" == "--file" ]]; then
@@ -60,11 +81,16 @@ if [[ "${1:-}" == "--file" ]]; then
   contacts_table=$(get_json_field "$json" "CONTACTS_TABLE")
   campaigns_table=$(get_json_field "$json" "CAMPAIGNS_TABLE")
   groups_table=$(get_json_field "$json" "GROUPS_TABLE")
+  s3_bucket=$(get_json_field "$json" "S3_BUCKET")
   ses_from_email=$(get_json_field "$json" "SES_FROM_EMAIL")
   unsub_secret=$(get_json_field "$json" "UNSUBSCRIBE_SECRET")
   public_base_url=$(get_json_field "$json" "PUBLIC_BASE_URL")
   admin_credentials=$(get_json_field "$json" "ADMIN_CREDENTIALS" | jq -c .)
   jwt_secret=$(get_json_field "$json" "JWT_SECRET")
+  # Optional Lex keys (provisioned in Phase 1 — safe to omit from the file)
+  database_url=$(get_json_field "$json" "DATABASE_URL")
+  openai_secret_arn=$(get_json_field "$json" "OPENAI_API_KEY_SECRET_ARN")
+  lex_docs_bucket=$(get_json_field "$json" "LEX_DOCUMENTS_BUCKET")
 else
   # ── AWS credentials used by the backend (DynamoDB + SES) ─────────────────────
   read -rp "AWS_ACCESS_KEY_ID (backend): " aws_key_id
@@ -80,6 +106,9 @@ else
 
   read -rp "GROUPS_TABLE [cf-groups-prod]: " groups_table
   groups_table="${groups_table:-cf-groups-prod}"
+
+  # ── S3 bucket for campaign attachments (required by the backend) ───────────────
+  read -rp "S3_BUCKET (campaign attachments): " s3_bucket
 
   # ── SES ───────────────────────────────────────────────────────────────────────
   read -rp "SES_FROM_EMAIL: " ses_from_email
@@ -97,6 +126,13 @@ else
   read -rp "ADMIN_CREDENTIALS (JSON): " admin_credentials
   read -rsp "JWT_SECRET (32+ random chars): " jwt_secret
   echo ""
+
+  # ── Lex (legal-RAG app) — optional; leave blank until the Lex infra exists ─────
+  echo ""
+  echo "Lex keys (optional — press Enter to skip; set them in Phase 1):"
+  read -rp "DATABASE_URL (postgres://... RDS): " database_url
+  read -rp "OPENAI_API_KEY_SECRET_ARN (Secrets Manager ARN): " openai_secret_arn
+  read -rp "LEX_DOCUMENTS_BUCKET: " lex_docs_bucket
 fi
 
 echo ""
@@ -111,6 +147,13 @@ put_param "UNSUBSCRIBE_SECRET"    "$unsub_secret"
 put_param "PUBLIC_BASE_URL"       "$public_base_url" "String"
 put_param "ADMIN_CREDENTIALS"     "$admin_credentials"
 put_param "JWT_SECRET"            "$jwt_secret"
+
+# Backfill (previously set out-of-band) + optional Lex keys. Skipped when empty so an
+# existing SSM value is never clobbered with a blank.
+put_param_optional "S3_BUCKET"                 "$s3_bucket"         "String"
+put_param_optional "DATABASE_URL"              "$database_url"
+put_param_optional "OPENAI_API_KEY_SECRET_ARN" "$openai_secret_arn" "String"
+put_param_optional "LEX_DOCUMENTS_BUCKET"      "$lex_docs_bucket"   "String"
 
 echo ""
 echo "✅ All parameters stored under ${PREFIX}/"
