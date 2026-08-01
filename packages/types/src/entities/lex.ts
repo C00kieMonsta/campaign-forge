@@ -104,6 +104,16 @@ export interface LexDocument {
 }
 
 /**
+ * What a bulk archive / restore ACTUALLY moved: the ids whose lifecycle_state changed, never the
+ * ids that were asked for. An id that was already in the target state, belongs to someone else, or
+ * is 'superseded' is simply absent — so this list is precisely what an Undo has to replay, and a
+ * caller that needs the skipped ids diffs its request against it.
+ */
+export interface LexLifecycleChange {
+  documentIds: string[];
+}
+
+/**
  * One reserved upload: the document row that exists but has no bytes yet, plus the presigned
  * PUT the browser must use. `contentType` is echoed back because S3 validates that the PUT sends
  * exactly the type the URL was signed for.
@@ -384,6 +394,246 @@ export interface LexTaskEvent {
   createdAt: string;
 }
 
+// ── Money events (the rapport ledger) ─────────────────────────────────────────────────
+// Typed transmissions of money, extracted from the text the corpus already indexes, so the
+// question a succession dispute actually turns on — who received what, when, for how much, and do
+// the totals match — can be answered as arithmetic instead of as a list of files.
+//
+// THE TWO RULES THAT SHAPE EVERY TYPE BELOW:
+//  1. `quote` is VERBATIM-GATED. It appeared inside the source chunk's stored text under the
+//     deterministic backstop (quoteMatchesChunk, whitespace-normalised and case-insensitive) before
+//     the row existed; an event whose quote did not match was dropped, never stored with a warning.
+//  2. A party or an amount is present ONLY when the document states it. `fromName`, `toName`,
+//     `amountOriginal` and `eventDate` are null when the text is silent, and that null is a
+//     FINDING — in a rapport dispute a guessed recipient invents the very fact that decides the
+//     shares. Every view must therefore render these rows rather than filter them out.
+//
+// As with LexDocumentChunk omitting `embedding`, the row's internal staleness bookkeeping
+// (chunk_content_hash, page_text_hash) stays on the private backend Row and is not surfaced here:
+// it exists so a re-index can re-anchor, and no client has any use for it.
+
+/**
+ * What kind of act moved the money. A closed vocabulary mirrored by a CHECK constraint and by
+ * lexMoneyEventKindSchema — the three move together or an extraction aborts on an INSERT.
+ *
+ * The distinctions that are not cosmetic: `pret` is a repayable advance and is therefore not
+ * reportable at all, so folding it into `paiement` would inflate an heir's balance with money he
+ * owes back; `paiement` is the honest default for a transfer whose legal nature the text does not
+ * state, because `don_manuel` asserts a gift and only the document may do that.
+ */
+export type LexMoneyEventKind =
+  /** A hand gift, no deed — the core of a rapport dispute and the hardest to prove. */
+  | "don_manuel"
+  /** A donation by deed (notarial): same economic effect, different proof regime. */
+  | "donation"
+  | "vente"
+  /** A loan. Repayable, hence outside rapport — never merge this with a gift or a payment. */
+  | "pret"
+  | "succession"
+  /** An allotment in a division: the lots ARE the arithmetic. */
+  | "partage"
+  /** Money moved, legal nature not stated by the document. */
+  | "paiement"
+  | "jugement"
+  | "autre";
+
+/**
+ * The currency as the era wrote it: the 1989-1998 acts are in Belgian francs (spelled BEF, FB or
+ * "francs" in the corpus, all normalised to 'BEF' here), later ones in EUR.
+ */
+export type LexMoneyCurrency = "BEF" | "EUR";
+
+/**
+ * How much of `eventDate` the document actually stated. Many acts say only "en 1992": stored as
+ * 1992-01-01 and rendered raw that reads as a specific day, which is a precision the text does not
+ * have. A frise may position by the date; a ledger must format by this.
+ */
+export type LexMoneyDatePrecision = "day" | "month" | "year";
+
+export interface LexMoneyEvent {
+  id: string;
+  documentId: string;
+  /** Joined, not stored — the ledger's `pièce` column names the file the row came from. */
+  filename: string;
+  /**
+   * The ACT's own date, which routinely differs from the document's timelineDate (a 1998 inventory
+   * recites gifts made in 1989). Null when the text states none: the event is then undated, shown
+   * at the end of the ledger, never filed under the document's date.
+   */
+  eventDate: string | null;
+  /** Null exactly when `eventDate` is null. */
+  eventDatePrecision: LexMoneyDatePrecision | null;
+  kind: LexMoneyEventKind;
+  /** As the document spells it. Null means THE DOCUMENT DOES NOT SAY — see rule 2 above. */
+  fromName: string | null;
+  toName: string | null;
+  /**
+   * The folded grouping keys, identical to the frontend's personKey (whitespace collapsed, case
+   * folded, diacritics stripped), so "Monique PIRSON" and "Monique Pirson" aggregate as one heir.
+   * The fold only merges spellings with the same letters in the same order: it refuses "M. Pirson"
+   * → "Monique Pirson", because among five siblings sharing a surname a wrong merge invents a
+   * person's involvement in a filing.
+   */
+  fromKey: string | null;
+  toKey: string | null;
+  /**
+   * The amount AS THE DOCUMENT WROTE IT, in `currency`. A NUMERIC string, never a number: the
+   * driver returns NUMERIC as a string and it must stay one end to end, because this feature exists
+   * to make totals add up. Null exactly when `currency` is null — a figure whose currency the quote
+   * does not state cannot be summed, and pretending otherwise is a 100x error waiting in a total.
+   */
+  amountOriginal: string | null;
+  currency: LexMoneyCurrency | null;
+  /**
+   * The same amount converted at the fixed 1999 rate (see BEF_PER_EUR). DERIVED CONVENIENCE, NEVER
+   * CITABLE, and it must reach the screen labelled INDICATIF: a 1992 franc and a 2019 euro are not
+   * the same money, and the fixed rate ignores three decades of indexation. Computed by the
+   * database, not by the extractor. Null when there is no amount or no currency.
+   */
+  amountEur: string | null;
+  /**
+   * What the sum was for, in a few words ("somme en liquide", "SANISTOCK"). A paraphrase, so it is
+   * never the string a citation is verified against — `quote` is.
+   */
+  objectLabel: string | null;
+  /**
+   * The proof: verbatim from the document, in its own language and its own currency. Untranslated
+   * and unreformatted on purpose — that is what makes it verifiable, and what a court is shown.
+   */
+  quote: string;
+  /** Null when a re-index has since replaced the chunk the quote was proved against. */
+  chunkId: string | null;
+  /** The exact page, when the document has a page index. Both anchors may be set. */
+  pageId: string | null;
+  pageOrdinal: number | null;
+  /** The coarse page range from the chunk — the fallback address for an un-page-indexed file. */
+  pageFrom: number | null;
+  pageTo: number | null;
+  charStart: number | null;
+  charEnd: number | null;
+  /**
+   * Folded identity of the ECONOMIC EVENT, not of the row: the same act is filed in three bundles
+   * in a real court file, and three rows for one gift would treble an heir's balance. Rows sharing
+   * a non-null value describe the same transmission. Nothing is hidden on this basis — the view
+   * groups them in front of the reader, because deciding two filings are one act is her call.
+   */
+  duplicateKey: string | null;
+  /** The model that read the passage, so a later pass is distinguishable rather than averaged in. */
+  extractedBy: string | null;
+  extractionVersion: number;
+  /** The extractor's own 0-100 confidence. A sort and a filter, never a reason to hide a row. */
+  confidence: number | null;
+  createdAt: string;
+}
+
+/**
+ * One bar of the per-heir balance: everything one person RECEIVED across the case file. The number
+ * the dispute turns on, and therefore the number that must not overstate itself — which is why the
+ * incompleteness counters travel with it instead of being computed somewhere the UI can forget.
+ */
+export interface LexMoneyHeirBalance {
+  /** personKey — what the ledger's rows are grouped and filtered on. */
+  key: string;
+  /** The spelling the documents use most often, for the label. */
+  name: string;
+  /**
+   * Sum of `amountEur` over the events naming this person as recipient. INDICATIVE, and the field
+   * name says so because — unlike a single event — a sum across two currencies and three decades
+   * has no original figure to stand beside it, so the caveat has nowhere else to live. A NUMERIC
+   * string, so the total stays exact.
+   */
+  receivedEurIndicative: string;
+  eventCount: number;
+  /**
+   * How many of those events state no amount. The bar understates by an unknown sum whenever this
+   * is above zero, and a balance that does not say so is a balance that lies.
+   */
+  eventsWithoutAmount: number;
+  /** How many were converted from BEF. The concrete justification for the INDICATIF label. */
+  convertedFromBefCount: number;
+  /** Events with no date, among this person's. Undated is not the same as absent. */
+  undatedCount: number;
+}
+
+/**
+ * Workspace-wide counts behind the ledger. Every one of these exists so the view can state what it
+ * does NOT know: an artifact that looks complete and is not is worse than one that admits its gaps.
+ */
+export interface LexMoneyTotals {
+  eventCount: number;
+  /** Distinct documents contributing at least one event. */
+  documentCount: number;
+  datedCount: number;
+  undatedCount: number;
+  withAmountCount: number;
+  withoutAmountCount: number;
+  /** Events whose recipient the documents do not name — visible in the ledger, never filtered. */
+  unknownRecipientCount: number;
+  unknownGiverCount: number;
+  /** Sum of every `amountEur`. INDICATIVE, same rule as LexMoneyHeirBalance. */
+  totalEurIndicative: string;
+  /** Events belonging to a duplicate group, i.e. rows the reader may want to collapse. */
+  duplicateGroupedCount: number;
+}
+
+/**
+ * How much of the case file the extraction has actually read. Modelled on LexPageIndexStatus:
+ * `extracted`, `pending` and `blocked` are disjoint and sum to `total`, and `queued` is not a
+ * fourth bucket — it is what distinguishes "the worker is chewing through the queue" from "the
+ * worker is down and these numbers will never move".
+ *
+ * Workspace-scoped, unlike the page index, because a ledger is per case file: a total drawn from
+ * one workspace's documents must be measured against that workspace's denominator.
+ */
+export interface LexMoneyCoverage {
+  /** ready + active documents in the workspace — the same scope retrieval uses. */
+  total: number;
+  extracted: number;
+  pending: number;
+  queued: number;
+  /** Extracted, with a recorded reason for having produced nothing usable. Needs a decision. */
+  blocked: number;
+  /**
+   * Documents the deterministic money regex matches at all. Documents outside this set are not a
+   * gap: they were read and contain no monetary figure, which is the expected answer for most of a
+   * case file. It is here so `extracted` is not mistaken for the ledger's real denominator.
+   */
+  withMoneyText: number;
+  /** Extraction generation the rows were produced by, so a stale ledger is visible as stale. */
+  extractionVersion: number;
+}
+
+/**
+ * The whole ledger in one response: hundreds of rows, fetched entirely and then sorted and filtered
+ * client-side — the same choice the timeline makes, so the server's ordering wins and a column sort
+ * costs no round-trip.
+ */
+export interface LexMoneyLedger {
+  /** Oldest first, undated LAST (never dropped). */
+  events: LexMoneyEvent[];
+  /** Largest received first. Includes only named recipients; the unnamed live in `totals`. */
+  balances: LexMoneyHeirBalance[];
+  totals: LexMoneyTotals;
+  coverage: LexMoneyCoverage;
+}
+
+/**
+ * What a triggered extraction run committed to. `candidateChunks` is the deterministic prefilter's
+ * count — the passages the regex matched, which is the only honest proxy for what the run will
+ * cost, and the reason this response exists rather than a bare `{ queued }`: the spend is the
+ * user's decision and she cannot make it without the number.
+ */
+export interface LexMoneyExtractionRun {
+  /** Documents actually enqueued. Already-queued and already-extracted ones are skipped. */
+  queued: number;
+  /** ready + active documents in the workspace. */
+  documentsInScope: number;
+  /** Skipped because they are already at the current extraction version. */
+  alreadyExtracted: number;
+  /** Chunks in the enqueued documents that match the money regex — the model's input, in passages. */
+  candidateChunks: number;
+}
+
 /** Links a claim (in a message OR an artifact version) to an exact source-chunk span. */
 export interface LexCitation {
   id: string;
@@ -400,4 +650,71 @@ export interface LexCitation {
   charEnd?: number | null;
   chunkContentHash?: string | null;
   createdAt: string;
+}
+
+/**
+ * One monetary amount a document states, with the text it was found in.
+ *
+ * DERIVED, and every field except `value`/`currency` is text the document itself contains: `raw` is
+ * the matched substring and `excerpt` is a window of the surrounding sentence. There is deliberately
+ * no payer and no payee — the file states sums, and attributing them is the practitioner's reading of
+ * the page, not something this app may assert.
+ */
+export interface LexStoryAmount {
+  documentId: string;
+  /** The chunk the amount was found in, for anchoring back to the source span. */
+  chunkId: string;
+  value: number;
+  /** ISO code. Convertibility is decided by the shared currency registry, not by this field. */
+  currency: string;
+  /** The matched text, exactly as written ("4.000.000 BEF"). */
+  raw: string;
+  /** A sentence-sized window of the document's own text around it. Whitespace-collapsed only. */
+  excerpt: string;
+  /** Offsets into the document's reconstructed text, so a page can be resolved. */
+  charStart: number;
+  charEnd: number;
+  pageFrom: number | null;
+  pageTo: number | null;
+}
+
+/** The case story read: what the file says about money, and how much of it was looked at. */
+export interface LexStoryPayload {
+  amounts: LexStoryAmount[];
+  /** Dates written in the documents' text, most-cited first. */
+  actDates: LexActDate[];
+  chunksScanned: number;
+  /** True when the scan hit its cap; the amounts shown are then a prefix, not the whole file. */
+  truncated: boolean;
+  chunkLimit: number;
+}
+
+/** One sighting of a date, in the document that writes it. */
+export interface LexActDateSample {
+  documentId: string;
+  /** The date exactly as written ("27 mai 1998", "15/6/98"). */
+  raw: string;
+  /** A window of the document's own text around it. A substring, never a rewrite. */
+  excerpt: string;
+  chunkId: string;
+  pageFrom: number | null;
+}
+
+/**
+ * A date written INSIDE the documents — an act, not a filing.
+ *
+ * The distinction is the point: a 2024 set of conclusions describing a 1996 purchase and a 1998 death
+ * appears on a filing chronology only in 2024, so on a file spanning decades the legal facts hide
+ * inside recent pleadings. Measured on a real corpus, 1998 carries 451 date mentions against 7
+ * documents filed that year.
+ */
+export interface LexActDate {
+  iso: string;
+  /** How many separate documents state this date — the best available signal of its weight. */
+  documentCount: number;
+  mentionCount: number;
+  /** True when ANY sighting had its century inferred from a two-digit year. */
+  yearInferred: boolean;
+  /** One sighting per document, capped; the UI says when it is showing fewer than exist. */
+  samples: LexActDateSample[];
 }

@@ -21,6 +21,7 @@ import {
   ArrowLeft,
   AudioLines,
   Brain,
+  CalendarClock,
   Copy,
   Eye,
   Files,
@@ -943,6 +944,14 @@ export default function LexWorkspaceChat() {
           >
             <Files className="h-4 w-4 mr-1.5" />
             {t.lex.allDocuments}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate(`/lex/workspaces/${id}/story`)}
+          >
+            <CalendarClock className="h-4 w-4 mr-1.5" />
+            {t.lex.story.tab}
           </Button>
           {messages.length > 0 ? (
             <Button

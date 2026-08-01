@@ -7,6 +7,7 @@ import type {
   CreateTaskRequest,
   CreateWorkspaceRequest,
   GenerateArtifactRequest,
+  LexArchivedScope,
   LexArtifact,
   LexArtifactVersion,
   LexAuthority,
@@ -15,10 +16,12 @@ import type {
   LexConversation,
   LexDocument,
   LexLanguage,
+  LexLifecycleChange,
   LexMessage,
   LexPageIndexBackfill,
   LexPageIndexStatus,
   LexParseStatus,
+  LexStoryPayload,
   LexTask,
   LexTranscript,
   LexUploadSlot,
@@ -407,9 +410,23 @@ export const api = {
           method: "DELETE"
         });
       },
-      timeline(id: string) {
+      /**
+       * `archived` is optional and omitted by default, which the backend reads as "exclude" — the
+       * behaviour every existing caller already gets. The documents view passes "include" because
+       * it holds both shelves in one state and splits them client-side (see filterDocuments), so
+       * archiving and its Undo are local patches rather than two round-trips.
+       */
+      /**
+       * The case story: the amounts the workspace's documents state, each with the sentence it came
+       * from. Derived on read — no table, no model call, so it can never be stale.
+       */
+      story(id: string) {
+        return request<LexStoryPayload>(`/admin/lex/workspaces/${id}/story`);
+      },
+      timeline(id: string, archived?: LexArchivedScope) {
+        const qs = archived ? `?archived=${archived}` : "";
         return request<{ items: LexDocument[] }>(
-          `/admin/lex/workspaces/${id}/timeline`
+          `/admin/lex/workspaces/${id}/timeline${qs}`
         );
       }
     },
@@ -492,6 +509,26 @@ export const api = {
       bulkDelete(documentIds: string[]) {
         return request<{ deleted: number }>(
           "/admin/lex/documents/bulk-delete",
+          { method: "POST", body: JSON.stringify({ documentIds }) }
+        );
+      },
+      /**
+       * Reversible removal from search, chat and assessments: sets lifecycle_state 'archived', which
+       * every retrieval path already excludes. Nothing is destroyed.
+       *
+       * Both routes return the ids that ACTUALLY moved, not a count — that list is what the Undo
+       * replays through bulkRestore, so an Undo can never restore a document this archive did not
+       * archive (an already-archived id is skipped server-side and never comes back here).
+       */
+      bulkArchive(documentIds: string[]) {
+        return request<LexLifecycleChange>(
+          "/admin/lex/documents/bulk-archive",
+          { method: "POST", body: JSON.stringify({ documentIds }) }
+        );
+      },
+      bulkRestore(documentIds: string[]) {
+        return request<LexLifecycleChange>(
+          "/admin/lex/documents/bulk-restore",
           { method: "POST", body: JSON.stringify({ documentIds }) }
         );
       },

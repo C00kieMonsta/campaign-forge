@@ -6,7 +6,9 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import type {
+  LexArchivedScope,
   LexDocument,
+  LexLifecycleChange,
   LexLifecycleState,
   LexPageIndexBackfill,
   LexPageIndexBlockedDocument,
@@ -96,6 +98,25 @@ interface BlockedPageIndexRow {
   page_index_error: string;
 }
 
+/**
+ * The lifecycle conjunct a documents read adds for a given archived scope.
+ *
+ * Note what this is NOT: `lifecycle_state = 'active'`. That is the right scope for retrieval, but on
+ * a listing read it would also hide the 'superseded' duplicates that this view has always shown
+ * (marked "doublon de …"), turning a feature about archiving into a silent change to duplicate
+ * handling. The only thing filtered here is archived-ness.
+ *
+ * Interpolated, not parameterised: the three branches are compile-time literals, and a bound
+ * parameter cannot express "no predicate at all" without an `OR $n IS NULL` that would defeat any
+ * future index on the column.
+ */
+function archivedScopeClause(scope: LexArchivedScope): string {
+  if (scope === "only") return ` AND lifecycle_state = 'archived'`;
+  // 'include' is what the client asks for when it wants to reconcile a whole corpus in one read.
+  if (scope === "include") return "";
+  return ` AND lifecycle_state <> 'archived'`;
+}
+
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v)
     ? v.filter((x): x is string => typeof x === "string")
@@ -106,11 +127,24 @@ function iso(v: Date | string): string {
   return v instanceof Date ? v.toISOString() : String(v);
 }
 
+/**
+ * A calendar date as YYYY-MM-DD, read from the LOCAL parts — never through toISOString().
+ *
+ * timeline_date is a Postgres `date`: a calendar day with no time and no zone. node-postgres parses
+ * it into a Date at LOCAL midnight, so toISOString() re-reads that instant in UTC and, at any
+ * positive offset, lands on the previous day. Under Europe/Brussels the marriage contract of
+ * 1958-07-10 was served to the client as "1958-07-09" — contradicting, on the same screen, both its
+ * own summary ("établi le 10 juillet 1958") and its filename.
+ *
+ * A day is not a rounding error in a succession file: it orders the acts, and it is what prescription
+ * and filing deadlines are counted from.
+ */
 function dateOnly(v: Date | string | null): string | null {
   if (v === null) return null;
-  return v instanceof Date
-    ? v.toISOString().slice(0, 10)
-    : String(v).slice(0, 10);
+  if (!(v instanceof Date)) return String(v).slice(0, 10);
+  const month = String(v.getMonth() + 1).padStart(2, "0");
+  const day = String(v.getDate()).padStart(2, "0");
+  return `${v.getFullYear()}-${month}-${day}`;
 }
 
 export function mapDocument(r: DocumentRow): LexDocument {
@@ -280,10 +314,17 @@ export class DocumentsService {
     return { url, expiresIn: 900 };
   }
 
+  /**
+   * Archived documents are excluded unless asked for. Every caller of this endpoint treats what it
+   * returns as the live case file — the chat's documents panel offers each row as pinnable, and a
+   * pin on an archived document silently retrieves nothing (RagService's pinned paths are scoped to
+   * 'active'), so offering one is offering a dead control.
+   */
   async list(
     ownerEmail: string,
     workspaceId: string,
-    status?: string
+    status?: string,
+    archived: LexArchivedScope = "exclude"
   ): Promise<LexDocument[]> {
     await this.workspaces.getOrFail(ownerEmail, workspaceId);
     const params: unknown[] = [workspaceId, ownerEmail];
@@ -292,6 +333,7 @@ export class DocumentsService {
       params.push(status);
       where += ` AND parse_status = $3`;
     }
+    where += archivedScopeClause(archived);
     const res = await this.pg.query<DocumentRow>(
       `SELECT ${DOC_COLUMNS} FROM lex_documents WHERE ${where} ORDER BY created_at DESC`,
       params
@@ -299,14 +341,23 @@ export class DocumentsService {
     return res.rows.map(mapDocument);
   }
 
+  /**
+   * The chronology behind the documents view. Archived documents are excluded by default — this is
+   * what makes archiving visible at all: retrieval already ignores them, but until this read did
+   * too, an archived document stayed on screen and the action looked like it had done nothing.
+   * `archived: "only"` is the archives screen the user restores from.
+   *
+   * NULLS LAST keeps undated documents at the tail: they are undated, not ancient.
+   */
   async timeline(
     ownerEmail: string,
-    workspaceId: string
+    workspaceId: string,
+    archived: LexArchivedScope = "exclude"
   ): Promise<LexDocument[]> {
     await this.workspaces.getOrFail(ownerEmail, workspaceId);
     const res = await this.pg.query<DocumentRow>(
       `SELECT ${DOC_COLUMNS} FROM lex_documents
-       WHERE workspace_id = $1 AND owner_email = $2
+       WHERE workspace_id = $1 AND owner_email = $2${archivedScopeClause(archived)}
        ORDER BY timeline_date ASC NULLS LAST, created_at ASC`,
       [workspaceId, ownerEmail]
     );
@@ -390,6 +441,11 @@ export class DocumentsService {
        FROM lex_documents d
        WHERE d.owner_email = $1
          AND d.parse_status = 'ready'
+         -- An archived document is the user's "not part of this case" pile: re-summarizing it is a
+         -- paid model call producing text nothing will ever retrieve. <> 'archived' rather than
+         -- = 'active' keeps this predicate about archiving alone — a superseded duplicate is
+         -- parse_status 'duplicate' and is therefore already outside the 'ready' filter above.
+         AND d.lifecycle_state <> 'archived'
          -- Skip documents that already have a job waiting, so repeated clicks don't pile up.
          AND NOT EXISTS (
            SELECT 1 FROM lex_ingestion_jobs j
@@ -598,8 +654,15 @@ export class DocumentsService {
 
     await this.pg.withTransaction(async (client) => {
       await client.query(
+        // lifecycle_state drops back to 'active' so that re-ingesting a document ruled a duplicate
+        // un-supersedes it — contesting that ruling is one of the reasons this button exists.
+        // 'archived' is preserved instead: archiving is a curation decision, and re-parsing bytes is
+        // not a request to put a document the user removed from the case file back into retrieval.
+        // Only an explicit restore does that.
         `UPDATE lex_documents
-           SET parse_status = 'uploaded', lifecycle_state = 'active',
+           SET parse_status = 'uploaded',
+               lifecycle_state = CASE WHEN lifecycle_state = 'archived'
+                                      THEN 'archived' ELSE 'active' END,
                duplicate_of = NULL, error = NULL, updated_at = now()
          WHERE id = $1`,
         [id]
@@ -611,6 +674,105 @@ export class DocumentsService {
       );
     });
     return this.getOrFail(ownerEmail, id);
+  }
+
+  /**
+   * Archives documents — the reversible counterpart to `delete`, and what the documents view offers
+   * for bulk work instead of a bulk delete.
+   *
+   * lifecycle_state 'archived' is already excluded by RagService's scope clause on every retrieval
+   * leg (dense, FTS and both pinned paths) and by the task runner's readyDocuments, so this one
+   * column removes a document from search, chat and assessments with no change to retrieval code.
+   * Nothing is destroyed: the row, its chunks, its page rows and its S3 object stay, so every
+   * lex_citations anchor keeps resolving and an answer already delivered stays verifiable. That is
+   * the whole argument for archiving over deleting in a file that gets filed in court.
+   *
+   * ONE statement, unlike deleteMany's loop. deleteMany loops because each delete also talks to S3
+   * and a 404 there must not abort the rest of the selection; archiving touches one column, so the
+   * whole selection is a single owner-scoped UPDATE that cannot half-apply.
+   *
+   * Only 'active' rows move, and that guard is what keeps restore safe rather than being a
+   * micro-optimisation: if a 'superseded' duplicate could enter the archived set, restoreMany —
+   * whose job is "archived → active" — would become the thing that resurrects it. Duplicates are
+   * ruled out at ingestion for a reason and this path must not offer a way back in.
+   */
+  async archiveMany(
+    ownerEmail: string,
+    ids: string[]
+  ): Promise<LexLifecycleChange> {
+    const res = await this.pg.query<{ id: string }>(
+      `UPDATE lex_documents
+         SET lifecycle_state = 'archived', updated_at = now()
+       WHERE id = ANY($1::uuid[]) AND owner_email = $2 AND lifecycle_state = 'active'
+       RETURNING id`,
+      [ids, ownerEmail]
+    );
+    const documentIds = res.rows.map((r) => r.id);
+    this.logger.log(
+      JSON.stringify({
+        action: "lexArchiveDocuments",
+        requested: ids.length,
+        archived: documentIds.length
+      })
+    );
+    return { documentIds };
+  }
+
+  /**
+   * Puts archived documents back into retrieval — the Undo behind the archive action, and the
+   * restore button on the archives screen.
+   *
+   * `lifecycle_state = 'archived'` is load-bearing. Without it this statement would also flip the
+   * 'superseded' duplicates to 'active', re-arming a second copy of an annex that ingestion had
+   * already ruled out — and because markIfDuplicate deleted that copy's chunks and page rows, the
+   * resurrected document would be an active, empty, unretrievable row that the page-index backfill
+   * would then re-index. Restore is the inverse of archiveMany and of nothing else.
+   *
+   * Returned ids are the rows that actually moved, so replaying an Undo twice is a no-op rather
+   * than a second, wrong write.
+   */
+  async restoreMany(
+    ownerEmail: string,
+    ids: string[]
+  ): Promise<LexLifecycleChange> {
+    const res = await this.pg.query<{ id: string }>(
+      // Only 'archived' rows move: a 'superseded' duplicate was parked by ingestion, not filed away
+      // by her, and resurrecting one would make the same passage citable from two documents.
+      //
+      // The NOT EXISTS is the mirror of that hazard from the other direction. Ingestion's duplicate
+      // check only ever considers ACTIVE primaries, so archiving a document and re-uploading the
+      // same file yields a second active copy that nothing flags. Restoring the original would then
+      // leave two byte-identical active documents, both retrievable, neither marked — so a restore
+      // that would do that is skipped instead. It is absent from the returned ids, which is how the
+      // caller reports "n of m restored".
+      `UPDATE lex_documents d
+         SET lifecycle_state = 'active', updated_at = now()
+       WHERE d.id = ANY($1::uuid[]) AND d.owner_email = $2
+         AND d.lifecycle_state = 'archived'
+         AND NOT EXISTS (
+           SELECT 1 FROM lex_documents other
+           WHERE other.workspace_id = d.workspace_id
+             AND other.id <> d.id
+             AND other.lifecycle_state = 'active'
+             AND other.duplicate_of IS NULL
+             AND (
+               (d.text_fingerprint IS NOT NULL
+                 AND other.text_fingerprint = d.text_fingerprint)
+               OR (d.sha256 IS NOT NULL AND other.sha256 = d.sha256)
+             )
+         )
+       RETURNING d.id`,
+      [ids, ownerEmail]
+    );
+    const documentIds = res.rows.map((r) => r.id);
+    this.logger.log(
+      JSON.stringify({
+        action: "lexRestoreDocuments",
+        requested: ids.length,
+        restored: documentIds.length
+      })
+    );
+    return { documentIds };
   }
 
   /** Deletes several documents at once (multi-select in the documents view). */
@@ -660,8 +822,13 @@ export class DocumentsService {
   ): Promise<{ deleted: number }> {
     await this.workspaces.getOrFail(ownerEmail, workspaceId);
     const res = await this.pg.query<{ id: string }>(
+      // Archived rows are excluded: archiving is a promise that the document survives and can be
+      // restored at any time, and a sweep by parse_status would quietly break it for exactly the
+      // documents most likely to be archived AND failed. Clearing those is possible — from the
+      // archive shelf, by hand, where the row is on screen.
       `SELECT id FROM lex_documents
-       WHERE workspace_id = $1 AND owner_email = $2 AND parse_status = ANY($3::text[])`,
+       WHERE workspace_id = $1 AND owner_email = $2 AND parse_status = ANY($3::text[])
+         AND lifecycle_state <> 'archived'`,
       [workspaceId, ownerEmail, statuses]
     );
     return this.deleteMany(

@@ -4,6 +4,7 @@ import { AuthoritiesModule } from "./authorities/authorities.module";
 import { ConversationsModule } from "./conversations/conversations.module";
 import { DocumentsModule } from "./documents/documents.module";
 import { SettingsModule } from "./settings/settings.module";
+import { StoryModule } from "./story/story.module";
 import { TasksModule } from "./tasks/tasks.module";
 import { WorkspacesModule } from "./workspaces/workspaces.module";
 
@@ -16,7 +17,8 @@ import { WorkspacesModule } from "./workspaces/workspaces.module";
     AuthoritiesModule,
     ConversationsModule,
     ArtifactsModule,
-    TasksModule
+    TasksModule,
+    StoryModule
   ]
 })
 export class LexModule {}

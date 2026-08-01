@@ -11,6 +11,7 @@ import LexAuthorities from "@/pages/admin/lex/LexAuthorities";
 import LexWorkspace from "@/pages/admin/lex/LexWorkspace";
 import LexWorkspaceChat from "@/pages/admin/lex/LexWorkspaceChat";
 import LexWorkspaces from "@/pages/admin/lex/LexWorkspaces";
+import LexWorkspaceStory from "@/pages/admin/lex/LexWorkspaceStory";
 import Settings from "@/pages/admin/Settings";
 import LoginPage from "@/pages/LoginPage";
 import { useActiveApp } from "@/superapp/ActiveAppContext";
@@ -48,6 +49,10 @@ export default function App() {
         <Route path="/lex" element={<LexWorkspaces />} />
         <Route path="/lex/authorities" element={<LexAuthorities />} />
         <Route path="/lex/workspaces/:id" element={<LexWorkspaceChat />} />
+        <Route
+          path="/lex/workspaces/:id/story"
+          element={<LexWorkspaceStory />}
+        />
         <Route
           path="/lex/workspaces/:id/documents"
           element={<LexWorkspace />}

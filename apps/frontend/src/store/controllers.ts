@@ -44,9 +44,20 @@ export class WorkspaceController {
 export class DocumentController {
   constructor(private writer: StoreWriter) {}
 
+  /**
+   * replaceCollection, NOT upsertMany: the store must mirror this read, not accumulate across it.
+   *
+   * `list` now excludes archived documents, and an upsert-only load can never express a row the
+   * server stopped returning — so an archived document stayed in the chat's documents panel as a
+   * live, pinnable row whose pin retrieved nothing (RagService scopes pins to lifecycle 'active').
+   * Deletions from another tab had the same shape of problem.
+   *
+   * Sound because documents are only ever loaded one workspace at a time; a view that needed two
+   * workspaces' documents resident at once would need a workspace-scoped prune instead.
+   */
   async loadForWorkspace(workspaceId: string) {
     const { items } = await api.lex.documents.list(workspaceId);
-    this.writer.upsertMany("lexDocuments", items);
+    this.writer.replaceCollection("lexDocuments", items);
     return items;
   }
   async refresh(id: string) {

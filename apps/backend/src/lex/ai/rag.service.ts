@@ -307,6 +307,32 @@ export class RagService {
     );
 
     const tsv = `(to_tsvector('french', c.content) || to_tsvector('dutch', c.content))`;
+    /**
+     * CONJUNCTIVE, and that is a measured choice rather than an accident of plainto_tsquery.
+     *
+     * plainto_tsquery conjoins every token, so "Que disent les pièces au sujet du 01.01.1976 ?"
+     * becomes 'disent' & 'le' & 'piec' & 'sujet' & '01.01.1976' and matches only a chunk holding all
+     * of them — which a question-shaped query essentially never finds. Measured on the real corpus:
+     * three chunks contain that literal date and this query returns zero of them. So for natural
+     * questions the sparse half contributes nothing and the fusion below runs on the dense half
+     * alone, which is a real weakness for the queries lexical search exists to serve.
+     *
+     * TWO FIXES WERE TRIED AND BOTH MADE IT WORSE, on a 30-case retrieval evaluation:
+     *   conjunctive (this)                       17/30
+     *   disjunctive everywhere                   13/30
+     *   conjunctive, disjunctive on empty        13/30
+     * Disjoining lets common words ("pièces", "montant") match thousands of chunks, and ts_rank has
+     * no notion of term rarity, so the one chunk holding the discriminating token is ranked below
+     * them and the candidate cap discards it. The fallback variant is no better, and the reason is
+     * worth recording: when the conjunctive query finds nothing, adding a NOISY sparse ranking to the
+     * fusion is worse than adding none — the weak lexical hits displace good dense hits in the top k.
+     * Contributing nothing beat contributing noise.
+     *
+     * A real fix needs term weighting the FTS index does not have (BM25/IDF, or a rarity-filtered
+     * query built from the question's discriminating tokens). That is a piece of work, not a
+     * one-line change, and it should be done against this evaluation rather than by reasoning —
+     * both of the above looked obviously correct before they were measured.
+     */
     const tsq = `(plainto_tsquery('french', $3) || plainto_tsquery('dutch', $3))`;
     const ftsRes = await this.pg.query<ChunkRow>(
       `SELECT ${select}

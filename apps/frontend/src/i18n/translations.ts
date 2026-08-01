@@ -326,7 +326,124 @@ export const translations = {
       tasks: "Analyses",
       searchDocuments: "Rechercher (titre, tag, date)…",
       pinned: "Épinglés",
-      noSearchResults: "Aucun document ne correspond à cette recherche"
+      noSearchResults: "Aucun document ne correspond à cette recherche",
+      // The documents view. Nested rather than flattened into t.lex, which is already ~137 keys:
+      // this view adds ~40 of its own and a flat merge would make the fr/nl diff unreviewable.
+      story: {
+        tab: "Récit",
+        subtitle: "Ce que le dossier dit, dans le temps",
+        timelineTitle: "Chronologie",
+        timelineSpan: "{count} pièces, de {from} à {to}",
+        timelineEmpty: "Aucune pièce datée",
+        yearsShort: "ans",
+        yearDocuments: "{year} : {count} pièces",
+        indicativeShort: "(indicatif)",
+        clearYear: "Afficher toutes les années (actuellement {year})",
+        timelineLegend:
+          "Une colonne par année ayant des pièces ; chaque bloc est une pièce. Les années sans aucune pièce sont resserrées en pointillé, avec leur durée. Sous l'axe, la barre indique le total indicatif des montants énoncés cette année-là — un trait plat signale une année dont les montants ne sont pas convertibles. Cliquez une année pour filtrer, un bloc pour ouvrir la pièce.",
+        undatedCount: "{count} pièces sans date extraite",
+        moneyTitle: "Chiffres du dossier",
+        moneyCount:
+          "{distinct} montants distincts · {amounts} mentions dans {documents} pièces",
+        moneyDisclaimer:
+          "Aucun total n'est calculé, volontairement : additionner tous les chiffres d'un dossier n'a pas de sens juridique — une même vente est comptée à chaque fois qu'elle est citée, et prix, soldes, frais et sous-totaux se mélangent. Les montants sont relevés tels quels, avec la phrase où ils figurent ; l'application n'indique ni qui a versé ni qui a reçu, cela se lit sur la pièce.",
+        currenciesPresent: "Devises présentes : {list}",
+        actsTitle: "Chronologie des actes",
+        actsCount: "{count} dates distinctes",
+        actsHint:
+          "Ces dates sont écrites DANS le texte des pièces : elles datent les actes eux-mêmes (décès, vente, acte notarié, note), et non le dépôt de la pièce qui les cite. Une conclusion de 2024 peut ainsi dater un achat de 1996. Le nombre à droite indique combien de pièces distinctes énoncent la date — plus il est élevé, plus la date structure le dossier.",
+        actsByWeight: "Les plus citées",
+        actsByDate: "Ordre chronologique",
+        actsMore: "Voir les {count} autres dates",
+        actsLess: "Réduire la liste",
+        actsMoreDocuments: "et {count} autres pièces énoncent cette date",
+        yearInferredBadge: "siècle déduit",
+        yearInferredHint:
+          "La pièce écrit l'année sur deux chiffres (« 15/6/98 ») : le siècle est déduit de la date de la pièce citante, jamais postérieur à elle.",
+        moneyEmpty: "Aucun montant relevé dans ce dossier",
+        indicativeEur: "≈ {eur} (indicatif, taux fixe 1999)",
+        notConvertible: "conversion indisponible (pas de taux fixe)",
+        amountsCount: "{count} montants",
+        convertibleTotal: "Total indicatif des devises convertibles : {eur}",
+        excludedCurrencies: "hors {currencies}, non convertibles",
+        recurringTitle: "Ce qui revient dans plusieurs pièces",
+        recurringHint:
+          "Un même montant énoncé dans plusieurs pièces désigne, en règle générale, une seule opération discutée à plusieurs endroits du dossier. C'est le fil le plus utile à suivre : dépliez pour lire, côte à côte, ce que chaque pièce en dit. L'application ne dit pas si les pièces concordent — c'est précisément ce que la lecture permet de juger.",
+        inDocuments: "dans {count} pièces",
+        recurringShown: "les {shown} plus discutés sur {total}",
+        recurringAll: "{total} montants",
+        recurringMore: "Voir les {count} autres",
+        recurringLess: "Réduire la liste",
+        excerptsTitle: "Tous les montants, pièce par pièce",
+        excerptsHint:
+          "Replié par défaut. Chaque ligne indique la date, la pièce, le nombre de montants distincts et le plus élevé. Dépliez une pièce pour voir ses montants, puis un montant pour lire les passages où il figure — repris littéralement du texte.",
+        distinctSums: "{count} montants distincts",
+        statedTimes: "énoncé {count} fois",
+        clearSelection: "Afficher toutes les pièces",
+        truncated:
+          "Analyse limitée aux {limit} premiers passages : la liste ci-dessous est partielle."
+      },
+      docsView: {
+        // Selection. `selectAllFiltered` names the scope on purpose — a bare "tout sélectionner"
+        // next to an active search is how a bulk action reaches documents the search is hiding.
+        selectAll: "Tout sélectionner",
+        selectAllFiltered: "Tout sélectionner ({count} filtrés)",
+        selectRow: "Sélectionner",
+        selectionScopedToFilter:
+          "L'action ne portera que sur les {count} documents affichés",
+        hiddenByFilter: "{count} sélectionné(s) masqué(s) par le filtre",
+        // Archive.
+        archiveCount: "Archiver ({count})",
+        archivedToast: "{count} document(s) archivé(s)",
+        undoArchive: "Annuler l'archivage",
+        restore: "Restaurer",
+        restoreCount: "Restaurer ({count})",
+        restoredToast: "{count} document(s) restauré(s)",
+        showArchived: "Archives",
+        archivedBadge: "archivé",
+        noArchived: "Aucun document archivé",
+        pendingShelf: "À traiter",
+        noPending: "Rien à traiter",
+        caseEmptyButOthers:
+          "Aucun document dans le dossier. Regardez « À traiter » et « Archivés ».",
+        pendingHint:
+          "Ces fichiers ne font pas encore partie du dossier : soit leurs octets ne sont jamais arrivés, soit la lecture a échoué. Ils ne sont pas interrogeables par l'assistant.",
+        archiveHint:
+          "Archiver retire le document des recherches, du chat et des analyses. Rien n'est supprimé : le fichier, ses pages et les citations qui s'y réfèrent restent intacts, et vous pouvez le restaurer à tout moment.",
+        // Density.
+        density: "Affichage",
+        densityDense: "Dense",
+        densityComfortable: "Confortable",
+        documentsCount: "{count} documents",
+        // Relations graph.
+        relations: "Relations",
+        relationsTitle: "Personnes citées ensemble",
+        coMentionPair:
+          "{a} et {b} apparaissent ensemble dans {count} documents",
+        namedIn: "apparaît dans {count} documents",
+        relationsLegend:
+          "Taille du cercle : nombre de documents citant la personne. Épaisseur du trait : nombre de documents citant les deux.",
+        // The honest note required before anyone reads a direction into these links.
+        relationsDisclaimer:
+          "Ces liens sont NON ORIENTÉS : ils indiquent seulement que deux personnes sont nommées dans les mêmes documents. Ils n'indiquent pas qui a donné, légué ou transmis quoi que ce soit à qui. Les transmissions orientées (donations, legs, partages) exigent une extraction page par page qui n'a pas encore été effectuée.",
+        relationsPeopleShown: "{shown} noms affichés sur {total} cités",
+        relationsPickHint:
+          "Choisissez une personne pour voir avec qui elle apparaît dans les mêmes documents.",
+        relationsFocusHint:
+          "Liens de {name} uniquement. Le nombre sur chaque cercle est le nombre de documents partagés ; cliquez-le pour n'afficher que ceux-là.",
+        relationsEmpty:
+          "Pas assez de personnes récurrentes pour dessiner des relations",
+        filteredByPerson: "Filtré sur {name}",
+        clearGraphFilter: "Retirer le filtre",
+        // Key events dialog.
+        keyEvents: "Événements clés",
+        keyEventsHint:
+          "Un seul événement par document, à sa date extraite. Un document qui regroupe plusieurs actes — « pièces 1 à 12 » contenant plusieurs dons manuels à des dates différentes — n'apparaît donc que comme un point unique. Une chronologie acte par acte exige l'extraction page par page, qui n'a pas encore été effectuée.",
+        keyEventsCount: "{dated} événements datés, {undated} sans date",
+        allPeople: "Toutes les personnes",
+        peopleNamed: "Personnes citées",
+        noEvents: "Aucun événement"
+      }
     },
     settings: {
       title: "Paramètres",
@@ -683,7 +800,115 @@ export const translations = {
       tasks: "Analyses",
       searchDocuments: "Zoeken (titel, tag, datum)…",
       pinned: "Vastgezet",
-      noSearchResults: "Geen document komt overeen met deze zoekopdracht"
+      noSearchResults: "Geen document komt overeen met deze zoekopdracht",
+      story: {
+        tab: "Verhaal",
+        subtitle: "Wat het dossier zegt, in de tijd",
+        timelineTitle: "Chronologie",
+        timelineSpan: "{count} stukken, van {from} tot {to}",
+        timelineEmpty: "Geen gedateerde stukken",
+        yearsShort: "jaar",
+        yearDocuments: "{year}: {count} stukken",
+        indicativeShort: "(indicatief)",
+        clearYear: "Alle jaren tonen (nu {year})",
+        timelineLegend:
+          "Eén kolom per jaar met stukken; elk blok is een stuk. Jaren zonder enig stuk worden samengedrukt met een stippellijn en hun duur. Onder de as toont de balk het indicatieve totaal van de bedragen uit dat jaar — een vlak streepje betekent dat de bedragen van dat jaar niet omrekenbaar zijn. Klik een jaar om te filteren, een blok om het stuk te openen.",
+        undatedCount: "{count} stukken zonder gevonden datum",
+        moneyTitle: "Cijfers van het dossier",
+        moneyCount:
+          "{distinct} verschillende bedragen · {amounts} vermeldingen in {documents} stukken",
+        moneyDisclaimer:
+          "Er wordt bewust geen totaal berekend: alle cijfers van een dossier optellen heeft juridisch geen betekenis — dezelfde verkoop wordt bij elke vermelding meegeteld, en prijzen, saldi, kosten en subtotalen lopen door elkaar. De bedragen staan er letterlijk, met de zin waarin ze voorkomen; de toepassing zegt niet wie betaald of ontvangen heeft, dat leest u op het stuk.",
+        currenciesPresent: "Aanwezige munten: {list}",
+        actsTitle: "Chronologie van de handelingen",
+        actsCount: "{count} verschillende data",
+        actsHint:
+          "Deze data staan IN de tekst van de stukken: ze dateren de handelingen zelf (overlijden, verkoop, notariële akte, nota), niet het neerleggen van het stuk dat ze vermeldt. Een conclusie uit 2024 kan zo een aankoop uit 1996 dateren. Het getal rechts toont in hoeveel verschillende stukken de datum voorkomt — hoe hoger, hoe meer de datum het dossier structureert.",
+        actsByWeight: "Meest vermeld",
+        actsByDate: "Chronologisch",
+        actsMore: "De {count} andere data tonen",
+        actsLess: "Lijst inkorten",
+        actsMoreDocuments: "en {count} andere stukken vermelden deze datum",
+        yearInferredBadge: "eeuw afgeleid",
+        yearInferredHint:
+          "Het stuk schrijft het jaartal met twee cijfers („15/6/98”): de eeuw wordt afgeleid uit de datum van het citerende stuk, nooit later dan dat stuk.",
+        moneyEmpty: "Geen bedragen gevonden in dit dossier",
+        indicativeEur: "≈ {eur} (indicatief, vaste koers 1999)",
+        notConvertible: "omrekening niet mogelijk (geen vaste koers)",
+        amountsCount: "{count} bedragen",
+        convertibleTotal: "Indicatief totaal van de omrekenbare munten: {eur}",
+        excludedCurrencies: "exclusief {currencies}, niet omrekenbaar",
+        recurringTitle: "Wat in meerdere stukken terugkomt",
+        recurringHint:
+          "Eenzelfde bedrag dat in meerdere stukken staat, duidt doorgaans op één verrichting die op verschillende plaatsen in het dossier wordt besproken. Dat is de nuttigste draad om te volgen: vouw open om naast elkaar te lezen wat elk stuk erover zegt. De toepassing zegt niet of de stukken overeenstemmen — dat is precies wat het lezen u laat beoordelen.",
+        inDocuments: "in {count} stukken",
+        recurringShown: "de {shown} meest besproken van {total}",
+        recurringAll: "{total} bedragen",
+        recurringMore: "De {count} andere tonen",
+        recurringLess: "Lijst inkorten",
+        excerptsTitle: "Alle bedragen, stuk per stuk",
+        excerptsHint:
+          "Standaard ingeklapt. Elke regel toont de datum, het stuk, het aantal verschillende bedragen en het hoogste. Vouw een stuk open voor de bedragen, en een bedrag voor de passages waarin het voorkomt — letterlijk uit de tekst.",
+        distinctSums: "{count} verschillende bedragen",
+        statedTimes: "{count} keer vermeld",
+        clearSelection: "Alle stukken tonen",
+        truncated:
+          "Analyse beperkt tot de eerste {limit} passages: de lijst hieronder is onvolledig."
+      },
+      docsView: {
+        selectAll: "Alles selecteren",
+        selectAllFiltered: "Alles selecteren ({count} gefilterd)",
+        selectRow: "Selecteren",
+        selectionScopedToFilter:
+          "De actie geldt enkel voor de {count} weergegeven documenten",
+        hiddenByFilter: "{count} geselecteerd, verborgen door de filter",
+        archiveCount: "Archiveren ({count})",
+        archivedToast: "{count} document(en) gearchiveerd",
+        undoArchive: "Archivering ongedaan maken",
+        restore: "Herstellen",
+        restoreCount: "Herstellen ({count})",
+        restoredToast: "{count} document(en) hersteld",
+        showArchived: "Archief",
+        archivedBadge: "gearchiveerd",
+        noArchived: "Geen gearchiveerde documenten",
+        pendingShelf: "Te behandelen",
+        noPending: "Niets te behandelen",
+        caseEmptyButOthers:
+          "Geen documenten in het dossier. Kijk bij „Te behandelen” en „Gearchiveerd”.",
+        pendingHint:
+          "Deze bestanden horen nog niet bij het dossier: hun bytes zijn nooit aangekomen of het inlezen is mislukt. De assistent kan ze niet doorzoeken.",
+        archiveHint:
+          "Archiveren haalt het document uit de zoekresultaten, de chat en de analyses. Er wordt niets verwijderd: het bestand, de pagina's en de verwijzingen ernaar blijven intact, en u kunt het altijd herstellen.",
+        density: "Weergave",
+        densityDense: "Compact",
+        densityComfortable: "Comfortabel",
+        documentsCount: "{count} documenten",
+        relations: "Relaties",
+        relationsTitle: "Samen vermelde personen",
+        coMentionPair: "{a} en {b} komen samen voor in {count} documenten",
+        namedIn: "komt voor in {count} documenten",
+        relationsLegend:
+          "Grootte van de cirkel: aantal documenten waarin de persoon voorkomt. Dikte van de lijn: aantal documenten waarin beiden voorkomen.",
+        relationsDisclaimer:
+          "Deze verbindingen zijn NIET GERICHT: ze geven enkel aan dat twee personen in dezelfde documenten worden vermeld. Ze zeggen niets over wie wat aan wie heeft geschonken, gelegateerd of overgedragen. Gerichte overdrachten (schenkingen, legaten, verdelingen) vereisen een extractie pagina per pagina, die nog niet is uitgevoerd.",
+        relationsPeopleShown: "{shown} van {total} vermelde namen",
+        relationsPickHint:
+          "Kies een persoon om te zien met wie die in dezelfde documenten voorkomt.",
+        relationsFocusHint:
+          "Alleen de verbindingen van {name}. Het getal op elke cirkel is het aantal gedeelde documenten; klik erop om alleen die te tonen.",
+        relationsEmpty:
+          "Te weinig terugkerende personen om relaties te tekenen",
+        filteredByPerson: "Gefilterd op {name}",
+        clearGraphFilter: "Filter verwijderen",
+        keyEvents: "Kerngebeurtenissen",
+        keyEventsHint:
+          "Eén gebeurtenis per document, op de geëxtraheerde datum. Een document dat meerdere akten bundelt — « stukken 1 tot 12 » met verschillende handgiften op verschillende data — verschijnt dus als één enkel punt. Een chronologie per akte vereist de extractie pagina per pagina, die nog niet is uitgevoerd.",
+        keyEventsCount:
+          "{dated} gedateerde gebeurtenissen, {undated} zonder datum",
+        allPeople: "Alle personen",
+        peopleNamed: "Vermelde personen",
+        noEvents: "Geen gebeurtenissen"
+      }
     },
     settings: {
       title: "Instellingen",

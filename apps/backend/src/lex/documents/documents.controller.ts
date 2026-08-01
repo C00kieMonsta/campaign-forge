@@ -11,12 +11,15 @@ import {
   UseGuards
 } from "@nestjs/common";
 import {
+  archiveDocumentsRequestSchema,
   completeUploadRequestSchema,
   deleteDocumentsRequestSchema,
   discardDocumentsRequestSchema,
+  lexArchivedScopeSchema,
   presignUploadRequestSchema,
   updateTranscriptRequestSchema
 } from "@packages/types";
+import type { LexArchivedScope } from "@packages/types";
 import { AdminGuard } from "../../auth/admin.guard";
 import type { AuthUser } from "../../auth/admin.guard";
 import { CurrentUser } from "../../auth/current-user.decorator";
@@ -131,22 +134,47 @@ export class DocumentsController {
     return { document };
   }
 
+  /**
+   * `?archived=exclude|only|include`, absent meaning "exclude". Validated rather than passed
+   * through: `?archived=true` must be a 400, not a silent fall-back to the default that would
+   * render an "Archives" screen full of live documents — and a screen the user restores or deletes
+   * from is the last place to let a typo decide what it shows.
+   */
+  private archivedScope(raw?: string): LexArchivedScope {
+    if (raw === undefined || raw === "") return "exclude";
+    const parsed = lexArchivedScopeSchema.safeParse(raw);
+    if (!parsed.success)
+      throw new BadRequestException(formatZodError(parsed.error));
+    return parsed.data;
+  }
+
   @Get("workspaces/:workspaceId/documents")
   async list(
     @CurrentUser() user: AuthUser,
     @Param("workspaceId") workspaceId: string,
-    @Query("status") status?: string
+    @Query("status") status?: string,
+    @Query("archived") archived?: string
   ) {
-    const items = await this.documents.list(user.email, workspaceId, status);
+    const items = await this.documents.list(
+      user.email,
+      workspaceId,
+      status,
+      this.archivedScope(archived)
+    );
     return { items };
   }
 
   @Get("workspaces/:workspaceId/timeline")
   async timeline(
     @CurrentUser() user: AuthUser,
-    @Param("workspaceId") workspaceId: string
+    @Param("workspaceId") workspaceId: string,
+    @Query("archived") archived?: string
   ) {
-    const items = await this.documents.timeline(user.email, workspaceId);
+    const items = await this.documents.timeline(
+      user.email,
+      workspaceId,
+      this.archivedScope(archived)
+    );
     return { items };
   }
 
@@ -175,6 +203,34 @@ export class DocumentsController {
     if (!parsed.success)
       throw new BadRequestException(formatZodError(parsed.error));
     return this.documents.deleteMany(user.email, parsed.data.documentIds);
+  }
+
+  /**
+   * Multi-select archive: removes documents from search, chat and assessments without destroying
+   * anything (see DocumentsService.archiveMany). This is the bulk action the documents view offers;
+   * bulk-delete above stays for the stuck and unparseable files, and there is deliberately no bulk
+   * hard-delete of a live case file.
+   *
+   * Two segments like bulk-delete, so @Get/@Post("documents/:id") cannot swallow it.
+   */
+  @Post("documents/bulk-archive")
+  async bulkArchive(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const parsed = archiveDocumentsRequestSchema.safeParse(body);
+    if (!parsed.success)
+      throw new BadRequestException(formatZodError(parsed.error));
+    return this.documents.archiveMany(user.email, parsed.data.documentIds);
+  }
+
+  /**
+   * The inverse — the Undo behind an archive, and the restore button on the archives screen. Replay
+   * the `documentIds` the archive returned; anything else is a no-op rather than a wrong write.
+   */
+  @Post("documents/bulk-restore")
+  async bulkRestore(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const parsed = archiveDocumentsRequestSchema.safeParse(body);
+    if (!parsed.success)
+      throw new BadRequestException(formatZodError(parsed.error));
+    return this.documents.restoreMany(user.email, parsed.data.documentIds);
   }
 
   /** Clear out every stuck / unparseable / duplicate document in a workspace at once. */

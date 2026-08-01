@@ -70,8 +70,11 @@ export default function AdminSidebar({
   };
 
   return (
+    // h-full (of AdminLayout's h-screen row), not min-h-screen: the sidebar is chrome and belongs to
+    // the viewport, not to the length of the page beside it. overflow-y-auto so its own nav scrolls
+    // independently if it ever outgrows the screen, instead of pushing the layout taller.
     <aside
-      className={`${collapsed ? "w-16" : "w-64"} shrink-0 min-h-screen bg-sidebar text-sidebar-foreground flex flex-col transition-[width] duration-200`}
+      className={`${collapsed ? "w-16" : "w-64"} shrink-0 h-full overflow-y-auto bg-sidebar text-sidebar-foreground flex flex-col transition-[width] duration-200`}
     >
       <div className={`pt-6 pb-4 space-y-2 ${collapsed ? "px-2" : "px-3"}`}>
         {!collapsed ? (

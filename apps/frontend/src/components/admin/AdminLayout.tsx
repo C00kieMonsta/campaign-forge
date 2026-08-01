@@ -17,7 +17,16 @@ export default function AdminLayout() {
   }
 
   return (
-    <div className="flex min-h-screen">
+    // h-screen, NOT min-h-screen. With min-h-screen this row grows to its CONTENT height, and two
+    // things follow that both looked like separate bugs: the sidebar is a flex child under the
+    // default align-items:stretch, so it stretched to that full content height and appeared to
+    // "keep growing" down a long documents list; and <main> never overflowed, so its overflow-auto
+    // never engaged, the DOCUMENT scrolled instead, and `position: sticky` inside main had no
+    // scrollport to pin against (which is why the chronology's year rails never stuck).
+    //
+    // Fixed to the viewport, <main> becomes the scroll container: the sidebar stays put, sticky
+    // works, and the two chat views' h-[calc(100vh-4rem)] finally means what it was written to mean.
+    <div className="flex h-screen overflow-hidden">
       <AdminSidebar
         collapsed={collapsed}
         onToggle={() => setCollapsed((prev) => !prev)}

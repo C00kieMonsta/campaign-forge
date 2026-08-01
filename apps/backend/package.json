@@ -8,11 +8,12 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "type-check": "tsc --noEmit",
-    "test": "jest -c ../../jest.config.js --selectProjects backend",
+    "test": "TZ=Europe/Brussels jest -c ../../jest.config.js --selectProjects backend",
     "migrate": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
     "migrate:create": "node-pg-migrate create --",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "eval": "nest build && node dist/lex/eval/run-eval.js"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.700.0",

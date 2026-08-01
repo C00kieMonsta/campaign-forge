@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Questions YOU have verified by hand. This file is the only place a human judgement enters the",
+    "evaluation — everything else is derived from the corpus, which means it can only ever check that",
+    "the right documents come back, never that an answer is legally correct.",
+    "",
+    "To add one: ask Lex the question, read the answer, and if it is right note WHICH pièces it should",
+    "have relied on. Put their ids in expectedDocumentIds. The suite then fails the day retrieval stops",
+    "surfacing them — which is how a silent regression becomes visible.",
+    "",
+    "Get a document id from the documents view URL, or:",
+    "  psql -c \"SELECT id, filename FROM lex_documents WHERE filename ILIKE '%conclusions%'\"",
+    "",
+    "id must be unique and stable; prefix it 'verified:' so it never collides with a derived case."
+  ],
+  "cases": []
+}

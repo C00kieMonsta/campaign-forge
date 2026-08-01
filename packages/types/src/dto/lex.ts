@@ -73,6 +73,35 @@ export type DeleteDocumentsRequest = z.infer<
 >;
 
 /**
+ * Multi-select archive, and its inverse. Archiving sets lifecycle_state 'archived', which every
+ * retrieval path already excludes, so a document leaves search and chat without being destroyed —
+ * the row, the S3 object and every citation anchored to it survive. Restore is the same shape, so
+ * both routes share this schema.
+ *
+ * Capped like bulk-delete: a select-all over a whole case file must be one request. The cap is only
+ * a guard against an absurd body — unlike bulk-delete, nothing here is destructive.
+ */
+export const MAX_LIFECYCLE_BATCH = 500;
+export const archiveDocumentsRequestSchema = z.object({
+  documentIds: z.array(z.string().uuid()).min(1).max(MAX_LIFECYCLE_BATCH)
+});
+export type ArchiveDocumentsRequest = z.infer<
+  typeof archiveDocumentsRequestSchema
+>;
+
+/**
+ * How a documents read treats ARCHIVED documents — sent as `?archived=` on the list and timeline
+ * reads, absent meaning "exclude".
+ *
+ * Archived-ness is the only axis this can express, deliberately: 'superseded' duplicates have
+ * always come back from these reads (the documents view labels them "doublon de …" and hides them
+ * behind its own toggle), and a scope that could also drop them would change a behaviour the
+ * archive feature has no business touching.
+ */
+export const lexArchivedScopeSchema = z.enum(["exclude", "only", "include"]);
+export type LexArchivedScope = z.infer<typeof lexArchivedScopeSchema>;
+
+/**
  * Bulk-discard by status. Only the two states that are genuinely disposable are allowed:
  * `awaiting_upload` (bytes never arrived, nothing to retry) and `failed`/`duplicate`. A 'ready'
  * document is never deletable this way — losing a filed exhibit to a mis-click is not acceptable.
@@ -225,6 +254,64 @@ export const saveArtifactRequestSchema = z.object({
   bodyJson: lexArtifactBodySchema
 });
 export type SaveArtifactRequest = z.infer<typeof saveArtifactRequestSchema>;
+
+// ── Money events (the rapport ledger) ─────────────────────────────────────────────────
+/**
+ * The act vocabulary. THIS ENUM, the `lex_money_events_kind_check` CHECK constraint and the
+ * LexMoneyEventKind union are one contract in three places: they must be changed together, because
+ * a value the model may emit and the database refuses aborts an INSERT and loses the batch.
+ *
+ * Exported here rather than kept in the extractor so the model-response schema, the HTTP filter and
+ * the UI's dropdown all read the same list — `lexMoneyEventKindSchema.options` is that list.
+ */
+export const lexMoneyEventKindSchema = z.enum([
+  "don_manuel",
+  "donation",
+  "vente",
+  /** Repayable, therefore outside rapport — never folded into a gift or a payment. */
+  "pret",
+  "succession",
+  "partage",
+  /** Money moved, legal nature not stated. The honest default; 'don_manuel' asserts a gift. */
+  "paiement",
+  "jugement",
+  "autre"
+]);
+
+/** BEF covers the corpus's 'FB' and 'francs' spellings; both normalise to this one value. */
+export const lexMoneyCurrencySchema = z.enum(["BEF", "EUR"]);
+
+/** How much of a date the document stated — "en 1992" is a year, not the 1st of January. */
+export const lexMoneyDatePrecisionSchema = z.enum(["day", "month", "year"]);
+
+/**
+ * The irrevocable conversion rate fixed on 31 December 1998: 40.3399 BEF = 1 EUR.
+ *
+ * A STRING, deliberately. The only correct place to divide by this is Postgres NUMERIC — it is the
+ * literal inside the generated `amount_eur` column, and the two must be changed together. Exporting
+ * it as a JS number would invite a float division somewhere in the client, which is precisely the
+ * lost exactness this feature exists to prevent. It is exported so the UI can name the rate in its
+ * "montant indicatif" caveat, which every converted figure must carry: a 1992 franc and a 2019 euro
+ * are not the same money, and this rate ignores three decades of indexation.
+ */
+export const BEF_PER_EUR = "40.3399";
+
+/**
+ * Triggers the extraction pass. The workspace comes from the path; this body only narrows.
+ *
+ * `force` exists because the pass costs real money: without it a re-run silently skips every
+ * document already at the current extraction version, which is what you want after adding files and
+ * not what you want after changing the prompt. Defaulted to false so the cheap behaviour is the one
+ * you get by not thinking about it.
+ */
+export const extractMoneyEventsRequestSchema = z.object({
+  /** Absent means every ready + active document in the workspace. */
+  documentIds: z.array(z.string().uuid()).min(1).max(500).optional(),
+  force: z.boolean().default(false)
+});
+export type ExtractMoneyEventsRequest = z.infer<
+  typeof extractMoneyEventsRequestSchema
+>;
 
 // ── Streaming (SSE) contract for the chat endpoint ──────────────────────────────────────
 export const lexCitationEventSchema = z.object({
