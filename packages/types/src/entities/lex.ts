@@ -262,10 +262,32 @@ export interface LexArtifactBody {
   claims: LexArtifactClaim[];
 }
 
+/** One pièce the drafter actually read, and how much of it reached the prompt. */
+export interface LexArtifactSource {
+  documentId: string;
+  filename: string;
+  /** Spans of this pièce in the evidence pack. */
+  passages: number;
+}
+
 export interface LexArtifactVerificationReport {
   total: number;
   supported: number;
   unsupported: number;
+  /**
+   * What the draft was written FROM. Absent on versions generated before this was recorded, and on
+   * manual edits.
+   *
+   * Persisted rather than derived from the citations, because the two answer different questions:
+   * the citations say which passages survived verification, `sources` says which the drafter was
+   * shown. A pièce the user selected and that produced no cited claim is exactly the thing worth
+   * seeing — it is either irrelevant or a gap in the draft, and the citation list cannot tell her.
+   */
+  sources?: LexArtifactSource[];
+  /** `search` sampled the file by similarity; `full` read the selection up to the pack cap. */
+  sourceMode?: "search" | "full";
+  /** True when the pack hit its cap, i.e. the selection was larger than what was read. */
+  truncated?: boolean;
 }
 
 export interface LexArtifactVersion {
@@ -350,8 +372,16 @@ export type LexTaskStatus =
   | "failed"
   | "cancelled";
 
-/** `assess_documents` maps over every ready document, then synthesises a cited answer. */
-export type LexTaskKind = "assess_documents";
+/**
+ * `assess_documents` maps over every ready document, then synthesises a cited answer.
+ *
+ * `adverse_case` does the same traversal but reads the file AGAINST the user: it collects what the
+ * documents assert contrary to the position she is defending, groups it by legal issue, and sets her
+ * own material beside it. Whose side the app is on is STATED by her in the task title, never
+ * inferred — everything else in this app refuses to assign a party a role, and a strategic view is
+ * not a licence to start guessing one.
+ */
+export type LexTaskKind = "assess_documents" | "adverse_case";
 
 export interface LexTask {
   id: string;

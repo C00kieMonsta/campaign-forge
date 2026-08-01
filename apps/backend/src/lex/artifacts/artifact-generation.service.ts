@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Injectable, Logger } from "@nestjs/common";
+import { ARTIFACT_PACK_SIZE } from "@packages/types";
 import type {
   LexArtifactBody,
   LexArtifactClaim,
+  LexArtifactSource,
   LexArtifactType,
+  LexArtifactVerificationReport,
   LexLanguage,
   LexVerificationStatus
 } from "@packages/types";
@@ -14,13 +17,39 @@ import { languageName } from "../settings/language-instruction";
 import { SettingsService } from "../settings/settings.service";
 import { VerificationService, type ClaimDraft } from "./verification.service";
 
-const EVIDENCE_PACK_SIZE = 12;
 const MAX_PACK_CHUNK_CHARS = 2000;
+
+/**
+ * Which pièces the evidence pack came from, most-drawn-upon first.
+ *
+ * Ordering matters more than it looks: this list is what the user reads to decide whether the draft
+ * rests on the right pièces, and a pièce contributing eleven spans is a different fact about the
+ * draft than one contributing a single passage. Ties fall back to the filename so two runs over the
+ * same pack render identically.
+ */
+export function summariseSources(
+  pack: readonly RetrievedChunk[]
+): LexArtifactSource[] {
+  const byDocument = new Map<string, LexArtifactSource>();
+  for (const c of pack) {
+    const existing = byDocument.get(c.documentId);
+    if (existing) existing.passages += 1;
+    else
+      byDocument.set(c.documentId, {
+        documentId: c.documentId,
+        filename: c.filename,
+        passages: 1
+      });
+  }
+  return [...byDocument.values()].sort(
+    (a, b) => b.passages - a.passages || a.filename.localeCompare(b.filename)
+  );
+}
 
 export interface GeneratedArtifact {
   body: LexArtifactBody;
   verificationStatus: LexVerificationStatus;
-  report: { total: number; supported: number; unsupported: number };
+  report: LexArtifactVerificationReport;
   pack: RetrievedChunk[];
 }
 
@@ -48,13 +77,24 @@ export class ArtifactGenerationService {
     type: LexArtifactType;
     title: string;
     instructions?: string;
+    /** Which pièces the drafter may use; undefined means the whole case file. */
+    documentIds?: string[];
+    /** `full` widens the pack to everything in the selection instead of a similarity sample. */
+    sourceMode?: "search" | "full";
   }): Promise<GeneratedArtifact> {
     const query = `${params.title}\n${params.instructions ?? ""}`.trim();
+    // `search` samples by similarity; `full` widens the pack sixteenfold over the same selection.
+    // Both are caps, and `full` is bounded on purpose: the reading tier holds a million tokens, but
+    // a pack of every chunk in a 54-document file is 12 765 spans and the drafter would spend its
+    // attention on the wrong ones. The report records whether the cap was reached, so a draft never
+    // quietly rests on a sample the user believes was her whole selection.
+    const packSize = ARTIFACT_PACK_SIZE[params.sourceMode ?? "search"];
     const pack = await this.rag.retrieve(
       params.ownerEmail,
       params.workspaceId,
       query,
-      EVIDENCE_PACK_SIZE
+      packSize,
+      params.documentIds
     );
 
     const drafts = await this.draftClaims(
@@ -88,10 +128,13 @@ export class ArtifactGenerationService {
     }
 
     const supported = claims.filter((c) => c.status === "supported").length;
-    const report = {
+    const report: LexArtifactVerificationReport = {
       total: claims.length,
       supported,
-      unsupported: claims.length - supported
+      unsupported: claims.length - supported,
+      sources: summariseSources(pack),
+      sourceMode: params.sourceMode ?? "search",
+      truncated: pack.length >= packSize
     };
     const verificationStatus: LexVerificationStatus =
       claims.length > 0 && supported === claims.length ? "verified" : "failed";
@@ -99,7 +142,12 @@ export class ArtifactGenerationService {
     this.logger.log(
       JSON.stringify({
         action: "lexArtifactGenerated",
-        ...report,
+        total: report.total,
+        supported: report.supported,
+        unsupported: report.unsupported,
+        packSpans: pack.length,
+        packDocuments: report.sources?.length ?? 0,
+        sourceMode: report.sourceMode,
         verificationStatus
       })
     );
@@ -131,7 +179,6 @@ export class ArtifactGenerationService {
 
     const raw = await this.openai.complete({
       json: true,
-      temperature: 0,
       maxTokens: 3000,
       system:
         "You are a Belgian-law legal drafter. You draft court documents grounded strictly in " +

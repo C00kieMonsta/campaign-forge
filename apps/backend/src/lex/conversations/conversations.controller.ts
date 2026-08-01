@@ -141,7 +141,8 @@ export class ConversationsController {
         id,
         parsed.data.content,
         (delta) => send({ type: "token", delta }),
-        parsed.data.pins ?? []
+        parsed.data.pins ?? [],
+        parsed.data.depth
       );
       send({ type: "citations", citations });
       send({ type: "done", messageId });

@@ -300,7 +300,7 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
   }
 
   private async execute(task: ClaimedTaskRow, trace: TaskTrace): Promise<void> {
-    if (task.kind !== "assess_documents") {
+    if (task.kind !== "assess_documents" && task.kind !== "adverse_case") {
       throw new Error(`Unsupported task kind "${task.kind}"`);
     }
     await this.assessDocuments(task, trace);
@@ -615,15 +615,27 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
       (partCount > 1 ? ` (section ${partIndex + 1} of ${partCount})` : "");
 
     const raw = await this.openai.complete({
+      // per-window finding extraction — up to 224 calls in a single adverse-case run.
+      fast: true,
       json: true,
-      temperature: 0,
       maxTokens: 1500,
       system:
-        "You are a legal analyst working through a Belgian-law court file one document at a " +
-        "time. Extract ONLY what bears on the assessment the lawyer asked for — however " +
-        "interesting the rest of the document is, it is noise here. Most documents in a case " +
-        "file are irrelevant to any given question: an empty findings array is the expected " +
-        "answer, never a failure. " +
+        (task.kind === "adverse_case"
+          ? // Reading the file AGAINST her. The party is named by her in the title and is never
+            // inferred: the app refuses to assign anyone a role, and this feature is not a licence
+            // to start. Asking for the adverse material specifically is the point — a run that
+            // returns only what helps her is the confirmation bias the exercise exists to break.
+            `You are a legal analyst preparing a Belgian-law case. Your job here is ADVERSARIAL: ` +
+            `read this document for whatever tells AGAINST the party named below, as opposing ` +
+            `counsel would. Extract assertions, admissions, figures, dates and omissions that ` +
+            `undermine that party's position or support the other side. Do NOT extract what ` +
+            `helps them — a separate pass does that. Most documents contain nothing adverse: an ` +
+            `empty findings array is the expected answer, never a failure. `
+          : "You are a legal analyst working through a Belgian-law court file one document at a " +
+            "time. Extract ONLY what bears on the assessment the lawyer asked for — however " +
+            "interesting the rest of the document is, it is noise here. Most documents in a case " +
+            "file are irrelevant to any given question: an empty findings array is the expected " +
+            "answer, never a failure. ") +
         // Field-scoped language rule, NOT the shared outputLanguageInstruction: `quote` is
         // matched character-for-character against the stored document, so a translated or
         // tidied quote is silently discarded and its finding is lost.
@@ -632,7 +644,9 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
         `ellipses or reformat it. A finding whose quote is not found verbatim in the document ` +
         `is discarded, so a fabricated quote loses you the finding.`,
       user:
-        `ASSESSMENT: ${task.title}\n` +
+        (task.kind === "adverse_case"
+          ? `PARTY BEING DEFENDED: ${task.title}\n`
+          : `ASSESSMENT: ${task.title}\n`) +
         `${task.instructions ? `INSTRUCTIONS: ${task.instructions}\n` : ""}` +
         `DOCUMENT: ${doc.filename}${where}\n` +
         `---\n${part}\n---\n\n` +
@@ -716,16 +730,49 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
           .join("\n\n")
       : "(no relevant findings were extracted from the documents in this workspace)";
 
+    /**
+     * The adverse read is the one place this app takes a position, so the rules it works under are
+     * stricter, not looser.
+     *
+     * Every contention must rest on a finding that already passed the verbatim gate, so the app can
+     * only ever say "this is asserted, here is where". The STRENGTH of a contention and the answer
+     * to it are judgement, and must be written as judgement rather than as fact — the reader is a
+     * practitioner who will discount an opinion but may act on a statement.
+     *
+     * The most important rule is the last one: an absence in the FINDINGS is an absence IN THE FILE
+     * AS READ, never proof that no answer exists. On a case where the app has read 54 documents and
+     * the opponent has filed more, "no counter-argument was found" would be a dangerous thing to
+     * read as "you have no counter-argument".
+     */
     const system =
-      "You are Lex, a meticulous legal assistant for Belgian-law court files. You are writing " +
-      "the conclusion of a full read-through of a case file: every document was read " +
-      "separately and the relevant FINDINGS below are what came back, each with the verbatim " +
-      "text that establishes it. Answer ONLY from these FINDINGS. Cite every factual claim " +
-      "inline with its marker, e.g. [1] or [2] — this answer is filed in court, and an " +
-      "uncited claim is unusable. If the FINDINGS do not answer the question, say so plainly " +
-      "and do not speculate. Format your answer as Markdown: short paragraphs, `##` headings " +
-      "when the answer has parts, bullet lists for enumerations, tables for comparisons, and " +
-      "blockquotes for text quoted from a source. Never wrap the whole answer in a code fence.";
+      task.kind === "adverse_case"
+        ? "You are Lex, preparing a Belgian-law case AGAINST the party named by the user, so that " +
+          "their own counsel can see the case coming. Every document in the file was read " +
+          "separately and the ADVERSE FINDINGS below are what came back, each with the verbatim " +
+          "text that establishes it. " +
+          "Organise your answer by LEGAL ISSUE (rapport, réserve, réduction, recel, prescription, " +
+          "usufruit, indivision, or whatever the findings actually raise — do not invent issues " +
+          "the findings do not support). Under each issue: state the contention as opposing " +
+          "counsel would put it, cite every factual element inline with its marker [1], then give " +
+          "your assessment of how strongly the file supports it and what would answer it. " +
+          'Mark judgement AS judgement: write "à mon sens", "cette contention paraît", ' +
+          '"il me semble" for anything that is not directly in a finding, so the reader can tell ' +
+          "an argument from a fact. " +
+          "Where the findings contain nothing answering a contention, say that NOTHING ANSWERING " +
+          "IT WAS FOUND IN THE DOCUMENTS READ — never that no answer exists. The file read here " +
+          "may be incomplete, and the difference matters. " +
+          "Finish with the two or three points that most need work, ordered by exposure. " +
+          "Format as Markdown: `##` per issue, short paragraphs, blockquotes for quoted text. " +
+          "Never wrap the whole answer in a code fence."
+        : "You are Lex, a meticulous legal assistant for Belgian-law court files. You are writing " +
+          "the conclusion of a full read-through of a case file: every document was read " +
+          "separately and the relevant FINDINGS below are what came back, each with the verbatim " +
+          "text that establishes it. Answer ONLY from these FINDINGS. Cite every factual claim " +
+          "inline with its marker, e.g. [1] or [2] — this answer is filed in court, and an " +
+          "uncited claim is unusable. If the FINDINGS do not answer the question, say so plainly " +
+          "and do not speculate. Format your answer as Markdown: short paragraphs, `##` headings " +
+          "when the answer has parts, bullet lists for enumerations, tables for comparisons, and " +
+          "blockquotes for text quoted from a source. Never wrap the whole answer in a code fence.";
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: "system", content: system },
@@ -743,23 +790,31 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
               `were assessed — say so explicitly in your answer: ${partial.join(", ")}.`
             : "")
       },
-      { role: "system", content: `FINDINGS:\n${findingsBlock}` },
+      {
+        role: "system",
+        content:
+          (task.kind === "adverse_case" ? "ADVERSE FINDINGS" : "FINDINGS") +
+          `:\n${findingsBlock}`
+      },
       // Last system message, so the language pin is the most recent instruction the model reads
       // (the findings and quotes are frequently in another language).
       { role: "system", content: outputLanguageInstruction(language) },
       {
         role: "user",
         content:
-          `${task.title}` +
+          (task.kind === "adverse_case"
+            ? `Partie défendue : ${task.title}. Construisez le dossier qui lui est opposé.`
+            : task.title) +
           `${task.instructions ? `\n\n${task.instructions}` : ""}`
       }
     ];
 
     let full = "";
-    // temperature 0: an assessment that is filed in court should not vary run to run.
-    for await (const delta of this.openai.streamChat(messages, {
-      temperature: 0
-    })) {
+    // The reasoning models reject a temperature, so an assessment may now vary in WORDING between
+    // runs. Its substance cannot: every finding it draws on has already passed the verbatim gate
+    // against the stored document, so a rerun can say the same thing differently but cannot say
+    // something the file does not support.
+    for await (const delta of this.openai.streamChat(messages)) {
       full += delta;
       await params.onDelta(delta);
     }

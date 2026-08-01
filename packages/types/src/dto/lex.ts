@@ -156,7 +156,9 @@ export type UpdateAuthorityRequest = z.infer<
 export const createTaskRequestSchema = z.object({
   workspaceId: z.string().uuid(),
   conversationId: z.string().uuid().optional(),
-  kind: z.enum(["assess_documents"]).default("assess_documents"),
+  kind: z
+    .enum(["assess_documents", "adverse_case"])
+    .default("assess_documents"),
   title: z.string().min(1).max(300),
   instructions: z.string().max(4000).optional()
 });
@@ -204,7 +206,13 @@ export type LexPin = z.infer<typeof lexPinSchema>;
 
 export const sendMessageRequestSchema = z.object({
   content: z.string().min(1),
-  pins: z.array(lexPinSchema).max(20).optional()
+  pins: z.array(lexPinSchema).max(20).optional(),
+  /**
+   * How much deliberation this turn deserves. Per-turn rather than a setting: a question about
+   * which piece mentions a date and a passage that will be argued from are not the same request,
+   * and paying frontier-tier reasoning on every follow-up is what a single global default forces.
+   */
+  depth: z.enum(["quick", "standard", "thorough"]).optional()
 });
 export type SendMessageRequest = z.infer<typeof sendMessageRequestSchema>;
 
@@ -216,14 +224,48 @@ export type RenameConversationRequest = z.infer<
 >;
 
 // ── Artifacts ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * How many spans a draft is written from, per reading mode.
+ *
+ * Shared rather than duplicated because the dialog states these numbers to the user before she
+ * commits to a run, and a frontend claiming "12 passages" while the server reads a different count
+ * would be worse than saying nothing at all.
+ */
+export const ARTIFACT_PACK_SIZE: Record<"search" | "full", number> = {
+  search: 12,
+  full: 200
+};
+
 export const generateArtifactRequestSchema = z.object({
   workspaceId: z.string().uuid(),
   conversationId: z.string().uuid().optional(),
   type: z.enum(["memo", "chronology", "submission"]),
   title: z.string().min(1).max(200),
-  instructions: z.string().max(4000).optional()
+  instructions: z.string().max(4000).optional(),
+  /**
+   * Which pièces the drafter may use. Absent means the whole case file.
+   *
+   * Explicit because the default was indefensible for a court document: retrieval picked 12 chunks
+   * out of 12 765 by similarity to the title, i.e. 0.09% of the file, and the dialog said nothing
+   * about it. A drafter that silently chooses its own evidence is not one a filing can rest on.
+   */
+  documentIds: z.array(z.string().uuid()).max(500).optional(),
+  /**
+   * `search` keeps the old behaviour — a similarity sample of the selected pièces, fast and partial.
+   * `full` widens the pack to ARTIFACT_PACK_SIZE.full spans of the same selection: slower and dearer,
+   * and still a cap rather than the entire file, which is why the version records whether it was hit.
+   */
+  sourceMode: z.enum(["search", "full"]).default("search")
 });
-export type GenerateArtifactRequest = z.infer<
+/**
+ * The payload a CLIENT sends — `z.input`, not `z.infer`.
+ *
+ * `sourceMode` carries a `.default()`, so the inferred OUTPUT type makes it required and every
+ * caller that is happy with the default would have to state it. What the server receives is the
+ * input side; that is what this type is for.
+ */
+export type GenerateArtifactRequest = z.input<
   typeof generateArtifactRequestSchema
 >;
 

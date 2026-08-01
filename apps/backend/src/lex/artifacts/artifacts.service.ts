@@ -137,6 +137,8 @@ export class ArtifactsService {
       type: LexArtifactType;
       title: string;
       instructions?: string;
+      documentIds?: string[];
+      sourceMode?: "search" | "full";
     }
   ): Promise<{ artifact: LexArtifact; version: LexArtifactVersion }> {
     await this.workspaces.getOrFail(ownerEmail, params.workspaceId);
@@ -146,7 +148,9 @@ export class ArtifactsService {
       workspaceId: params.workspaceId,
       type: params.type,
       title: params.title,
-      instructions: params.instructions
+      instructions: params.instructions,
+      documentIds: params.documentIds,
+      sourceMode: params.sourceMode
     });
 
     const packByChunk = new Map<string, RetrievedChunk>();

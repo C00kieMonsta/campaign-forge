@@ -34,7 +34,10 @@ const schema = z.object({
   DATABASE_SSL: emptyAsUndefined(z.string().default("true")),
   OPENAI_API_KEY: emptyAsUndefined(z.string().optional()),
   OPENAI_API_KEY_SECRET_ARN: emptyAsUndefined(z.string().optional()),
-  OPENAI_CHAT_MODEL: emptyAsUndefined(z.string().default("gpt-4o")),
+  // No chat-model keys here on purpose: the roster lives in @packages/types/models, where the
+  // choice is reviewable in a diff and cannot drift between environments. The embedding model DOES
+  // stay configurable — changing it invalidates every stored vector, so it is a deploy-time
+  // decision tied to the data, not a code preference.
   OPENAI_EMBEDDING_MODEL: emptyAsUndefined(
     z.string().default("text-embedding-3-large")
   ),

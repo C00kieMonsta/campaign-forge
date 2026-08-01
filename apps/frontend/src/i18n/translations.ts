@@ -313,6 +313,46 @@ export const translations = {
       authoritiesBudget:
         "Environ {tokens} tokens de résumé juridique sont ajoutés à chaque question.",
       articles: "articles",
+      depthLabel: "Profondeur de raisonnement",
+      depthName: {
+        quick: "Rapide",
+        standard: "Standard",
+        thorough: "Approfondi"
+      },
+      depthHint: {
+        quick:
+          "Pour une recherche ou une relance : modèle plus économique, raisonnement bref.",
+        standard: "Le réglage courant pour une question de fond.",
+        thorough:
+          "Pour un passage que vous allez lire de près, plaider ou déposer : raisonnement maximal, plus lent et plus coûteux."
+      },
+      // Sources de rédaction. Le dialogue annonce ces chiffres avant la génération : une pièce
+      // cochée qui n'a rien fourni est justement ce qu'il faut voir.
+      sourcePieces: "Pièces en entrée",
+      wholeCaseFile: "Tout le dossier",
+      selectAllPieces: "Tout cocher",
+      noDocumentsReady: "Aucune pièce analysée pour l'instant.",
+      scopeWholeFile: "Tout le dossier ({n} pièces)",
+      scopeSelection: "{n} pièce(s) sur {total}",
+      scopePassages: "{n} passages transmis à la rédaction",
+      readingMode: "Mode de lecture",
+      readingSampled: "Recherche ciblée",
+      readingSampledHint:
+        "{n} passages choisis par similarité avec le titre et les consignes. Rapide.",
+      readingFull: "Lecture élargie",
+      readingFullHint:
+        "Jusqu'à {n} passages de la sélection. Nettement plus lent et plus coûteux.",
+      sourcesUsed: "Pièces lues",
+      sourcesUsedHint:
+        "Ce sur quoi la rédaction s'est appuyée. Une pièce listée ici sans citation en dessous n'a rien apporté à ce texte.",
+      sourcesTruncated:
+        "Le plafond de passages a été atteint : la sélection était plus large que ce qui a été lu.",
+      passagesCount: "{n} passage(s)",
+      adverseMode: "Thèse adverse",
+      adverseHint:
+        "Lit tout le dossier CONTRE la partie que vous défendez, moyen par moyen, comme le ferait le conseil d'en face. Chaque élément est cité ; ce qui relève de l'appréciation est signalé comme tel.",
+      adversePlaceholder:
+        "Qui défendez-vous ? (nom de la partie — l'application ne le déduit jamais)",
       deepAssessment: "Analyse approfondie",
       deepAssessmentHint:
         "Analyse l'ensemble des documents du dossier. L'analyse continue même si vous fermez cette page.",
@@ -957,6 +997,44 @@ export const translations = {
       authoritiesBudget:
         "Ongeveer {tokens} tokens juridische samenvatting worden aan elke vraag toegevoegd.",
       articles: "artikelen",
+      depthLabel: "Redeneerdiepte",
+      depthName: {
+        quick: "Snel",
+        standard: "Standaard",
+        thorough: "Grondig"
+      },
+      depthHint: {
+        quick:
+          "Voor een opzoeking of een vervolgvraag: goedkoper model, kort redeneren.",
+        standard: "De gewone instelling voor een inhoudelijke vraag.",
+        thorough:
+          "Voor een passage die u nauwkeurig zult lezen, bepleiten of neerleggen: maximaal redeneren, trager en duurder."
+      },
+      sourcePieces: "Bronstukken",
+      wholeCaseFile: "Het hele dossier",
+      selectAllPieces: "Alles aanvinken",
+      noDocumentsReady: "Nog geen verwerkt stuk.",
+      scopeWholeFile: "Het hele dossier ({n} stukken)",
+      scopeSelection: "{n} stuk(ken) van {total}",
+      scopePassages: "{n} passages gaan naar de opsteller",
+      readingMode: "Leesmodus",
+      readingSampled: "Gerichte zoekopdracht",
+      readingSampledHint:
+        "{n} passages gekozen op gelijkenis met de titel en de instructies. Snel.",
+      readingFull: "Ruime lezing",
+      readingFullHint:
+        "Tot {n} passages uit de selectie. Merkbaar trager en duurder.",
+      sourcesUsed: "Gelezen stukken",
+      sourcesUsedHint:
+        "Waarop de opsteller zich heeft gebaseerd. Een stuk dat hier staat zonder citaat hieronder heeft niets aan deze tekst bijgedragen.",
+      sourcesTruncated:
+        "De passagelimiet is bereikt: de selectie was ruimer dan wat gelezen is.",
+      passagesCount: "{n} passage(s)",
+      adverseMode: "Tegenpositie",
+      adverseHint:
+        "Leest het volledige dossier TEGEN de partij die u verdedigt, middel per middel, zoals de tegenpartij zou doen. Elk element wordt geciteerd; wat een inschatting is, wordt als zodanig aangeduid.",
+      adversePlaceholder:
+        "Wie verdedigt u? (naam van de partij — de toepassing leidt die nooit zelf af)",
       deepAssessment: "Grondige analyse",
       deepAssessmentHint:
         "Analyseert alle documenten van het dossier. De analyse gaat door ook als u deze pagina sluit.",

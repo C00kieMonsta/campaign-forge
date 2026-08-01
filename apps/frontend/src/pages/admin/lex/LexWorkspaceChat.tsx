@@ -4,8 +4,10 @@ import type {
   LexCitationEvent,
   LexDocument,
   LexMessage,
-  LexTask
+  LexTask,
+  ReasoningDepth
 } from "@packages/types";
+import { ARTIFACT_PACK_SIZE, DEFAULT_DEPTH } from "@packages/types";
 import {
   Button,
   Dialog,
@@ -36,6 +38,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  ShieldAlert,
   Square,
   Trash2,
   Upload,
@@ -47,6 +50,7 @@ import { MarkdownMessage } from "@/components/lex/MarkdownMessage";
 import PinnedDocumentsPanel from "@/components/lex/PinnedDocumentsPanel";
 import TaskPanel from "@/components/lex/TaskPanel";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useThrottled } from "@/hooks/use-throttled";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -62,6 +66,9 @@ import { useLexControllers } from "@/store/LexStoreProvider";
 import VoiceNoteDialog from "./VoiceNoteDialog";
 
 // Ingestion is still running while a document is in any of these states — poll until it settles.
+/** Left to right, cheapest first — the control reads as a dial. */
+const DEPTH_ORDER: ReasoningDepth[] = ["quick", "standard", "thorough"];
+
 const IN_PROGRESS: ReadonlySet<LexDocument["parseStatus"]> = new Set([
   "uploaded",
   "parsing",
@@ -411,6 +418,27 @@ export default function LexWorkspaceChat() {
       }));
   }, [documents, showProblems, docQuery]);
 
+  /**
+   * The pièces that can actually feed a draft, oldest first.
+   *
+   * Only `ready` documents: anything still parsing has no chunks, and a failed one has none it will
+   * ever get. Offering them would let her tick a pièce that silently contributes nothing — the
+   * exact failure this dialog exists to end. Duplicates are excluded from retrieval anyway.
+   */
+  const generatableDocs = useMemo(
+    () =>
+      documents
+        .filter((d) => d.parseStatus === "ready" && !d.duplicateOf)
+        .sort((a, b) => {
+          if (!a.timelineDate && !b.timelineDate)
+            return a.filename.localeCompare(b.filename);
+          if (!a.timelineDate) return 1;
+          if (!b.timelineDate) return -1;
+          return a.timelineDate.localeCompare(b.timelineDate);
+        }),
+    [documents]
+  );
+
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const msgFilter = useCallback(
     (m: LexMessage) =>
@@ -473,6 +501,24 @@ export default function LexWorkspaceChat() {
    * it runs in the background and posts its answer back into this conversation.
    */
   const [deepMode, setDeepMode] = useState(false);
+  /**
+   * Reads the file AGAINST a party, so her own counsel sees the case coming.
+   *
+   * Separate from deep mode rather than a phrasing of it, because the input means something
+   * different: what she types is WHO IS BEING DEFENDED, not a question. The app never infers whose
+   * side it is on — it refuses to assign anyone a role anywhere else, and taking a position is not
+   * a licence to start guessing one.
+   */
+  const [adverseMode, setAdverseMode] = useState(false);
+  /**
+   * How much deliberation this turn gets. Persisted, because it is a working preference rather than
+   * a per-question decision — but per-turn on the wire, so raising it for one filing does not raise
+   * it for every follow-up afterwards.
+   */
+  const [depth, setDepth] = useLocalStorage<ReasoningDepth>(
+    "lex_chat_depth",
+    DEFAULT_DEPTH
+  );
 
   // Older messages exist beyond the loaded page (a years-long thread is never fetched whole).
   const [hasOlder, setHasOlder] = useState(false);
@@ -522,6 +568,19 @@ export default function LexWorkspaceChat() {
   const [genTitle, setGenTitle] = useState("");
   const [genInstructions, setGenInstructions] = useState("");
   const [generating, setGenerating] = useState(false);
+  /**
+   * Which pièces the drafter may use. Empty means the whole case file.
+   *
+   * The dialog used to say nothing about its inputs, and the default was a similarity sample of
+   * twelve spans out of twelve thousand — a court document written from 0.09% of the file, with
+   * nothing on screen admitting it. Both the scope and the reading mode are now shown before the
+   * run and recorded on the version afterwards.
+   */
+  const [genDocIds, setGenDocIds] = useState<string[]>([]);
+  const [genSourceMode, setGenSourceMode] = useState<"search" | "full">(
+    "search"
+  );
+  const [genDocQuery, setGenDocQuery] = useState("");
 
   // Initial load: workspace + documents + the (single) most recent conversation and its messages.
   useEffect(() => {
@@ -798,17 +857,22 @@ export default function LexWorkspaceChat() {
     // Deep mode: hand the question to the background runner instead of streaming a reply. It
     // reads every document in the case file, so it takes minutes — the TaskPanel above the thread
     // shows its progress and reasoning, and the answer is posted here when it lands.
-    if (deepMode) {
+    if (deepMode || adverseMode) {
       try {
         await controllers.tasks.create({
           workspaceId: id,
           conversationId: convId,
-          kind: "assess_documents",
-          // The first line is the task's label in the panel; the whole question is the brief.
-          title: text.split("\n")[0].slice(0, 200),
-          instructions: content
+          kind: adverseMode ? "adverse_case" : "assess_documents",
+          // For an assessment the first line labels the task and the whole text is the brief. For
+          // an adverse read the text IS the party being defended, which the runner reads from the
+          // title — hence no truncation-by-line there.
+          title: adverseMode
+            ? text.trim().slice(0, 200)
+            : text.split("\n")[0].slice(0, 200),
+          instructions: adverseMode ? undefined : content
         });
         setDeepMode(false);
+        setAdverseMode(false);
       } catch (err) {
         setInput(text); // don't lose a long question because the launch failed
         toast({ title: String(err), variant: "destructive" });
@@ -855,7 +919,8 @@ export default function LexWorkspaceChat() {
           onError: (message) =>
             toast({ title: message, variant: "destructive" })
         },
-        pins
+        pins,
+        depth
       );
       // Pull the persisted user + assistant messages into the store, then drop the local echo.
       await controllers.conversations.loadMessages(convId);
@@ -870,6 +935,51 @@ export default function LexWorkspaceChat() {
     }
   };
 
+  const genDocIdSet = useMemo(() => new Set(genDocIds), [genDocIds]);
+
+  const genVisibleDocs = useMemo(() => {
+    const needle = genDocQuery.trim().toLowerCase();
+    if (needle.length === 0) return generatableDocs;
+    return generatableDocs.filter(
+      (d) =>
+        d.filename.toLowerCase().includes(needle) ||
+        (d.timelineDate ?? "").includes(needle)
+    );
+  }, [generatableDocs, genDocQuery]);
+
+  /**
+   * The sentence under the pièce list: how many pièces are in scope, and how many spans of them the
+   * drafter will see.
+   *
+   * Both halves are stated because either alone misleads. "56 pièces" reads as "the whole file was
+   * used" when the sampled mode shows the model twelve spans of it; "12 passages" says nothing about
+   * what they were drawn from.
+   */
+  const genScopeLine = useMemo(() => {
+    const scope =
+      genDocIds.length === 0
+        ? t.lex.scopeWholeFile.replace("{n}", String(generatableDocs.length))
+        : t.lex.scopeSelection
+            .replace("{n}", String(genDocIds.length))
+            .replace("{total}", String(generatableDocs.length));
+    return `${scope} · ${t.lex.scopePassages.replace(
+      "{n}",
+      String(ARTIFACT_PACK_SIZE[genSourceMode])
+    )}`;
+  }, [genDocIds.length, generatableDocs.length, genSourceMode, t]);
+
+  /**
+   * Opens the dialog, seeded from whatever is ticked in the documents panel.
+   *
+   * Ticking pièces and then hitting "generate" is the natural gesture, and having the dialog ignore
+   * that selection would be a quiet contradiction of what is on screen.
+   */
+  const openGenerate = () => {
+    setGenDocIds(selectedDocs);
+    setGenDocQuery("");
+    setGenOpen(true);
+  };
+
   const handleGenerate = async () => {
     if (!genTitle.trim() || generating) return;
     setGenerating(true);
@@ -879,7 +989,10 @@ export default function LexWorkspaceChat() {
         conversationId: activeConvId ?? undefined,
         type: genType,
         title: genTitle.trim(),
-        instructions: genInstructions.trim() || undefined
+        instructions: genInstructions.trim() || undefined,
+        // Empty means the whole file, which the schema expresses as absent rather than as [].
+        documentIds: genDocIds.length > 0 ? genDocIds : undefined,
+        sourceMode: genSourceMode
       });
       navigate(`/lex/artifacts/${artifact.id}`);
     } catch (err) {
@@ -966,7 +1079,7 @@ export default function LexWorkspaceChat() {
           ) : null}
           <Button
             size="sm"
-            onClick={() => setGenOpen(true)}
+            onClick={() => openGenerate()}
             className="gradient-terracotta text-white"
           >
             <Plus className="h-4 w-4 mr-1.5" />
@@ -1322,7 +1435,11 @@ export default function LexWorkspaceChat() {
                     }
                   }}
                   placeholder={
-                    deepMode ? t.lex.deepPlaceholder : t.lex.askPlaceholder
+                    adverseMode
+                      ? t.lex.adversePlaceholder
+                      : deepMode
+                        ? t.lex.deepPlaceholder
+                        : t.lex.askPlaceholder
                   }
                   disabled={streaming}
                   className="min-h-10 max-h-48 resize-y"
@@ -1367,6 +1484,50 @@ export default function LexWorkspaceChat() {
                 >
                   <Brain className="h-3.5 w-3.5" />
                   {t.lex.deepAssessment}
+                </button>
+                {/* Depth applies to a normal turn. Deep and adverse runs read the whole file
+                    through the background runner, which sets its own tier — offering a dial that
+                    does nothing there would be a lie. */}
+                {!deepMode && !adverseMode ? (
+                  <div
+                    className="flex items-center rounded-full border p-0.5"
+                    role="group"
+                    aria-label={t.lex.depthLabel}
+                  >
+                    {DEPTH_ORDER.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => setDepth(option)}
+                        aria-pressed={depth === option}
+                        title={t.lex.depthHint[option]}
+                        className={
+                          depth === option
+                            ? "rounded-full px-2.5 py-1 text-xs bg-secondary text-secondary-foreground font-medium"
+                            : "rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+                        }
+                      >
+                        {t.lex.depthName[option]}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdverseMode((prev) => !prev);
+                    setDeepMode(false);
+                  }}
+                  aria-pressed={adverseMode}
+                  title={t.lex.adverseHint}
+                  className={
+                    adverseMode
+                      ? "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs bg-destructive/10 border-destructive/30 text-destructive"
+                      : "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
+                  }
+                >
+                  <ShieldAlert className="h-3.5 w-3.5" />
+                  {t.lex.adverseMode}
                 </button>
                 {deepMode ? (
                   <span className="text-[11px] text-muted-foreground">
@@ -1440,6 +1601,113 @@ export default function LexWorkspaceChat() {
                 placeholder={t.lex.instructionsPlaceholder}
                 rows={3}
               />
+            </div>
+
+            {/* What the draft will be written FROM. Stated before the run, recorded after it. */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label>{t.lex.sourcePieces}</Label>
+                <div className="flex items-center gap-3 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setGenDocIds([])}
+                    className={
+                      genDocIds.length === 0
+                        ? "font-medium text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }
+                  >
+                    {t.lex.wholeCaseFile}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setGenDocIds(generatableDocs.map((d) => d.id))
+                    }
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    {t.lex.selectAllPieces}
+                  </button>
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground">{genScopeLine}</p>
+
+              {generatableDocs.length > 8 ? (
+                <Input
+                  value={genDocQuery}
+                  onChange={(e) => setGenDocQuery(e.target.value)}
+                  placeholder={t.lex.searchDocuments}
+                  className="h-8 text-xs"
+                />
+              ) : null}
+
+              <div className="max-h-44 overflow-y-auto rounded-md border divide-y">
+                {genVisibleDocs.length === 0 ? (
+                  <p className="px-2 py-3 text-xs text-muted-foreground">
+                    {t.lex.noDocumentsReady}
+                  </p>
+                ) : (
+                  genVisibleDocs.map((d) => (
+                    <label
+                      key={d.id}
+                      className="flex items-start gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-muted/50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={genDocIdSet.has(d.id)}
+                        onChange={(e) =>
+                          setGenDocIds((prev) =>
+                            e.target.checked
+                              ? [...prev, d.id]
+                              : prev.filter((x) => x !== d.id)
+                          )
+                        }
+                        className="mt-0.5 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1 truncate">
+                        {d.filename}
+                      </span>
+                      {d.timelineDate ? (
+                        <span className="shrink-0 text-muted-foreground tabular-nums">
+                          {d.timelineDate}
+                        </span>
+                      ) : null}
+                    </label>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* How much of that selection actually reaches the drafter. */}
+            <div className="space-y-2">
+              <Label>{t.lex.readingMode}</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {(["search", "full"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setGenSourceMode(mode)}
+                    className={`rounded-md border p-2 text-left text-xs transition-colors ${
+                      genSourceMode === mode
+                        ? "border-primary bg-primary/5"
+                        : "hover:bg-muted/50"
+                    }`}
+                  >
+                    <span className="block font-medium">
+                      {mode === "search"
+                        ? t.lex.readingSampled
+                        : t.lex.readingFull}
+                    </span>
+                    <span className="block text-muted-foreground">
+                      {(mode === "search"
+                        ? t.lex.readingSampledHint
+                        : t.lex.readingFullHint
+                      ).replace("{n}", String(ARTIFACT_PACK_SIZE[mode]))}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           <DialogFooter>

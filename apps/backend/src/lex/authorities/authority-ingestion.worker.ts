@@ -542,6 +542,8 @@ export class AuthorityIngestionWorker implements OnModuleInit, OnModuleDestroy {
       Math.floor(BATCH_INPUT_MAX_CHARS / batch.length)
     );
     const raw = await this.openai.complete({
+      // hierarchical digest — up to 40 calls per authority.
+      fast: true,
       json: true,
       system:
         "You are a legal-knowledge indexer for Belgian-law statutes. You index only what is in front of you and never invent an article number.",
@@ -582,6 +584,8 @@ export class AuthorityIngestionWorker implements OnModuleInit, OnModuleDestroy {
   ): Promise<string[]> {
     try {
       const raw = await this.openai.complete({
+        // hierarchical digest — up to 40 calls per authority.
+        fast: true,
         json: true,
         system:
           "You compress legal indexes. You never invent an article number and never drop the end of the range.",
@@ -627,6 +631,8 @@ export class AuthorityIngestionWorker implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ digest: string; language: string | null }> {
     try {
       const raw = await this.openai.complete({
+        // hierarchical digest — up to 40 calls per authority.
+        fast: true,
         json: true,
         system:
           "You are a legal-knowledge indexer for Belgian-law judgments. You never state a holding the text does not contain.",

@@ -38,7 +38,8 @@ export function quoteMatchesChunk(quote: string, content: string): boolean {
  *     (whitespace-normalised, case-insensitive) inside the cited chunk's stored span. This
  *     catches hallucinated quotes and wrong-source citations without an LLM.
  *  2. Independent entailment judge — a separate LLM call confirms the quote actually
- *     supports the claim (temperature 0, default-to-false).
+ *     supports the claim (default-to-false; the reasoning models no longer accept a
+ *     temperature, so the conservative default is what keeps the gate strict).
  * A claim is 'supported' only if BOTH gates pass.
  */
 @Injectable()
@@ -70,7 +71,6 @@ export class VerificationService {
     // Gate 2: independent entailment judge.
     const raw = await this.openai.complete({
       json: true,
-      temperature: 0,
       system:
         "You are a strict legal fact-checker. Decide ONLY whether the QUOTE, on its own, " +
         "directly supports the CLAIM. Default to false if there is any doubt.",

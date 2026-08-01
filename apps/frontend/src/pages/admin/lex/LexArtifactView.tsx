@@ -99,6 +99,8 @@ export default function LexArtifactView() {
 
   const claims = version.bodyJson?.claims ?? [];
   const report = version.verificationReport;
+  // Absent on versions generated before sources were recorded, and on manual edits.
+  const sources = report?.sources ?? [];
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -175,6 +177,42 @@ export default function LexArtifactView() {
           {t.lex.exportDraft}
         </Button>
       </div>
+
+      {/* What the draft was written FROM.
+          Distinct from the citations below, and the difference is the point: this is what the
+          drafter was SHOWN, the citations are what survived verification. A pièce listed here with
+          no citation under it either had nothing to say or was missed — and only this list makes
+          that visible. */}
+      {sources.length > 0 ? (
+        <div className="rounded-xl border bg-card p-4 space-y-2">
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="text-sm font-medium">{t.lex.sourcesUsed}</h2>
+            <span className="text-xs text-muted-foreground">
+              {report?.sourceMode === "full"
+                ? t.lex.readingFull
+                : t.lex.readingSampled}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {t.lex.sourcesUsedHint}
+          </p>
+          <ul className="text-xs divide-y">
+            {sources.map((s) => (
+              <li key={s.documentId} className="flex gap-2 py-1.5">
+                <span className="min-w-0 flex-1 truncate" title={s.filename}>
+                  {s.filename}
+                </span>
+                <span className="shrink-0 text-muted-foreground tabular-nums">
+                  {t.lex.passagesCount.replace("{n}", String(s.passages))}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {report?.truncated ? (
+            <p className="text-xs text-amber-700">{t.lex.sourcesTruncated}</p>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Claims */}
       <div className="space-y-3">

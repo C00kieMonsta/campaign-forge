@@ -1,7 +1,8 @@
 import {
   lexStreamEventSchema,
   type LexCitationEvent,
-  type LexPin
+  type LexPin,
+  type ReasoningDepth
 } from "@packages/types";
 
 // SSE helper for Lex chat. The shared api.ts client is Promise-only (no streaming), so
@@ -28,6 +29,7 @@ export async function streamLexMessage(
   handlers: LexStreamHandlers,
   /** Pinned pages: sent structured so the server can constrain retrieval to them. */
   pins: LexPin[] = [],
+  depth?: ReasoningDepth,
   signal?: AbortSignal
 ): Promise<void> {
   const token = sessionStorage.getItem(TOKEN_KEY);
@@ -39,7 +41,13 @@ export async function streamLexMessage(
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {})
       },
-      body: JSON.stringify(pins.length ? { content, pins } : { content }),
+      // Only send what is set: an absent depth means "use the default", and spelling that out on
+      // every request would make the default a client concern.
+      body: JSON.stringify({
+        content,
+        ...(pins.length ? { pins } : {}),
+        ...(depth ? { depth } : {})
+      }),
       signal
     }
   );

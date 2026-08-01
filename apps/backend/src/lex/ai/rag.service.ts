@@ -289,13 +289,24 @@ export class RagService {
     ownerEmail: string,
     workspaceId: string,
     query: string,
-    topK = 8
+    topK = 8,
+    /**
+     * Restrict to these documents. Undefined means the whole workspace; an EMPTY array means
+     * nothing matches, which is a real answer (a selection whose documents are all archived) and
+     * not "ignore me".
+     */
+    documentIds?: readonly string[]
   ): Promise<RetrievedChunk[]> {
     const [qvec] = await this.openai.embed(query);
     const qvecStr = `[${qvec.join(",")}]`;
 
     const select = `c.id, c.document_id, d.filename, c.page_from, c.page_to, c.char_start, c.char_end, c.content`;
-    const scope = `c.workspace_id = $1 AND c.owner_email = $2 AND d.lifecycle_state = 'active'`;
+    // $5 rather than appending: the dense and sparse queries already use $1..$4, and a selection
+    // filter that shifted their placeholders would be a silent mis-binding rather than an error.
+    const selection = documentIds ? ` AND c.document_id = ANY($5::uuid[])` : "";
+    const scope =
+      `c.workspace_id = $1 AND c.owner_email = $2 AND d.lifecycle_state = 'active'` +
+      selection;
 
     const vecRes = await this.pg.query<ChunkRow>(
       `SELECT ${select}
@@ -304,7 +315,13 @@ export class RagService {
        WHERE ${scope}
        ORDER BY c.embedding <=> $3::halfvec
        LIMIT $4`,
-      [workspaceId, ownerEmail, qvecStr, CANDIDATE_LIMIT]
+      [
+        workspaceId,
+        ownerEmail,
+        qvecStr,
+        CANDIDATE_LIMIT,
+        ...(documentIds ? [documentIds] : [])
+      ]
     );
 
     const tsv = `(to_tsvector('french', c.content) || to_tsvector('dutch', c.content))`;
@@ -369,7 +386,13 @@ export class RagService {
          WHERE ${scope} AND ${tsv} @@ ${tsq}
          ORDER BY ts_rank(${tsv}, ${tsq}) DESC
          LIMIT $4`,
-        [workspaceId, ownerEmail, sparseQuery, CANDIDATE_LIMIT]
+        [
+          workspaceId,
+          ownerEmail,
+          sparseQuery,
+          CANDIDATE_LIMIT,
+          ...(documentIds ? [documentIds] : [])
+        ]
       );
       ftsRows = res.rows;
     }

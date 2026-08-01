@@ -1,4 +1,13 @@
 import { Injectable } from "@nestjs/common";
+import {
+  BULK_TIER,
+  DEFAULT_DEPTH,
+  DEPTHS,
+  MODELS,
+  type ModelTier,
+  type ReasoningDepth,
+  type ReasoningEffort
+} from "@packages/types";
 import OpenAI, { toFile } from "openai";
 import { ConfigService } from "../config/config.service";
 import { SecretsService } from "./secrets.service";
@@ -103,7 +112,17 @@ export class OpenAiService {
     system?: string;
     json?: boolean;
     maxTokens?: number;
-    temperature?: number;
+    /**
+     * Route to the cheap tier. Set it for MECHANICAL passes — extract a verbatim quote, summarise one
+     * document, build a digest — which run hundreds of times per job and gain nothing from a frontier
+     * model. An adverse-case run alone makes up to 224 such calls.
+     *
+     * Never set it for anything a lawyer reads or that gates a citation: the entailment judge in
+     * VerificationService is cheap to run and expensive to get wrong.
+     */
+    fast?: boolean;
+    /** How hard to think. Ignored when `fast` — deliberation on "copy this quote" buys nothing. */
+    depth?: ReasoningDepth;
   }): Promise<string> {
     const client = await this.getClient();
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
@@ -112,9 +131,8 @@ export class OpenAiService {
     messages.push({ role: "user", content: params.user });
 
     const res = await client.chat.completions.create({
-      model: this.config.get("OPENAI_CHAT_MODEL"),
+      ...this.request(params.fast ? BULK_TIER : undefined, params.depth),
       messages,
-      temperature: params.temperature ?? 0,
       max_tokens: params.maxTokens,
       ...(params.json
         ? { response_format: { type: "json_object" as const } }
@@ -123,16 +141,53 @@ export class OpenAiService {
     return res.choices[0]?.message?.content ?? "";
   }
 
-  /** Streams a chat completion, yielding content deltas as they arrive (Phase 3 chat). */
+  /**
+   * Model and reasoning fields for a call, resolved from the registry.
+   *
+   * An explicit `tier` wins (the bulk passes), otherwise the depth decides both. Capability-driven
+   * throughout: reasoning_effort is only sent to a model that accepts it, and `temperature` is never
+   * sent at all — see the note on streamChat. One model for everything was wrong in both directions,
+   * a frontier model doing 224 quote extractions and a cheap one doing what gets filed.
+   */
+  private request(
+    tier?: ModelTier,
+    depth: ReasoningDepth = DEFAULT_DEPTH
+  ): { model: string; reasoning_effort?: ReasoningEffort } {
+    const chosen = tier ?? DEPTHS[depth].tier;
+    const model = MODELS[chosen];
+    // The bulk tier is asked for by tier, not by depth, so it gets the floor rather than the
+    // depth's effort: its job is mechanical. "low" rather than "none" because the pinned SDK does
+    // not type "none" — see the note in the registry.
+    const effort: ReasoningEffort =
+      tier === BULK_TIER ? "low" : DEPTHS[depth].effort;
+    return {
+      model: model.id,
+      ...(model.supportsReasoningEffort ? { reasoning_effort: effort } : {})
+    };
+  }
+
+  /**
+   * Streams a chat completion, yielding content deltas as they arrive.
+   *
+   * NO TEMPERATURE, here or in complete() — and that is now recorded as `supportsTemperature: false`
+   * in the model registry rather than assumed here. The reasoning models reject anything but their
+   * default —
+   * "Unsupported value: 'temperature' does not support 0 with this model" — so the parameter this
+   * codebase used to pin to 0 is simply gone. The determinism those call sites were reaching for is
+   * no longer available through it: two runs of the same assessment may now differ in wording. What
+   * still holds is what actually mattered — every quote is gated against the stored text, so a run
+   * can phrase a finding differently but cannot invent one.
+   */
   async *streamChat(
     messages: OpenAI.Chat.ChatCompletionMessageParam[],
-    opts: { temperature?: number } = {}
+    opts: { depth?: ReasoningDepth } = {}
   ): AsyncGenerator<string> {
     const client = await this.getClient();
     const stream = await client.chat.completions.create({
-      model: this.config.get("OPENAI_CHAT_MODEL"),
+      // A caller may raise the depth for one turn — a filed assessment deserves more deliberation
+      // than a question about which piece mentions a date.
+      ...this.request(undefined, opts.depth),
       messages,
-      temperature: opts.temperature ?? 0.2,
       stream: true
     });
     for await (const chunk of stream) {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Injectable, NotFoundException } from "@nestjs/common";
 import type {
+  ReasoningDepth,
   LexCitationEvent,
   LexConversation,
   LexMessage,
@@ -190,7 +191,9 @@ export class ConversationsService {
     content: string,
     onToken: (delta: string) => void,
     /** Pages the user pinned in the viewer; they constrain retrieval for this turn. */
-    pins: LexPin[] = []
+    pins: LexPin[] = [],
+    /** How hard to think about this turn. See the model registry for what each depth costs. */
+    depth?: ReasoningDepth
   ): Promise<{ messageId: string; citations: LexCitationEvent[] }> {
     const conv = await this.getOrFail(ownerEmail, conversationId);
 
@@ -234,7 +237,7 @@ export class ConversationsService {
 
     let full = "";
     try {
-      for await (const delta of this.openai.streamChat(messages)) {
+      for await (const delta of this.openai.streamChat(messages, { depth })) {
         full += delta;
         onToken(delta);
       }
