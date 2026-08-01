@@ -3,6 +3,7 @@ import type { LexPin } from "@packages/types";
 import { OpenAiService } from "../../shared/openai.service";
 import { PgService } from "../../shared/pg.service";
 import { pageTextHash } from "../documents/pager";
+import { discriminatingTerms } from "./fts-terms";
 import { reciprocalRankFusion } from "./rag-fusion";
 
 /**
@@ -308,41 +309,71 @@ export class RagService {
 
     const tsv = `(to_tsvector('french', c.content) || to_tsvector('dutch', c.content))`;
     /**
-     * CONJUNCTIVE, and that is a measured choice rather than an accident of plainto_tsquery.
+     * The sparse half searches only the question's DISCRIMINATING terms.
      *
      * plainto_tsquery conjoins every token, so "Que disent les pièces au sujet du 01.01.1976 ?"
      * becomes 'disent' & 'le' & 'piec' & 'sujet' & '01.01.1976' and matches only a chunk holding all
-     * of them — which a question-shaped query essentially never finds. Measured on the real corpus:
-     * three chunks contain that literal date and this query returns zero of them. So for natural
-     * questions the sparse half contributes nothing and the fusion below runs on the dense half
-     * alone, which is a real weakness for the queries lexical search exists to serve.
+     * five — which a question-shaped query essentially never finds. Three chunks contain that literal
+     * date and the conjunctive query returned none of them.
      *
-     * TWO FIXES WERE TRIED AND BOTH MADE IT WORSE, on a 30-case retrieval evaluation:
-     *   conjunctive (this)                       17/30
-     *   disjunctive everywhere                   13/30
-     *   conjunctive, disjunctive on empty        13/30
-     * Disjoining lets common words ("pièces", "montant") match thousands of chunks, and ts_rank has
-     * no notion of term rarity, so the one chunk holding the discriminating token is ranked below
-     * them and the candidate cap discards it. The fallback variant is no better, and the reason is
-     * worth recording: when the conjunctive query finds nothing, adding a NOISY sparse ranking to the
-     * fusion is worse than adding none — the weak lexical hits displace good dense hits in the top k.
-     * Contributing nothing beat contributing noise.
+     * Disjoining everything instead was tried and was worse, because ts_rank has no notion of term
+     * rarity: "pièces" matches 222 chunks and floats them above the 3 that matter. Measured on a
+     * 30-case retrieval evaluation:
+     *   conjunctive                       17/30
+     *   disjunctive everywhere            13/30
+     *   conjunctive, disjunctive on empty 13/30
      *
-     * A real fix needs term weighting the FTS index does not have (BM25/IDF, or a rarity-filtered
-     * query built from the question's discriminating tokens). That is a piece of work, not a
-     * one-line change, and it should be done against this evaluation rather than by reasoning —
-     * both of the above looked obviously correct before they were measured.
+     * So frequency decides. One indexed query gives the corpus frequency of each term (~7 ms over
+     * 12766 chunks), the common ones are dropped, and what remains is disjoined. That is inverse
+     * document frequency used as a FILTER rather than as a ranking weight — the part Postgres can do
+     * cheaply, since an IDF-weighted ORDER BY would have to score every matching row.
+     *
+     * When nothing is discriminating enough the sparse half is SKIPPED rather than relaxed. That is
+     * the lesson from the 13/30 runs: contributing nothing to the fusion beats contributing a weak
+     * ranking, because weak lexical hits displace good dense hits in the top k.
      */
-    const tsq = `(plainto_tsquery('french', $3) || plainto_tsquery('dutch', $3))`;
-    const ftsRes = await this.pg.query<ChunkRow>(
-      `SELECT ${select}
-       FROM lex_document_chunks c
-       JOIN lex_documents d ON d.id = c.document_id
-       WHERE ${scope} AND ${tsv} @@ ${tsq}
-       ORDER BY ts_rank(${tsv}, ${tsq}) DESC
-       LIMIT $4`,
-      [workspaceId, ownerEmail, query, CANDIDATE_LIMIT]
+    const dfRes = await this.pg.query<{ term: string; df: string }>(
+      `WITH terms AS (
+         SELECT DISTINCT unnest(
+           regexp_split_to_array(plainto_tsquery('french', $3)::text, ' & ')
+           || regexp_split_to_array(plainto_tsquery('dutch', $3)::text, ' & ')
+         ) AS term
+       )
+       SELECT t.term,
+              (SELECT count(*) FROM lex_document_chunks c
+                WHERE c.workspace_id = $1 AND c.owner_email = $2
+                  AND ${tsv} @@ t.term::tsquery) AS df
+       FROM terms t
+       WHERE t.term <> ''`,
+      [workspaceId, ownerEmail, query]
     );
+
+    const corpusSize = await this.pg.query<{ n: string }>(
+      `SELECT count(*) AS n FROM lex_document_chunks
+       WHERE workspace_id = $1 AND owner_email = $2`,
+      [workspaceId, ownerEmail]
+    );
+
+    const { tsquery: sparseQuery } = discriminatingTerms(
+      dfRes.rows.map((r) => ({ term: r.term, df: Number(r.df) })),
+      Number(corpusSize.rows[0]?.n ?? 0)
+    );
+
+    let ftsRows: ChunkRow[] = [];
+    if (sparseQuery) {
+      const tsq = `$3::tsquery`;
+      const res = await this.pg.query<ChunkRow>(
+        `SELECT ${select}
+         FROM lex_document_chunks c
+         JOIN lex_documents d ON d.id = c.document_id
+         WHERE ${scope} AND ${tsv} @@ ${tsq}
+         ORDER BY ts_rank(${tsv}, ${tsq}) DESC
+         LIMIT $4`,
+        [workspaceId, ownerEmail, sparseQuery, CANDIDATE_LIMIT]
+      );
+      ftsRows = res.rows;
+    }
+    const ftsRes = { rows: ftsRows };
 
     // Fuse the dense + sparse rankings (pure, unit-tested — see rag-fusion.ts).
     return reciprocalRankFusion([vecRes.rows, ftsRes.rows], { topK }).map(

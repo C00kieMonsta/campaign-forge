@@ -326,6 +326,354 @@ export function groupIdenticalAmounts(
   );
 }
 
+// ---------------------------------------------------------------------------------------------
+// The registry: one row per date the file writes, and the controls that decide how many
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The shape the registry needs from a fact, declared STRUCTURALLY rather than imported.
+ *
+ * Deliberate: this module is compiled against `@packages/types` as a built artefact in the test
+ * runner and as source in the app, so importing a payload type that is still being added would make
+ * these pure functions un-testable until an unrelated package is rebuilt. Structural typing keeps the
+ * derivation honest — anything with these fields works, including the server's own payload type —
+ * and keeps the lib compilable while the contract around it moves.
+ */
+export interface RegistryAmountLike {
+  value: number;
+  currency: string;
+  /** How many separate documents state this figure beside this date. */
+  documentCount: number;
+}
+
+export interface RegistryFactLike {
+  /** ISO yyyy-mm-dd, written inside the documents. The spine of the whole view. */
+  iso: string;
+  /** How many separate documents state the date. The only weight available without reading. */
+  documentCount: number;
+  mentionCount?: number;
+  /** Term ids found near the date. Words the file uses — never a qualification of the act. */
+  notions?: readonly string[];
+  qualifications?: readonly string[];
+  milestones?: readonly string[];
+  /** Literal exhibit references ("annexe 13"), never resolved to a document. */
+  refs?: readonly string[];
+  amounts?: readonly RegistryAmountLike[];
+}
+
+/**
+ * The corroboration cuts the control bar offers, in the order it renders them.
+ *
+ * Descending, and starting at 5, because that is the reading order of the question: show me what
+ * several filings agree on, then widen. Measured on the real corpus the cuts are 55 / 124 / 230 / 608
+ * rows — the last one is the wall this view exists to replace, which is why it is offered last rather
+ * than first.
+ */
+export const CORROBORATION_CUTS: readonly number[] = [5, 3, 2, 1];
+
+export interface CorroborationCut {
+  threshold: number;
+  count: number;
+  /** Facts the cut leaves out. Returned, not computed by the caller, because C8 requires a cap to
+   *  state what it hid and a subtraction done at the call site is a subtraction that can be forgotten. */
+  hidden: number;
+}
+
+export function countFactsByThreshold(
+  facts: readonly RegistryFactLike[],
+  thresholds: readonly number[] = CORROBORATION_CUTS
+): CorroborationCut[] {
+  return thresholds.map((threshold) => {
+    const count = facts.reduce(
+      (n, fact) => n + (fact.documentCount >= threshold ? 1 : 0),
+      0
+    );
+    return { threshold, count, hidden: facts.length - count };
+  });
+}
+
+/**
+ * Thresholds tried, in order, when picking the cut the page opens on. Must be ascending.
+ *
+ * Separate from CORROBORATION_CUTS on purpose: the control bar is a fixed set of choices a reader
+ * recognises, while this ladder exists to keep the OPENING view readable on a file ten times this
+ * one's size. Today's corpus stops at the first rung.
+ */
+export const DEFAULT_THRESHOLD_LADDER: readonly number[] = [5, 6, 8, 10, 15];
+
+/** Rows the opening view aims to stay under. Beyond this the ledger stops being readable. */
+export const MAX_DEFAULT_ROWS = 120;
+
+/**
+ * The cut the page opens on: the LOWEST rung that keeps the table under the row budget.
+ *
+ * Lowest, not highest, because every rung climbed hides facts — so the default has to give away as
+ * little as the budget allows, and whichever rung it lands on is printed in the control bar. When
+ * even the top rung is over budget the top rung is returned anyway and the render cap takes over;
+ * silently showing nothing would be worse than showing a stated prefix.
+ */
+export function chooseDefaultThreshold(
+  facts: readonly RegistryFactLike[],
+  ladder: readonly number[] = DEFAULT_THRESHOLD_LADDER,
+  maxRows: number = MAX_DEFAULT_ROWS
+): number {
+  const rungs = ladder.length ? ladder : DEFAULT_THRESHOLD_LADDER;
+  for (const threshold of rungs) {
+    const count = facts.reduce(
+      (n, fact) => n + (fact.documentCount >= threshold ? 1 : 0),
+      0
+    );
+    if (count <= maxRows) return threshold;
+  }
+  return rungs[rungs.length - 1];
+}
+
+/** Rows rendered at once, whatever the cut. A backstop for a corpus this page has not seen yet. */
+export const REGISTRY_RENDER_CAP = 300;
+
+/** A capped list, and how many it left out — so the count cannot be dropped on the way to the UI. */
+export function capRows<T>(
+  rows: readonly T[],
+  cap: number = REGISTRY_RENDER_CAP
+): { rows: T[]; hidden: number } {
+  return {
+    rows: rows.slice(0, cap),
+    hidden: Math.max(0, rows.length - cap)
+  };
+}
+
+export interface FactFilter {
+  /** Corroboration cut: keep facts stated by at least this many documents. */
+  minDocuments?: number;
+  /**
+   * Term ids from any of the three vocabularies. A fact is kept when it carries ANY of them.
+   *
+   * ANY rather than ALL, and the reason is the control bar's own promise: chips show their count
+   * within the current cut and a chip at zero is disabled, so that clicking one can never empty the
+   * table. Intersection would break that promise — two chips with healthy counts can have no fact in
+   * common — and an empty table reads as "nothing in the file", which would be a lie.
+   */
+  terms?: readonly string[];
+  /** Four-digit year, from clicking a band on the chronology. */
+  year?: string | null;
+  requireAmount?: boolean;
+  requireRef?: boolean;
+}
+
+function factTermIds(fact: RegistryFactLike): string[] {
+  return [
+    ...(fact.notions ?? []),
+    ...(fact.qualifications ?? []),
+    ...(fact.milestones ?? [])
+  ];
+}
+
+export function filterFacts<T extends RegistryFactLike>(
+  facts: readonly T[],
+  filter: FactFilter = {}
+): T[] {
+  const wanted = filter.terms?.length ? new Set(filter.terms) : null;
+  return facts.filter((fact) => {
+    if (
+      filter.minDocuments !== undefined &&
+      fact.documentCount < filter.minDocuments
+    )
+      return false;
+    if (filter.year && fact.iso.slice(0, 4) !== filter.year) return false;
+    if (filter.requireAmount && !(fact.amounts?.length ?? 0)) return false;
+    if (filter.requireRef && !(fact.refs?.length ?? 0)) return false;
+    if (wanted && !factTermIds(fact).some((id) => wanted.has(id))) return false;
+    return true;
+  });
+}
+
+/**
+ * How the registry is read.
+ *
+ * "chronological" is the DEFAULT, inverting what the earlier acts panel did. A ledger reads in time —
+ * understanding a file that runs over twenty years is a reading task, not a ranking one — and the
+ * count stays on every row for whoever wants the other question.
+ */
+export type FactOrder = "chronological" | "weight";
+
+export function orderFacts<T extends RegistryFactLike>(
+  facts: readonly T[],
+  order: FactOrder
+): T[] {
+  const byWeight = (a: T, b: T) =>
+    b.documentCount - a.documentCount ||
+    (b.mentionCount ?? 0) - (a.mentionCount ?? 0) ||
+    compareStrings(a.iso, b.iso);
+  const byDate = (a: T, b: T) =>
+    compareStrings(a.iso, b.iso) || b.documentCount - a.documentCount;
+  return [...facts].sort(order === "weight" ? byWeight : byDate);
+}
+
+export interface TermCount {
+  id: string;
+  /** Facts carrying the term — NOT mentions. A word repeated in one filing is one fact, not five. */
+  count: number;
+}
+
+/**
+ * How many facts each term appears on, within whatever list is passed in.
+ *
+ * Pass `knownIds` — the full vocabulary — to get a zero row for terms the current cut does not
+ * contain: a chip that renders disabled at "0" says the file is silent on that notion, which on this
+ * corpus is a real finding ("quotité disponible" in 2 documents, the art. 918 trigger set in none).
+ * A chip that simply vanishes says nothing at all.
+ */
+export function countTermsInFacts(
+  facts: readonly RegistryFactLike[],
+  knownIds?: readonly string[]
+): TermCount[] {
+  const counts = new Map<string, number>();
+  if (knownIds) for (const id of knownIds) counts.set(id, 0);
+  for (const fact of facts)
+    for (const id of new Set(factTermIds(fact)))
+      if (!knownIds || counts.has(id))
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+
+  const rows = [...counts.entries()].map(([id, count]) => ({ id, count }));
+  if (knownIds) {
+    const order = new Map(knownIds.map((id, index) => [id, index]));
+    return rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+  }
+  return rows.sort((a, b) => b.count - a.count || compareStrings(a.id, b.id));
+}
+
+/**
+ * The registry's facts as chronology items.
+ *
+ * The band's identity IS the date, which is what lets a click on a block scroll to the row that
+ * states it. Note what changes by feeding the chronology from here rather than from the documents: a
+ * 1996 purchase argued in a 2024 filing lands in 1996, where it happened, instead of in 2024, where
+ * it was last mentioned.
+ */
+export function factsAsTimelineItems(
+  facts: readonly RegistryFactLike[]
+): TimelineItem[] {
+  return facts.map((fact) => ({ id: fact.iso, date: fact.iso }));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Two figures for one date, a hair apart
+// ---------------------------------------------------------------------------------------------
+
+/** Below this a difference is bookkeeping — bank cents, a fee — not a disputed valuation. */
+const DIVERGENCE_MIN_MAGNITUDE = 1000;
+/** Two figures a rounding apart in the same currency are the same figure written twice. */
+const DIVERGENCE_MIN_DELTA = 1;
+/** Above this they are simply two different sums, and pairing them would assert a relationship. */
+const DIVERGENCE_MAX_RELATIVE = 0.01;
+/** One side must be corroborated, or this is one document's typo argued against itself. */
+const DIVERGENCE_MIN_DOCUMENTS = 2;
+
+export interface AmountDivergence<T extends RegistryAmountLike> {
+  /** The better-corroborated figure. */
+  primary: T;
+  /** The one that differs. Rendered as "une pièce écrit …", with its own pin cite. */
+  other: T;
+}
+
+/**
+ * Figures stated for the same date that differ by less than a percent.
+ *
+ * This is the deterministic stand-in for the "disputed / undisputed" flag every case-management tool
+ * sells and none of them derives: CaseMap makes it a manual dropdown, and the published state of the
+ * art for finding it automatically is a multi-agent language model. What can be found without any
+ * inference is ADJACENCY — 934.628 BEF in seven pièces against 934.623 BEF in one, on 24 June 1996 —
+ * and that is worth showing with both excerpts and both pin cites, and no verdict whatsoever.
+ *
+ * THE RULE IS NARROW ON PURPOSE. The obvious version ("the same date carries two different amounts")
+ * fires on 314 of 626 facts on the real corpus and is therefore noise. Same currency, same sign, both
+ * sides of real size, at least a unit apart but under one percent, and one side stated by two or more
+ * documents leaves three rows — which is why this renders inline in the amount cell and not as a
+ * panel with a heading.
+ *
+ * It asserts nothing about which figure is right, and nothing about who wrote either.
+ */
+export function findNearIdenticalAmounts<T extends RegistryAmountLike>(
+  amounts: readonly T[]
+): AmountDivergence<T>[] {
+  const pairs: AmountDivergence<T>[] = [];
+  for (let i = 0; i < amounts.length; i++) {
+    for (let j = i + 1; j < amounts.length; j++) {
+      const a = amounts[i];
+      const b = amounts[j];
+      if (a.currency !== b.currency) continue;
+      if (Math.sign(a.value) !== Math.sign(b.value)) continue;
+      const magnitude = Math.max(Math.abs(a.value), Math.abs(b.value));
+      if (
+        Math.min(Math.abs(a.value), Math.abs(b.value)) <
+        DIVERGENCE_MIN_MAGNITUDE
+      )
+        continue;
+      const delta = Math.abs(a.value - b.value);
+      if (delta < DIVERGENCE_MIN_DELTA) continue;
+      if (delta / magnitude >= DIVERGENCE_MAX_RELATIVE) continue;
+      if (Math.max(a.documentCount, b.documentCount) < DIVERGENCE_MIN_DOCUMENTS)
+        continue;
+      // Better corroborated leads; the other is the one the sentence calls out.
+      const [primary, other] =
+        b.documentCount > a.documentCount ||
+        (b.documentCount === a.documentCount &&
+          Math.abs(b.value) > Math.abs(a.value))
+          ? [b, a]
+          : [a, b];
+      pairs.push({ primary, other });
+    }
+  }
+  return pairs.sort(
+    (x, y) =>
+      y.primary.documentCount - x.primary.documentCount ||
+      Math.abs(y.primary.value) - Math.abs(x.primary.value) ||
+      compareStrings(x.primary.currency, y.primary.currency) ||
+      x.other.value - y.other.value
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Out of the page and into the conclusions
+// ---------------------------------------------------------------------------------------------
+
+/** One line of the exposé: a date, the sentence that states it, and where to find it. */
+export interface ExposeRow {
+  iso: string;
+  /** The document's own words. A substring, never a rewrite — that is what makes this citable. */
+  excerpt: string;
+  /** The pièce: a filename, or whatever the caller shows on screen for it. */
+  source: string;
+  page?: number | null;
+}
+
+/**
+ * The visible rows as plain text, numbered, ready to paste into conclusions.
+ *
+ * This is the point of the page: art. 744 3° C. jud. requires conclusions to set out "les faits
+ * pertinents" and to give, for each prétention, "les pièces invoquées et leur numérotation", and art.
+ * 748bis makes the last set des conclusions de synthèse. So the useful artefact is exactly this — a
+ * chronological list of dates, each with the document's own sentence and a pin cite — and the moyens
+ * are hers to write around it.
+ *
+ * The numbering restarts at 1 and follows the order handed in, which is the order on screen, so a
+ * line she quotes in a hearing and a row on the page are the same row. `header` is the caller's, and
+ * must state the cut and any active filter: text copied out of a filtered table without saying it was
+ * filtered is the one way this feature could mislead.
+ */
+export function buildExposeDesFaits(
+  rows: readonly ExposeRow[],
+  header?: string
+): string {
+  const lines = rows.map((row, index) => {
+    const excerpt = row.excerpt.replace(/\s+/g, " ").trim();
+    const cite =
+      row.page != null ? `${row.source}, p. ${row.page}` : row.source;
+    return `${index + 1} · ${row.iso} · « ${excerpt} » · ${cite}`;
+  });
+  return header ? [header, "", ...lines].join("\n") : lines.join("\n");
+}
+
 /** A sum that more than one document states — the same transaction, argued in several places. */
 export interface RecurringAmount {
   value: number;

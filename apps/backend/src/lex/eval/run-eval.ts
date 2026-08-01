@@ -110,6 +110,7 @@ async function readCorpusFacts(
   const amounts = new Map<string, Set<string>>();
   const dates = new Map<string, Set<string>>();
   const people = new Map<string, Set<string>>();
+  const candidateNames = new Set<string>();
 
   const add = (map: Map<string, Set<string>>, key: string, doc: string) => {
     const set = map.get(key) ?? new Set<string>();
@@ -127,7 +128,26 @@ async function readCorpusFacts(
     if (Array.isArray(row.key_names))
       for (const name of row.key_names)
         if (typeof name === "string" && name.trim())
-          add(people, name.trim(), row.document_id);
+          candidateNames.add(name.trim());
+  }
+
+  /**
+   * Person ground truth comes from the TEXT, not from key_names.
+   *
+   * key_names is metadata a model extracted per document, and the two disagree: "André Nerincx" is
+   * listed by 2 documents and written in the text of 10. Scoring retrieval — which searches text —
+   * against a metadata-derived answer marked four correct results as failures. key_names is still
+   * where the candidate NAMES come from, since nothing else enumerates them; only the expected set is
+   * recomputed from what a retriever can actually see.
+   */
+  const lowered = res.rows.map((row) => ({
+    documentId: row.document_id,
+    content: row.content.toLowerCase()
+  }));
+  for (const name of candidateNames) {
+    const needle = name.toLowerCase();
+    for (const row of lowered)
+      if (row.content.includes(needle)) add(people, name, row.documentId);
   }
 
   const toFacts = (map: Map<string, Set<string>>): CorpusFact[] =>

@@ -4,3 +4,4 @@ export * from "./store/lex-events";
 export { TABLE_NAMES, type TableName } from "./constants";
 export * from "./money";
 export * from "./dates";
+export * from "./legalText";

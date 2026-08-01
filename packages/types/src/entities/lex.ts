@@ -678,11 +678,56 @@ export interface LexStoryAmount {
   pageTo: number | null;
 }
 
+/**
+ * A list the server cut, and the size it was cut from.
+ *
+ * Exists so a cap can never be applied silently: C8 requires a display cap to state what it hid, and
+ * a subtraction done at the call site is a subtraction that can be forgotten. `total` is what the
+ * scan found, `returned` is what travelled, `limit` is the rule that decided.
+ */
+export interface LexStoryCap {
+  returned: number;
+  total: number;
+  limit: number;
+}
+
+/** Every cap the story read applied, in one place, because that is what the footer renders. */
+export interface LexStoryCaps {
+  facts: LexStoryCap;
+  deathMentions: LexStoryCap;
+  unpairedAmounts: LexStoryCap;
+}
+
 /** The case story read: what the file says about money, and how much of it was looked at. */
 export interface LexStoryPayload {
   amounts: LexStoryAmount[];
   /** Dates written in the documents' text, most-cited first. */
   actDates: LexActDate[];
+  /**
+   * The registry: one entry per distinct date written in the text, chronological.
+   *
+   * A superset of `actDates` — same aggregation, plus the vocabulary, the exhibit references and the
+   * amounts standing beside the date. `actDates` is kept so the existing view keeps working; a caller
+   * building the registry reads this instead of joining the two lists in its head.
+   */
+  facts: LexFact[];
+  /** Dates a document writes "décédé le …" in front of. Sorted by corroboration, then date. */
+  deathMentions: LexDeathMention[];
+  /** Distinct sums that never stand beside a date. What the registry structurally cannot show. */
+  unpairedAmounts: LexUnpairedAmount[];
+  /** How many distinct (currency, value) sums the scan found at all, paired or not. */
+  distinctAmountCount: number;
+  /** Mentions and documents per currency. The currency itself is evidence: BEF means a pre-2002 act. */
+  amountCensus: LexCurrencyCount[];
+  /**
+   * In-scope documents that contributed NO date to the registry — the "separate pile".
+   *
+   * An undated document is never dropped from a chronology, it is quarantined visibly. When
+   * `truncated` is true this list is an OVER-count: a document whose only dated chunks fell past the
+   * cap looks undated from here.
+   */
+  undatedDocumentIds: string[];
+  caps: LexStoryCaps;
   chunksScanned: number;
   /** True when the scan hit its cap; the amounts shown are then a prefix, not the whole file. */
   truncated: boolean;
@@ -717,4 +762,106 @@ export interface LexActDate {
   yearInferred: boolean;
   /** One sighting per document, capped; the UI says when it is showing fewer than exist. */
   samples: LexActDateSample[];
+}
+
+/**
+ * A sum standing beside a date in the text, and how many documents write that pair.
+ *
+ * IT IS AN ADJACENCY, NOT A TRANSACTION. The scan found this figure within a few dozen characters of
+ * this date, in a sentence the excerpt quotes in full; it does not say the sum was paid on that day,
+ * that it is a donation rather than an account balance, or who moved it. Belgian succession law values
+ * a liberality at the date of the donation, so (date, amount, currency) is the unit a practitioner
+ * reasons in — which is why the pair is shown at all, and why the excerpt travels with it so she can
+ * see for herself what the sentence actually says.
+ */
+export interface LexFactAmount {
+  value: number;
+  /** ISO code. Convertibility is decided by the shared currency registry, not by this field. */
+  currency: string;
+  /** The matched text, exactly as written ("1.500.000 BEF"). */
+  raw: string;
+  /** How many separate documents write this sum beside this date. */
+  documentCount: number;
+  /** The sentence the pair was found in. A substring of the document, whitespace-collapsed. */
+  excerpt: string;
+  documentId: string;
+  chunkId: string;
+  pageFrom: number | null;
+}
+
+/**
+ * One row of the registry: a date the file writes, everything the text puts next to it.
+ *
+ * WHAT THE BADGES MEAN. `notions`, `qualifications` and `milestones` are ids from the shared legal
+ * vocabulary, found as literal words within a window of the date. They say THE WORD IS THERE and
+ * nothing more — never that a liberality is rapportable, that a réserve is breached, or that anyone
+ * concealed anything. `refs` are exhibit citations exactly as written ("annexe 13"), never resolved to
+ * a document: the numbering is per party and per filing and it collides, and a wrong pièce number in
+ * conclusions filed under art. 744 C. jud. is worse than none.
+ */
+export interface LexFact {
+  iso: string;
+  /** How many separate documents state this date. The only weight available without reading. */
+  documentCount: number;
+  mentionCount: number;
+  /** True when ANY sighting had its century inferred from a two-digit year. */
+  yearInferred: boolean;
+  /** One sighting per document, capped; `documentCount` says how many exist. */
+  samples: LexActDateSample[];
+  /** Sums standing beside the date, best-corroborated first. Capped — see `amountCount`. */
+  amounts: LexFactAmount[];
+  /** Distinct sums joined to this date, before `amounts` was capped. */
+  amountCount: number;
+  notions: string[];
+  qualifications: string[];
+  milestones: string[];
+  /** Literal exhibit references found near the date, first appearance first. */
+  refs: string[];
+}
+
+/**
+ * A date a document writes a death trigger directly in front of ("décédé le 27 mai 1998").
+ *
+ * The date of death decides which succession law governs a whole file, so this is deliberately the
+ * strictest derivation in the payload: the trigger must run right up to the date. It reports that N
+ * documents write this sentence and stops. It does NOT say whose succession opened, which régime
+ * applies, or what any prescription horizon is — the first is a role this app never assigns, the other
+ * two are legal conclusions no pattern can reach. A caller displaying these applies its own
+ * corroboration floor; a single-document mention is returned so the floor is the UI's choice, stated,
+ * rather than a silent server-side filter.
+ */
+export interface LexDeathMention {
+  iso: string;
+  documentCount: number;
+  mentionCount: number;
+  yearInferred: boolean;
+  samples: LexActDateSample[];
+}
+
+/**
+ * A distinct sum that never stands beside a date anywhere in the file.
+ *
+ * The registry's spine is the date, so these figures have no row to live in. They are listed rather
+ * than dropped: on the real corpus most distinct sums are unpaired, and a ledger that hid them while
+ * claiming to be the file's money would be the more misleading artefact.
+ */
+export interface LexUnpairedAmount {
+  value: number;
+  currency: string;
+  /** The matched text, exactly as written. */
+  raw: string;
+  /** How many separate documents state this sum. */
+  documentCount: number;
+  /** One sighting's sentence, so even an unpaired figure is verifiable. */
+  excerpt: string;
+  documentId: string;
+  chunkId: string;
+  pageFrom: number | null;
+}
+
+/** How much of the file is written in one currency. BEF in a 2024 filing dates the act it discusses. */
+export interface LexCurrencyCount {
+  currency: string;
+  mentionCount: number;
+  documentCount: number;
 }
