@@ -331,7 +331,8 @@ export const translations = {
       // this view adds ~40 of its own and a flat merge would make the fr/nl diff unreviewable.
       story: {
         tab: "Récit",
-        subtitle: "Ce que le dossier dit, dans le temps",
+        subtitle:
+          "Une date écrite dans le dossier, le texte qui la porte, les pièces qui l'énoncent. Rien n'est rédigé ici.",
         timelineTitle: "Chronologie",
         timelineSpan: "{count} pièces, de {from} à {to}",
         timelineEmpty: "Aucune pièce datée",
@@ -381,7 +382,171 @@ export const translations = {
         statedTimes: "énoncé {count} fois",
         clearSelection: "Afficher toutes les pièces",
         truncated:
-          "Analyse limitée aux {limit} premiers passages : la liste ci-dessous est partielle."
+          "Analyse limitée aux {limit} premiers passages : la liste ci-dessous est partielle.",
+
+        // ── Le registre des faits ──────────────────────────────────────────────────────────
+        // One nested group per panel. Flat keys would put ~140 strings in one namespace and make
+        // the fr/nl diff unreadable, which is how a language silently falls behind the other.
+        header: {
+          documents: "{count} pièces lues",
+          truncated:
+            "Lecture partielle : {limit} passages lus. Le registre ci-dessous est un début de dossier, pas le dossier."
+        },
+        repere: {
+          title: "Le repère du dossier",
+          how: "Une pièce écrit « décédé le … » juste devant une date. Cette date décide quelle loi successorale gouverne le dossier : la loi du 31 juillet 2017 s'applique aux successions ouvertes à partir du 1er septembre 2018. L'application situe la date par rapport à cette date légale, et s'arrête là.",
+          empty:
+            "Aucune pièce n'écrit « décédé le … ». Le repère du 1er septembre 2018 n'est pas affiché.",
+          before:
+            "Cette date est antérieure au 1er septembre 2018, date d'entrée en vigueur de la loi du 31 juillet 2017.",
+          after:
+            "Cette date est postérieure au 1er septembre 2018, date d'entrée en vigueur de la loi du 31 juillet 2017.",
+          limits:
+            "L'application rapporte que des pièces écrivent cette phrase. Elle ne dit pas de quelle succession il s'agit, ni quel régime s'applique, ni aucun délai.",
+          more: "{count} autres mentions de décès ne sont pas affichées."
+        },
+        controls: {
+          title: "Ce que le registre affiche",
+          how: "Ce choix commande la frise et le tableau, et indique toujours ce qu'il masque.",
+          corroboration: "Corroboration",
+          cut: "{count} pièces et +",
+          cutAll: "Toutes",
+          hidden:
+            "{total} dates distinctes relevées ; {hidden} énoncées par moins de {threshold} pièces sont masquées ici.",
+          hiddenNone:
+            "{total} dates distinctes relevées ; aucune n'est masquée par ce seuil.",
+          defaultThreshold:
+            "Seuil d'ouverture choisi automatiquement pour garder le tableau lisible.",
+          order: "Ordre",
+          terms: "Termes relevés dans le texte",
+          termsHow:
+            "Mot relevé à moins de 200 caractères de la date. {count} des {total} faits n'en portent aucun. Un mot présent n'est pas une qualification de l'acte : c'est le terme que la pièce emploie.",
+          termsSelected: "{count} termes retenus — une ligne suffit à en porter un",
+          clearTerms: "Retirer les termes sélectionnés",
+          also: "Aussi",
+          withAmount: "portant un montant",
+          withRef: "renvoyant à une pièce numérotée"
+        },
+        frise: {
+          title: "La frise",
+          how: "Une colonne par année où un fait est daté ; chaque bloc est un fait. Les années sans aucun fait sont resserrées en pointillé, avec leur durée. Cliquez un bloc pour aller à sa ligne du registre, une année pour n'afficher que cette année.",
+          sourceFacts: "Faits : dates du texte",
+          sourceFilings: "Dépôts : dates des pièces",
+          legendFilledFacts: "Bloc plein : un montant est rattaché à cette date",
+          legendOutlinedFacts: "Bloc évidé : aucun montant rattaché",
+          legendFilledFilings: "Bloc plein : la pièce énonce un montant",
+          legendOutlinedFilings: "Bloc évidé : la pièce n'énonce aucun montant",
+          legendEmptyYear:
+            "Une année absente signifie qu'aucun fait n'est retenu à ce seuil, non qu'il ne s'est rien passé.",
+          scroll: "{years} années · {gaps} lacunes · faites défiler",
+          empty: "Aucun fait n'est retenu à ce seuil.",
+          yearFacts: "{year} : {count} faits",
+          bandMore: "et {count} autres faits cette année-là",
+          deathRule: "Date écrite « décédé le » : {date}"
+        },
+        registre: {
+          title: "Le registre",
+          how: "Une ligne par date écrite dans le dossier, dans l'ordre du temps. Chaque ligne porte la phrase de la pièce, les montants qui se trouvent à côté de la date et le nombre de pièces qui l'énoncent. Dépliez pour lire les passages et ouvrir la pièce à sa page.",
+          rowsShown: "{count} lignes affichées",
+          capped: "{count} lignes supplémentaires ne sont pas rendues.",
+          empty:
+            "Aucun fait ne correspond à ces filtres. Abaissez le seuil de corroboration ou retirez un terme.",
+          rowLabel: "Fait {index} — {date}, cité dans {count} pièces",
+          amountCorroborated: "Montant corroboré par {count} pièces",
+          amountSingle: "Montant énoncé par une seule pièce",
+          amountOthers: "{count} autres montants près de cette date",
+          amountHidden: "{count} montants ne sont pas affichés.",
+          amountAdjacency:
+            "Un montant écrit à côté d'une date : l'application ne dit pas qu'il a été versé ce jour-là, ni de quoi il s'agit.",
+          divergence: "Une pièce écrit {amount}",
+          noAmounts:
+            "Aucun montant n'a pu être rattaché à une date dans ce dossier.",
+          refs: "Renvois :",
+          refsHow:
+            "Renvoi cité dans le texte, repris tel quel. L'application ne le relie à aucune pièce du dossier : la numérotation est propre à chaque partie et à chaque dépôt.",
+          inferredNote: "La pièce écrit « {raw} » : le siècle est déduit.",
+          openAtPage: "Ouvrir la pièce à la page {page}",
+          openPiece: "Ouvrir la pièce",
+          highlighted: "Ligne atteinte depuis la frise"
+        },
+        footer: {
+          title: "Ce qui n'est pas dans le registre",
+          how: "Ce que la page laisse de côté, énoncé ici plutôt que passé sous silence.",
+          undatedMore: "et {count} autres",
+          unpaired:
+            "{count} montants distincts sur {total} n'apparaissent à côté d'aucune date.",
+          unpairedBrowse: "Les parcourir",
+          unpairedHide: "Réduire la liste",
+          unpairedCapped: "{count} affichés sur {total} (plafond {limit}).",
+          inferred:
+            "{count} des {total} faits ont un siècle déduit d'une année à deux chiffres.",
+          census: "Devises relevées : {list}.",
+          censusFloating: "{list} ne sont jamais convertis.",
+          noTotal: "Aucun total n'est calculé.",
+          indicative:
+            "Le montant en euros est indicatif (taux fixes de 1999) et n'est jamais indexé.",
+          noRoles:
+            "L'application n'indique ni qui a versé, ni qui a reçu, ni quelle qualité une personne a dans le dossier.",
+          factsCapped:
+            "{returned} faits transmis sur {total} (plafond {limit}).",
+          deathsCapped:
+            "{returned} mentions de décès transmises sur {total} (plafond {limit}).",
+          noMoney: "Aucun montant relevé dans ce dossier."
+        },
+        expose: {
+          copy: "Copier l'exposé des faits",
+          how: "Copie exactement les lignes affichées, numérotées, avec l'extrait et la pièce. Ce n'est pas un jeu de conclusions : les moyens restent à rédiger.",
+          header:
+            "Exposé des faits — {count} lignes, dates énoncées par {threshold} pièces et plus{filters}. Extraits repris littéralement des pièces ; aucun total, aucune qualification.",
+          headerAll:
+            "Exposé des faits — {count} lignes, toutes les dates relevées{filters}. Extraits repris littéralement des pièces ; aucun total, aucune qualification.",
+          filterTerms: " · termes : {terms}",
+          filterYear: " · année {year}",
+          filterAmount: " · portant un montant",
+          filterRef: " · renvoyant à une pièce numérotée",
+          copied: "Exposé copié : {count} lignes",
+          failed: "La copie a échoué"
+        },
+        viewerAtPage: "Ouvert à la page {page}",
+        termGroups: {
+          notion: "Notions",
+          qualification: "Termes relevés sur les libéralités",
+          milestone: "Actes de procédure"
+        },
+        terms: {
+          donation: "Donation",
+          rapport: "Rapport",
+          usufruit: "Usufruit",
+          reserve: "Réserve",
+          reduction: "Réduction",
+          indivision: "Indivision",
+          recel: "Recel",
+          prescription: "Prescription",
+          "quotite-disponible": "Quotité disponible",
+          "quasi-usufruit": "Quasi-usufruit",
+          "avancement-hoirie": "Avancement d'hoirie",
+          "preciput-hors-part": "Préciput / hors part",
+          "dispense-rapport": "Dispense de rapport",
+          rapportable: "Rapportable",
+          "reserve-usufruit": "Réserve d'usufruit",
+          "nue-propriete": "Nue-propriété",
+          "pleine-propriete": "Pleine propriété",
+          "rente-viagere": "Rente viagère",
+          "fonds-perdu": "À fonds perdu",
+          "don-manuel": "Don manuel",
+          liberalite: "Libéralité",
+          "declaration-maintien": "Déclaration de maintien",
+          "pv-ouverture": "PV d'ouverture des opérations",
+          inventaire: "Inventaire",
+          "apercu-revendications": "Aperçu des revendications",
+          "etat-liquidatif": "État liquidatif",
+          contredits: "Contredits",
+          "citation-introductive": "Citation introductive",
+          jugement: "Jugement",
+          "notaire-liquidateur": "Notaire-liquidateur",
+          sommation: "Sommation",
+          "declaration-succession": "Déclaration de succession"
+        }
       },
       docsView: {
         // Selection. `selectAllFiltered` names the scope on purpose — a bare "tout sélectionner"
@@ -803,7 +968,8 @@ export const translations = {
       noSearchResults: "Geen document komt overeen met deze zoekopdracht",
       story: {
         tab: "Verhaal",
-        subtitle: "Wat het dossier zegt, in de tijd",
+        subtitle:
+          "Een datum die in het dossier geschreven staat, de tekst die hem draagt, de stukken die hem vermelden. Hier wordt niets geredigeerd.",
         timelineTitle: "Chronologie",
         timelineSpan: "{count} stukken, van {from} tot {to}",
         timelineEmpty: "Geen gedateerde stukken",
@@ -853,7 +1019,171 @@ export const translations = {
         statedTimes: "{count} keer vermeld",
         clearSelection: "Alle stukken tonen",
         truncated:
-          "Analyse beperkt tot de eerste {limit} passages: de lijst hieronder is onvolledig."
+          "Analyse beperkt tot de eerste {limit} passages: de lijst hieronder is onvolledig.",
+
+        // ── Het feitenregister ─────────────────────────────────────────────────────────────
+        header: {
+          documents: "{count} stukken gelezen",
+          truncated:
+            "Gedeeltelijke lezing: {limit} passages gelezen. Het register hieronder is een begin van dossier, niet het dossier."
+        },
+        repere: {
+          title: "Het ijkpunt van het dossier",
+          how: "Een stuk schrijft „overleden op …” vlak vóór een datum. Die datum bepaalt welk erfrecht het dossier beheerst: de wet van 31 juli 2017 geldt voor nalatenschappen die openvallen vanaf 1 september 2018. De toepassing situeert de datum tegenover die wettelijke datum, en houdt het daarbij.",
+          empty:
+            "Geen enkel stuk schrijft „overleden op …”. Het ijkpunt van 1 september 2018 wordt niet getoond.",
+          before:
+            "Deze datum ligt vóór 1 september 2018, de datum van inwerkingtreding van de wet van 31 juli 2017.",
+          after:
+            "Deze datum ligt na 1 september 2018, de datum van inwerkingtreding van de wet van 31 juli 2017.",
+          limits:
+            "De toepassing meldt dat stukken deze zin schrijven. Zij zegt niet om welke nalatenschap het gaat, welk stelsel geldt of welke termijn loopt.",
+          more: "{count} andere vermeldingen van overlijden worden niet getoond."
+        },
+        controls: {
+          title: "Wat het register toont",
+          how: "Deze keuze stuurt de tijdlijn en de tabel, en vermeldt altijd wat zij verbergt.",
+          corroboration: "Bevestiging",
+          cut: "{count} stukken en meer",
+          cutAll: "Alle",
+          hidden:
+            "{total} verschillende data gevonden; {hidden} die door minder dan {threshold} stukken worden vermeld, blijven hier verborgen.",
+          hiddenNone:
+            "{total} verschillende data gevonden; deze drempel verbergt er geen enkele.",
+          defaultThreshold:
+            "Startdrempel automatisch gekozen om de tabel leesbaar te houden.",
+          order: "Volgorde",
+          terms: "Termen gevonden in de tekst",
+          termsHow:
+            "Woord gevonden op minder dan 200 tekens van de datum. {count} van de {total} feiten dragen er geen. Een aanwezig woord is geen kwalificatie van de handeling: het is de term die het stuk gebruikt.",
+          termsSelected:
+            "{count} termen geselecteerd — één ervan volstaat voor een regel",
+          clearTerms: "Geselecteerde termen wissen",
+          also: "Ook",
+          withAmount: "met een bedrag",
+          withRef: "met verwijzing naar een genummerd stuk"
+        },
+        frise: {
+          title: "De tijdlijn",
+          how: "Eén kolom per jaar waarin een feit gedateerd is; elk blok is een feit. Jaren zonder enig feit worden samengedrukt met een stippellijn en hun duur. Klik een blok om naar de regel in het register te gaan, een jaar om enkel dat jaar te tonen.",
+          sourceFacts: "Feiten: data uit de tekst",
+          sourceFilings: "Neerleggingen: data van de stukken",
+          legendFilledFacts: "Vol blok: aan deze datum hangt een bedrag",
+          legendOutlinedFacts: "Open blok: geen bedrag eraan gekoppeld",
+          legendFilledFilings: "Vol blok: het stuk vermeldt een bedrag",
+          legendOutlinedFilings: "Open blok: het stuk vermeldt geen bedrag",
+          legendEmptyYear:
+            "Een ontbrekend jaar betekent dat bij deze drempel geen feit weerhouden is, niet dat er niets gebeurd is.",
+          scroll: "{years} jaren · {gaps} onderbrekingen · schuif horizontaal",
+          empty: "Bij deze drempel wordt geen enkel feit weerhouden.",
+          yearFacts: "{year}: {count} feiten",
+          bandMore: "en {count} andere feiten in dat jaar",
+          deathRule: "Datum geschreven als „overleden op”: {date}"
+        },
+        registre: {
+          title: "Het register",
+          how: "Eén regel per datum die in het dossier geschreven staat, in de tijd geordend. Elke regel draagt de zin van het stuk, de bedragen die naast de datum staan en het aantal stukken dat hem vermeldt. Vouw open om de passages te lezen en het stuk op zijn bladzijde te openen.",
+          rowsShown: "{count} regels getoond",
+          capped: "{count} bijkomende regels worden niet weergegeven.",
+          empty:
+            "Geen feit beantwoordt aan deze filters. Verlaag de drempel of verwijder een term.",
+          rowLabel: "Feit {index} — {date}, vermeld in {count} stukken",
+          amountCorroborated: "Bedrag bevestigd door {count} stukken",
+          amountSingle: "Bedrag door één enkel stuk vermeld",
+          amountOthers: "{count} andere bedragen dicht bij deze datum",
+          amountHidden: "{count} bedragen worden niet getoond.",
+          amountAdjacency:
+            "Een bedrag dat naast een datum geschreven staat: de toepassing zegt niet dat het die dag betaald is, noch waarover het gaat.",
+          divergence: "Eén stuk schrijft {amount}",
+          noAmounts:
+            "In dit dossier kon geen enkel bedrag aan een datum worden gekoppeld.",
+          refs: "Verwijzingen:",
+          refsHow:
+            "Verwijzing zoals ze in de tekst staat, letterlijk overgenomen. De toepassing koppelt ze aan geen enkel stuk van het dossier: de nummering verschilt per partij en per neerlegging.",
+          inferredNote:
+            "Het stuk schrijft „{raw}”: de eeuw wordt afgeleid.",
+          openAtPage: "Het stuk openen op bladzijde {page}",
+          openPiece: "Het stuk openen",
+          highlighted: "Regel bereikt vanaf de tijdlijn"
+        },
+        footer: {
+          title: "Wat niet in het register staat",
+          how: "Wat deze pagina buiten beschouwing laat, hier vermeld in plaats van verzwegen.",
+          undatedMore: "en {count} andere",
+          unpaired:
+            "{count} verschillende bedragen op {total} staan naast geen enkele datum.",
+          unpairedBrowse: "Doorbladeren",
+          unpairedHide: "Lijst inkorten",
+          unpairedCapped: "{count} getoond op {total} (plafond {limit}).",
+          inferred:
+            "{count} van de {total} feiten hebben een eeuw afgeleid uit een jaartal van twee cijfers.",
+          census: "Aangetroffen munten: {list}.",
+          censusFloating: "{list} worden nooit omgerekend.",
+          noTotal: "Er wordt geen enkel totaal berekend.",
+          indicative:
+            "Het bedrag in euro is indicatief (vaste koersen van 1999) en wordt nooit geïndexeerd.",
+          noRoles:
+            "De toepassing zegt niet wie betaald heeft, wie ontvangen heeft, of welke hoedanigheid iemand in het dossier heeft.",
+          factsCapped:
+            "{returned} feiten doorgestuurd op {total} (plafond {limit}).",
+          deathsCapped:
+            "{returned} vermeldingen van overlijden doorgestuurd op {total} (plafond {limit}).",
+          noMoney: "Geen bedragen gevonden in dit dossier."
+        },
+        expose: {
+          copy: "De uiteenzetting van de feiten kopiëren",
+          how: "Kopieert precies de getoonde regels, genummerd, met het uittreksel en het stuk. Dit zijn geen conclusies: de middelen blijven te schrijven.",
+          header:
+            "Uiteenzetting van de feiten — {count} regels, data vermeld door {threshold} stukken en meer{filters}. Uittreksels letterlijk uit de stukken; geen totaal, geen kwalificatie.",
+          headerAll:
+            "Uiteenzetting van de feiten — {count} regels, alle gevonden data{filters}. Uittreksels letterlijk uit de stukken; geen totaal, geen kwalificatie.",
+          filterTerms: " · termen: {terms}",
+          filterYear: " · jaar {year}",
+          filterAmount: " · met een bedrag",
+          filterRef: " · met verwijzing naar een genummerd stuk",
+          copied: "Uiteenzetting gekopieerd: {count} regels",
+          failed: "Kopiëren is mislukt"
+        },
+        viewerAtPage: "Geopend op bladzijde {page}",
+        termGroups: {
+          notion: "Begrippen",
+          qualification: "Termen over de giften",
+          milestone: "Proceshandelingen"
+        },
+        terms: {
+          donation: "Schenking",
+          rapport: "Inbreng",
+          usufruit: "Vruchtgebruik",
+          reserve: "Voorbehouden erfdeel",
+          reduction: "Inkorting",
+          indivision: "Onverdeeldheid",
+          recel: "Heling",
+          prescription: "Verjaring",
+          "quotite-disponible": "Beschikbaar deel",
+          "quasi-usufruit": "Quasi-vruchtgebruik",
+          "avancement-hoirie": "Voorschot op erfdeel",
+          "preciput-hors-part": "Vooruitmaking / buiten erfdeel",
+          "dispense-rapport": "Vrijstelling van inbreng",
+          rapportable: "Inbrengplichtig",
+          "reserve-usufruit": "Voorbehoud van vruchtgebruik",
+          "nue-propriete": "Blote eigendom",
+          "pleine-propriete": "Volle eigendom",
+          "rente-viagere": "Lijfrente",
+          "fonds-perdu": "À fonds perdu",
+          "don-manuel": "Handgift",
+          liberalite: "Gift",
+          "declaration-maintien": "Verklaring tot behoud",
+          "pv-ouverture": "PV van opening van de werkzaamheden",
+          inventaire: "Boedelbeschrijving",
+          "apercu-revendications": "Overzicht van de aanspraken",
+          "etat-liquidatif": "Staat van vereffening",
+          contredits: "Zwarigheden",
+          "citation-introductive": "Inleidende dagvaarding",
+          jugement: "Vonnis",
+          "notaire-liquidateur": "Notaris-vereffenaar",
+          sommation: "Aanmaning",
+          "declaration-succession": "Aangifte van nalatenschap"
+        }
       },
       docsView: {
         selectAll: "Alles selecteren",
