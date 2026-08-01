@@ -349,6 +349,9 @@ export const translations = {
         moneyDisclaimer:
           "Aucun total n'est calculé, volontairement : additionner tous les chiffres d'un dossier n'a pas de sens juridique — une même vente est comptée à chaque fois qu'elle est citée, et prix, soldes, frais et sous-totaux se mélangent. Les montants sont relevés tels quels, avec la phrase où ils figurent ; l'application n'indique ni qui a versé ni qui a reçu, cela se lit sur la pièce.",
         currenciesPresent: "Devises présentes : {list}",
+        actBlockLabel: "{date} — énoncé dans {count} pièces",
+        timelineCut:
+          "Seules les dates énoncées par au moins {min} pièces sont portées ici ; {omitted} autres dates figurent dans la liste ci-dessous.",
         actsTitle: "Chronologie des actes",
         actsCount: "{count} dates distinctes",
         actsHint:
@@ -421,7 +424,8 @@ export const translations = {
           terms: "Termes relevés dans le texte",
           termsHow:
             "Mot relevé à moins de 200 caractères de la date. {count} des {total} faits n'en portent aucun. Un mot présent n'est pas une qualification de l'acte : c'est le terme que la pièce emploie.",
-          termsSelected: "{count} termes retenus — une ligne suffit à en porter un",
+          termsSelected:
+            "{count} termes retenus — une ligne suffit à en porter un",
           clearTerms: "Retirer les termes sélectionnés",
           also: "Aussi",
           withAmount: "portant un montant",
@@ -432,7 +436,8 @@ export const translations = {
           how: "Une colonne par année où un fait est daté ; chaque bloc est un fait. Les années sans aucun fait sont resserrées en pointillé, avec leur durée. Cliquez un bloc pour aller à sa ligne du registre, une année pour n'afficher que cette année.",
           sourceFacts: "Faits : dates du texte",
           sourceFilings: "Dépôts : dates des pièces",
-          legendFilledFacts: "Bloc plein : un montant est rattaché à cette date",
+          legendFilledFacts:
+            "Bloc plein : un montant est rattaché à cette date",
           legendOutlinedFacts: "Bloc évidé : aucun montant rattaché",
           legendFilledFilings: "Bloc plein : la pièce énonce un montant",
           legendOutlinedFilings: "Bloc évidé : la pièce n'énonce aucun montant",
@@ -986,6 +991,9 @@ export const translations = {
         moneyDisclaimer:
           "Er wordt bewust geen totaal berekend: alle cijfers van een dossier optellen heeft juridisch geen betekenis — dezelfde verkoop wordt bij elke vermelding meegeteld, en prijzen, saldi, kosten en subtotalen lopen door elkaar. De bedragen staan er letterlijk, met de zin waarin ze voorkomen; de toepassing zegt niet wie betaald of ontvangen heeft, dat leest u op het stuk.",
         currenciesPresent: "Aanwezige munten: {list}",
+        actBlockLabel: "{date} — vermeld in {count} stukken",
+        timelineCut:
+          "Alleen data die door minstens {min} stukken worden vermeld staan hier; {omitted} andere data staan in de lijst hieronder.",
         actsTitle: "Chronologie van de handelingen",
         actsCount: "{count} verschillende data",
         actsHint:
@@ -1100,8 +1108,7 @@ export const translations = {
           refs: "Verwijzingen:",
           refsHow:
             "Verwijzing zoals ze in de tekst staat, letterlijk overgenomen. De toepassing koppelt ze aan geen enkel stuk van het dossier: de nummering verschilt per partij en per neerlegging.",
-          inferredNote:
-            "Het stuk schrijft „{raw}”: de eeuw wordt afgeleid.",
+          inferredNote: "Het stuk schrijft „{raw}”: de eeuw wordt afgeleid.",
           openAtPage: "Het stuk openen op bladzijde {page}",
           openPiece: "Het stuk openen",
           highlighted: "Regel bereikt vanaf de tijdlijn"

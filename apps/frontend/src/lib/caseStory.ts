@@ -115,44 +115,6 @@ export function buildYearBands<T extends TimelineItem>(
   };
 }
 
-/**
- * Indicative euro value of the amounts stated in each year, so money is visible IN TIME rather than
- * only in a total.
- *
- * Unconvertible currencies are counted but contribute NOTHING to the euro figure, and the count is
- * returned so a year whose money is all in dollars reads as "3 montants, conversion indisponible"
- * instead of as an empty year. A bar of zero where money exists would be the worst of both.
- */
-export interface YearMoney {
-  eur: number | null;
-  amountCount: number;
-  unconvertibleCount: number;
-}
-
-export function moneyByYear(
-  amounts: readonly LexStoryAmount[],
-  yearOfDocument: ReadonlyMap<string, string | null>
-): Map<string, YearMoney> {
-  const byYear = new Map<string, YearMoney>();
-  for (const amount of amounts) {
-    const year = yearOfDocument.get(amount.documentId);
-    if (!year) continue;
-    const entry = byYear.get(year) ?? {
-      eur: null,
-      amountCount: 0,
-      unconvertibleCount: 0
-    };
-    entry.amountCount += 1;
-    const converted = toEurIndicative(amount.value, amount.currency);
-    if (converted) entry.eur = (entry.eur ?? 0) + converted.value;
-    else entry.unconvertibleCount += 1;
-    byYear.set(year, entry);
-  }
-  for (const entry of byYear.values())
-    if (entry.eur !== null) entry.eur = Math.round(entry.eur * 100) / 100;
-  return byYear;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Money
 // ---------------------------------------------------------------------------------------------
@@ -747,5 +709,75 @@ export function findRecurringAmounts(
           Math.abs(b.value) - Math.abs(a.value) ||
           compareStrings(a.currency, b.currency)
       )
+  );
+}
+
+/**
+ * The smallest "cited by at least N pieces" cut whose chronology still fits the chart.
+ *
+ * A fixed N would be a constant fitted to one file. Measured on the real corpus the cut matters
+ * enormously — at N=2 the chronology is 49 bands and 2002px with a stack of 42 in 1998; at N=5 it is
+ * 23 bands, 998px and a tallest stack of 12, which is what the chart is dimensioned for. On a smaller
+ * file N=2 may already fit and raising it would hide the case.
+ *
+ * So the cut is searched rather than chosen: keep loosening until the chronology would overflow, then
+ * step back. The caller MUST show what the cut hid — a chronology that quietly drops two thirds of
+ * the dates it found is worse than one that admits the threshold it used.
+ */
+export interface ChronologyCut {
+  /** Minimum number of documents a date must be stated in to appear. */
+  minDocuments: number;
+  /** Dates kept, and how many were left out at this cut. */
+  kept: number;
+  omitted: number;
+}
+
+export interface CutInput {
+  iso: string;
+  documentCount: number;
+}
+
+export function chooseChronologyCut(
+  dates: readonly CutInput[],
+  fits: (isoDates: readonly string[]) => boolean,
+  maxMinDocuments = 12
+): ChronologyCut {
+  const total = dates.length;
+  let chosen = maxMinDocuments;
+  for (let min = 1; min <= maxMinDocuments; min++) {
+    const kept = dates.filter((d) => d.documentCount >= min);
+    if (fits(kept.map((d) => d.iso))) {
+      chosen = min;
+      break;
+    }
+  }
+  const kept = dates.filter((d) => d.documentCount >= chosen).length;
+  return { minDocuments: chosen, kept, omitted: total - kept };
+}
+
+/**
+ * Whether a set of dates would render inside `maxWidth`, using the chart's own geometry.
+ *
+ * Duplicating the band and gap widths here would let the two drift, so the caller passes them; the
+ * chart is the only place that knows how wide a band is.
+ */
+export function chronologyFits(
+  isoDates: readonly string[],
+  geometry: {
+    bandWidth: number;
+    gapWidth: number;
+    maxWidth: number;
+    minGapYears?: number;
+  }
+): boolean {
+  const years = [...new Set(isoDates.map((iso) => iso.slice(0, 4)))].sort();
+  if (years.length === 0) return true;
+  const minGap = geometry.minGapYears ?? 2;
+  let gaps = 0;
+  for (let i = 1; i < years.length; i++)
+    if (Number(years[i]) - Number(years[i - 1]) - 1 >= minGap) gaps++;
+  return (
+    years.length * geometry.bandWidth + gaps * geometry.gapWidth <=
+    geometry.maxWidth
   );
 }

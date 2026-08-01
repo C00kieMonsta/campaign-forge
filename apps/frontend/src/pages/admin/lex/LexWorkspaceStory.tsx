@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  LexActDate,
   LexDocument,
   LexStoryPayload,
   LexWorkspace
 } from "@packages/types";
+import { findAmounts } from "@packages/types";
 import { Button } from "@packages/ui";
 import {
   ArrowLeft,
@@ -14,18 +16,19 @@ import {
   MessageSquare
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
-import CaseTimeline from "@/components/lex/CaseTimeline";
+import CaseTimeline, { TIMELINE_GEOMETRY } from "@/components/lex/CaseTimeline";
 import DocumentViewerDialog from "@/components/lex/DocumentViewerDialog";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import {
   buildYearBands,
+  chooseChronologyCut,
+  chronologyFits,
   findRecurringAmounts,
   formatAmount,
   groupAmountsByDocument,
   groupIdenticalAmounts,
-  moneyByYear,
   summariseMoney
 } from "@/lib/caseStory";
 import { cn } from "@/lib/utils";
@@ -139,13 +142,55 @@ export default function LexWorkspaceStory() {
     [docs]
   );
 
-  const bands = useMemo(
+  /**
+   * The chronology bands the ACTS, not the filings.
+   *
+   * Banding documents by their own date put a 1992 donation in 2023, because the piece that argues it
+   * is a 2023 set of conclusions — the right question against the wrong denominator. Act dates are
+   * written inside the text and date the thing that happened.
+   *
+   * Cut to dates more than one piece states. On the real file 625 distinct dates are found and most
+   * are incidental (a letterhead, a bank statement line); a date several filings return to is one the
+   * case is built on, and the cut is what turns 625 into a readable chart. The count below the chart
+   * says how many were left out, per the display-cap rule.
+   */
+  const cut = useMemo(
     () =>
-      buildYearBands(
-        storyDocs.map((doc) => ({ id: doc.id, date: doc.timelineDate ?? "" }))
+      chooseChronologyCut(story?.actDates ?? [], (isoDates) =>
+        chronologyFits(isoDates, TIMELINE_GEOMETRY)
       ),
-    [storyDocs]
+    [story]
   );
+  const actBandItems = useMemo(
+    () =>
+      (story?.actDates ?? [])
+        .filter((act) => act.documentCount >= cut.minDocuments)
+        .map((act) => ({ id: act.iso, date: act.iso })),
+    [story, cut]
+  );
+  const bands = useMemo(() => buildYearBands(actBandItems), [actBandItems]);
+
+  /** Act dates by iso, so a block can name itself and open what states it. */
+  const actByIso = useMemo(() => {
+    const map = new Map<string, LexActDate>();
+    for (const act of story?.actDates ?? []) map.set(act.iso, act);
+    return map;
+  }, [story]);
+
+  /**
+   * Which act dates carry a figure — the chart's fill channel.
+   *
+   * Decided from the excerpt the date was found in, so "where is the money in time" is answered
+   * against the date of the ACT rather than the date of the filing that mentions it. A date whose
+   * passages state no sum is drawn outlined, which is information rather than an absence.
+   */
+  const actsWithAmounts = useMemo(() => {
+    const withMoney = new Set<string>();
+    for (const act of story?.actDates ?? [])
+      if (act.samples.some((sample) => findAmounts(sample.excerpt).length > 0))
+        withMoney.add(act.iso);
+    return withMoney;
+  }, [story]);
 
   /** documentId -> its four-digit year, or null. Feeds the money strip and the year filter. */
   const yearOfDocument = useMemo(() => {
@@ -177,10 +222,6 @@ export default function LexWorkspaceStory() {
   const visibleActs = useMemo(
     () => (showAllActs ? actDates : actDates.slice(0, ACTS_PREVIEW)),
     [actDates, showAllActs]
-  );
-  const yearMoney = useMemo(
-    () => moneyByYear(amounts, yearOfDocument),
-    [amounts, yearOfDocument]
   );
 
   if (loading) {
@@ -245,14 +286,39 @@ export default function LexWorkspaceStory() {
 
         <CaseTimeline
           bands={bands}
-          money={yearMoney}
-          documentsById={byId}
+          filledIds={actsWithAmounts}
           selectedYear={selectedYear}
+          labelOf={(item) =>
+            s.actBlockLabel
+              .replace("{date}", item.date)
+              .replace(
+                "{count}",
+                String(actByIso.get(item.date)?.documentCount ?? 0)
+              )
+          }
+          yearLabelOf={(year, count) =>
+            s.yearDocuments
+              .replace("{year}", year)
+              .replace("{count}", String(count))
+          }
+          // Selecting a block opens that date in the list below rather than a document: an act is
+          // stated by several pieces, and picking one of them for her would be a choice the chart
+          // has no basis to make.
+          onSelectItem={(item) => {
+            setActsOrder("chronological");
+            toggle(`act:${item.date}`);
+          }}
           onSelectYear={setSelectedYear}
-          onOpenDocument={setViewerDoc}
         />
 
-        <p className="text-[11px] text-muted-foreground">{s.timelineLegend}</p>
+        <p className="text-[11px] text-muted-foreground">
+          {s.timelineLegend}
+          {cut.omitted > 0
+            ? ` ${s.timelineCut
+                .replace("{min}", String(cut.minDocuments))
+                .replace("{omitted}", String(cut.omitted))}`
+            : ""}
+        </p>
 
         {/* Undated documents are listed, never dropped: a piece with no extracted date is still a
             piece of the file, and silently omitting it is how one disappears. */}

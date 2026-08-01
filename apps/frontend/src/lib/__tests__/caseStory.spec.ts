@@ -3,7 +3,9 @@ import {
   buildExposeDesFaits,
   buildYearBands,
   capRows,
+  chooseChronologyCut,
   chooseDefaultThreshold,
+  chronologyFits,
   CORROBORATION_CUTS,
   countFactsByThreshold,
   countTermsInFacts,
@@ -16,7 +18,6 @@ import {
   groupAmountsByDocument,
   groupIdenticalAmounts,
   MAX_DEFAULT_ROWS,
-  moneyByYear,
   orderFacts,
   REGISTRY_RENDER_CAP,
   summariseMoney,
@@ -132,69 +133,6 @@ describe("buildYearBands", () => {
     expect(first.bands[0].items.map((i) => i.id)).toEqual(
       second.bands[0].items.map((i) => i.id)
     );
-  });
-});
-
-describe("moneyByYear", () => {
-  const years = new Map([
-    ["d1", "1998"],
-    ["d2", "1998"],
-    ["d3", "2024"],
-    ["undated", null]
-  ]);
-
-  it("totals the indicative euro value per year", () => {
-    const m = moneyByYear(
-      [
-        amount({ documentId: "d1", value: 100000, currency: "BEF" }),
-        amount({ documentId: "d2", value: 100000, currency: "BEF" }),
-        amount({ documentId: "d3", value: 5000, currency: "EUR" })
-      ],
-      years
-    );
-    expect(m.get("1998")).toEqual({
-      eur: 4957.88,
-      amountCount: 2,
-      unconvertibleCount: 0
-    });
-    expect(m.get("2024")!.eur).toBe(5000);
-  });
-
-  // A year whose money is all in dollars must not read as an empty year — that would be a bar of
-  // zero where money exists.
-  it("counts an unconvertible amount without letting it total to zero", () => {
-    const m = moneyByYear(
-      [amount({ documentId: "d1", value: 25000, currency: "USD" })],
-      years
-    );
-    expect(m.get("1998")).toEqual({
-      eur: null,
-      amountCount: 1,
-      unconvertibleCount: 1
-    });
-  });
-
-  it("reports both when a year mixes convertible and floating currencies", () => {
-    const m = moneyByYear(
-      [
-        amount({ documentId: "d1", value: 100000, currency: "BEF" }),
-        amount({ documentId: "d2", value: 900, currency: "CHF" })
-      ],
-      years
-    );
-    expect(m.get("1998")).toEqual({
-      eur: 2478.94,
-      amountCount: 2,
-      unconvertibleCount: 1
-    });
-  });
-
-  it("ignores an amount whose document has no year", () => {
-    const m = moneyByYear(
-      [amount({ documentId: "undated", value: 1, currency: "EUR" })],
-      years
-    );
-    expect(m.size).toBe(0);
   });
 });
 
@@ -776,5 +714,80 @@ describe("buildExposeDesFaits", () => {
 
   it("copies an empty selection as nothing rather than as a heading with no facts", () => {
     expect(buildExposeDesFaits([])).toBe("");
+  });
+});
+
+describe("chooseChronologyCut", () => {
+  const dates = (spec: [string, number][]) =>
+    spec.map(([iso, documentCount]) => ({ iso, documentCount }));
+  const geometry = { bandWidth: 34, gapWidth: 24, maxWidth: 1152 };
+  const fits = (isoDates: readonly string[]) =>
+    chronologyFits(isoDates, geometry);
+
+  // Measured on the real corpus: at min=2 the chronology is 49 bands and 2002px with a stack of 42;
+  // at min=5 it is 23 bands and 998px. A constant would have been fitted to this one file.
+  it("loosens the cut until the chronology would overflow, then stops", () => {
+    // 40 distinct years, each cited once — only a strict cut can shrink this.
+    const wide = dates(
+      Array.from(
+        { length: 40 },
+        (_, i) => [`${1960 + i}-01-01`, 1] as [string, number]
+      )
+    );
+    // Nothing survives min>=2, so the search runs to the ceiling.
+    expect(chooseChronologyCut(wide, fits).minDocuments).toBeGreaterThan(1);
+  });
+
+  it("uses the loosest cut when the whole chronology already fits", () => {
+    const narrow = dates([
+      ["1998-05-27", 1],
+      ["2020-10-07", 1]
+    ]);
+    const cut = chooseChronologyCut(narrow, fits);
+    expect(cut.minDocuments).toBe(1);
+    expect(cut.omitted).toBe(0);
+  });
+
+  it("reports what the cut hid, so the chart can admit it", () => {
+    const mixed = dates([
+      ["1998-01-01", 9],
+      ["1999-01-01", 1],
+      ["2000-01-01", 1]
+    ]);
+    const cut = chooseChronologyCut(mixed, () => false, 3);
+    expect(cut.minDocuments).toBe(3);
+    expect(cut.kept).toBe(1);
+    expect(cut.omitted).toBe(2);
+  });
+
+  it("handles an empty chronology", () => {
+    expect(chooseChronologyCut([], fits)).toEqual({
+      minDocuments: 1,
+      kept: 0,
+      omitted: 0
+    });
+  });
+});
+
+describe("chronologyFits", () => {
+  const geometry = { bandWidth: 34, gapWidth: 24, maxWidth: 1152 };
+
+  it("counts a band per populated year and a marker per real gap", () => {
+    // 1958 and 1998: two bands plus one gap = 34*2 + 24 = 92.
+    expect(chronologyFits(["1958-07-10", "1998-05-27"], geometry)).toBe(true);
+  });
+
+  it("refuses a chronology that would overflow", () => {
+    const many = Array.from({ length: 40 }, (_, i) => `${1960 + i}-01-01`);
+    expect(chronologyFits(many, geometry)).toBe(false);
+  });
+
+  it("counts one band for several dates in the same year", () => {
+    const sameYear = ["1998-01-27", "1998-05-27", "1998-12-31"];
+    expect(chronologyFits(sameYear, { ...geometry, maxWidth: 34 })).toBe(true);
+  });
+
+  it("treats an empty chronology as fitting", () => {
+    expect(chronologyFits([], geometry)).toBe(true);
   });
 });

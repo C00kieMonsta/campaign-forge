@@ -26,9 +26,20 @@ import { cn } from "@/lib/utils";
  * so a file with no amounts reads as "all outlined" rather than as a missing feature.
  */
 
-/** Geometry. Sized so 23 bands and 9 gaps — the real file at its default cut — fit 1152px unscrolled. */
-const BAND_WIDTH = 34;
-const GAP_WIDTH = 24;
+/**
+ * Geometry. Sized so 23 bands and 9 gaps — the real file at its default cut — fit 1152px unscrolled.
+ *
+ * Exported because the CALLER decides how much of the chronology to show, and it can only decide that
+ * against these numbers. Duplicating them there would let the cut and the layout drift until the chart
+ * silently started scrolling again.
+ */
+export const TIMELINE_GEOMETRY = {
+  bandWidth: 34,
+  gapWidth: 24,
+  maxWidth: 1152
+} as const;
+const BAND_WIDTH = TIMELINE_GEOMETRY.bandWidth;
+const GAP_WIDTH = TIMELINE_GEOMETRY.gapWidth;
 const BLOCK_HEIGHT = 13;
 const BLOCK_GAP = 2;
 const AXIS_LABEL_HEIGHT = 18;
