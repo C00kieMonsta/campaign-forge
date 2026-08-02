@@ -1,10 +1,12 @@
 import {
   BULK_TIER,
+  completionBudget,
   DEFAULT_DEPTH,
   DEFAULT_TIER,
   DEPTHS,
   modelFor,
   MODELS,
+  REASONING_ALLOWANCE,
   requestParamsFor,
   type ModelTier,
   type ReasoningDepth
@@ -39,6 +41,13 @@ describe("the model registry", () => {
   it("records that no current model accepts a temperature", () => {
     for (const tier of TIERS)
       expect(MODELS[tier].supportsTemperature).toBe(false);
+  });
+
+  // The second field of this class, added after `max_tokens` 400'd every adverse-case run:
+  // "Unsupported parameter: 'max_tokens' is not supported with this model."
+  it("records what each model calls the output ceiling", () => {
+    for (const tier of TIERS)
+      expect(MODELS[tier].maxTokensParam).toBe("max_completion_tokens");
   });
 
   it("routes the bulk work to the cheapest tier", () => {
@@ -108,5 +117,50 @@ describe("reasoning depth", () => {
     const allowed = new Set(["low", "medium", "high"]);
     for (const depth of DEPTH_NAMES)
       expect(allowed.has(DEPTHS[depth].effort)).toBe(true);
+  });
+});
+
+// `max_completion_tokens` is not `max_tokens` renamed: it counts REASONING tokens as well as prose.
+// Measured against the live API — a hard prompt at effort `high` with a 4000 budget spent all 4000
+// reasoning and returned content:"" with finish_reason:"length". So the rename alone would have
+// swapped a loud 400 for a silent empty answer, which is worse in a tool that drafts filings.
+describe("completionBudget", () => {
+  it("adds the effort's allowance on top of the prose the caller asked for", () => {
+    expect(completionBudget(1200, "medium")).toBe(
+      1200 + REASONING_ALLOWANCE.medium
+    );
+  });
+
+  it("leaves the ceiling unset when the caller set no budget", () => {
+    // Absent is the API default, which is NOT the same as unlimited — sending 0 or Infinity would be.
+    expect(completionBudget(undefined, "high")).toBeUndefined();
+  });
+
+  it("gives a harder-thinking call more room, never less", () => {
+    const budgets = (["low", "medium", "high"] as const).map((e) =>
+      completionBudget(1000, e)
+    );
+    expect(budgets).toEqual([...budgets].sort((a, b) => Number(a) - Number(b)));
+    expect(new Set(budgets).size).toBe(3);
+  });
+
+  it("leaves headroom far above what this app's prompts actually spend", () => {
+    // Measured on real prompts (findings extraction over a source block, a running-summary fold):
+    // 28-131 reasoning tokens. An allowance near that would truncate the tail, and the tail is
+    // exactly the hard document that matters.
+    const MEASURED_WORST_CASE = 131;
+    for (const effort of ["low", "medium", "high"] as const)
+      expect(REASONING_ALLOWANCE[effort]).toBeGreaterThan(
+        MEASURED_WORST_CASE * 10
+      );
+  });
+
+  it("stays cheap enough that one truncation-proof call cannot run away", () => {
+    // The ceiling is a cap, not a reservation — unused allowance costs nothing. But it does bound
+    // the worst case, and that bound has to stay defensible at the deep tier's output price.
+    const worstCaseUsd =
+      ((1000 + REASONING_ALLOWANCE.high) / 1_000_000) *
+      MODELS.deep.outputCostPerMTok;
+    expect(worstCaseUsd).toBeLessThan(0.5);
   });
 });

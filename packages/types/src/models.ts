@@ -45,6 +45,15 @@ export interface ModelDefinition {
    */
   supportsTemperature: boolean;
   supportsReasoningEffort: boolean;
+  /**
+   * What this model calls the output ceiling.
+   *
+   * The reasoning models renamed it: sending `max_tokens` is a 400, not a warning — "Unsupported
+   * parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."
+   * It took down every adverse-case run. The NAME is stored rather than a boolean because the call
+   * site needs the name; a flag would only make the caller map it back.
+   */
+  maxTokensParam: "max_tokens" | "max_completion_tokens";
 }
 
 export const MODELS: Record<ModelTier, ModelDefinition> = {
@@ -63,7 +72,8 @@ export const MODELS: Record<ModelTier, ModelDefinition> = {
     inputCostPerMTok: 0.2,
     outputCostPerMTok: 1.2,
     supportsTemperature: false,
-    supportsReasoningEffort: true
+    supportsReasoningEffort: true,
+    maxTokensParam: "max_completion_tokens"
   },
   /** Between the two. Nothing routes here by default; it exists so a caller can step down one notch. */
   balanced: {
@@ -74,7 +84,8 @@ export const MODELS: Record<ModelTier, ModelDefinition> = {
     inputCostPerMTok: 2,
     outputCostPerMTok: 12,
     supportsTemperature: false,
-    supportsReasoningEffort: true
+    supportsReasoningEffort: true,
+    maxTokensParam: "max_completion_tokens"
   },
   /**
    * Everything a lawyer reads, and everything that gates a citation: chat replies, the deep and
@@ -88,7 +99,8 @@ export const MODELS: Record<ModelTier, ModelDefinition> = {
     inputCostPerMTok: 5,
     outputCostPerMTok: 30,
     supportsTemperature: false,
-    supportsReasoningEffort: true
+    supportsReasoningEffort: true,
+    maxTokensParam: "max_completion_tokens"
   }
 };
 
@@ -123,6 +135,46 @@ export const DEPTHS: Record<
 };
 
 export const DEFAULT_DEPTH: ReasoningDepth = "standard";
+
+/**
+ * Tokens to add to a caller's output budget to pay for the model's own thinking.
+ *
+ * `max_completion_tokens` is not the old `max_tokens` under a new name: it counts REASONING tokens
+ * as well as prose. Measured against the live API — a hard prompt at effort `high` with a budget of
+ * 4000 spent all 4000 reasoning and returned `content: ""` with `finish_reason: "length"`. Even the
+ * cheap tier at effort `low` consumed a 300-token budget entirely on reasoning. So renaming the
+ * parameter without this would have been the worse bug: instead of a loud 400, every hard input
+ * would come back silently empty.
+ *
+ * A caller's `maxTokens` means "how much PROSE I want back", which is what it meant before the
+ * rename. This preserves that meaning.
+ *
+ * The numbers are deliberately generous because the budget is a CEILING, not a reservation — an
+ * unused allowance costs nothing, while a short one empties the response. Measured spend on this
+ * app's real prompts (findings extraction over a source block, a running-summary fold) was 28-131
+ * reasoning tokens; the allowance is roughly two orders of magnitude above that so the tail is
+ * covered, and still low enough to bound a runaway: at the deep tier's $30/MTok, `high` caps one
+ * call's worst case at about forty cents.
+ */
+export const REASONING_ALLOWANCE: Record<ReasoningEffort, number> = {
+  low: 2_000,
+  medium: 6_000,
+  high: 12_000
+};
+
+/**
+ * The value to send as the model's output ceiling, given how much prose the caller wants.
+ *
+ * Returns undefined when the caller set no budget — an absent ceiling is the API's default and is
+ * not the same as an unlimited one.
+ */
+export function completionBudget(
+  proseTokens: number | undefined,
+  effort: ReasoningEffort
+): number | undefined {
+  if (proseTokens === undefined) return undefined;
+  return proseTokens + REASONING_ALLOWANCE[effort];
+}
 
 /**
  * The request fields for a depth, ready to spread into a completion call.
