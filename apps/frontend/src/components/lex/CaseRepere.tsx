@@ -46,9 +46,7 @@ export default function CaseRepere({
   const { t } = useLanguage();
   const s = t.lex.story;
 
-  const corroborated = mentions.filter(
-    (m) => m.documentCount >= MIN_DOCUMENTS
-  );
+  const corroborated = mentions.filter((m) => m.documentCount >= MIN_DOCUMENTS);
   const shown = corroborated.slice(0, MAX_DATES);
   const hidden = mentions.length - shown.length;
 

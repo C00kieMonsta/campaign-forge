@@ -46,6 +46,7 @@ import {
   type RelationNode,
   type SelectionState
 } from "@/lib/documentInsights";
+import { errorMessage } from "@/lib/errorMessage";
 import { toUploadCandidates, uploadDocuments } from "@/lib/uploadDocuments";
 import { cn } from "@/lib/utils";
 
@@ -380,7 +381,7 @@ export default function LexWorkspace() {
       setWorkspace(ws);
       await loadTimeline();
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -424,7 +425,7 @@ export default function LexWorkspace() {
       await uploadDocuments(id, toUploadCandidates([file]));
       await loadTimeline();
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setIsUploading(false);
     }
@@ -519,7 +520,7 @@ export default function LexWorkspace() {
       setSelection(EMPTY_SELECTION);
       setLastArchived(documentIds);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setIsMutating(false);
     }
@@ -537,7 +538,7 @@ export default function LexWorkspace() {
         title: dv.restoredToast.replace("{count}", String(documentIds.length))
       });
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setIsMutating(false);
     }
@@ -553,7 +554,7 @@ export default function LexWorkspace() {
         prev ? prev.filter((id) => id !== docId) : prev
       );
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     }
   };
 

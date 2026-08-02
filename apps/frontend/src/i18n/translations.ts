@@ -346,6 +346,12 @@ export const translations = {
       readingFullHint:
         "Jusqu'à {n} passages de la sélection. Nettement plus lent et plus coûteux.",
       claimNotCarried: "La citation n'établit pas ce qui est affirmé",
+      filingNeedsVerified:
+        "Export pour dépôt indisponible : {n} affirmation(s) ne sont pas établies par leur citation. Corrigez-les ou retirez-les, puis validez et signez.",
+      filingNeedsSignOff:
+        "Export pour dépôt indisponible : le document est vérifié mais pas encore validé et signé.",
+      signOffNeedsVerified:
+        "Toutes les affirmations doivent être établies par leur citation avant signature.",
       generationQueued:
         "Rédaction lancée — la progression s'affiche au-dessus de la conversation.",
       openDocument: "Ouvrir le document",
@@ -1059,6 +1065,12 @@ export const translations = {
       readingFullHint:
         "Tot {n} passages uit de selectie. Merkbaar trager en duurder.",
       claimNotCarried: "Het citaat staaft niet wat wordt beweerd",
+      filingNeedsVerified:
+        "Export voor neerlegging niet beschikbaar: {n} bewering(en) worden niet gestaafd door hun citaat. Corrigeer of verwijder ze, en onderteken daarna.",
+      filingNeedsSignOff:
+        "Export voor neerlegging niet beschikbaar: het document is geverifieerd maar nog niet ondertekend.",
+      signOffNeedsVerified:
+        "Elke bewering moet door haar citaat gestaafd zijn vóór ondertekening.",
       generationQueued:
         "Redactie gestart — de voortgang verschijnt boven het gesprek.",
       openDocument: "Document openen",

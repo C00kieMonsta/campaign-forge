@@ -16,6 +16,7 @@ import { useNavigate } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import { errorMessage } from "@/lib/errorMessage";
 
 export default function LexWorkspaces() {
   const { t } = useLanguage();
@@ -35,7 +36,7 @@ export default function LexWorkspaces() {
       const { items } = await api.lex.workspaces.list();
       setWorkspaces(items);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -58,7 +59,7 @@ export default function LexWorkspaces() {
       setDescription("");
       navigate(`/lex/workspaces/${workspace.id}`);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setIsCreating(false);
     }
@@ -70,7 +71,7 @@ export default function LexWorkspaces() {
       await api.lex.workspaces.delete(id);
       setWorkspaces((prev) => prev.filter((w) => w.id !== id));
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     }
   };
 

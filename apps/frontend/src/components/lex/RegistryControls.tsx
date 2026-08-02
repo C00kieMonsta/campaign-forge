@@ -217,7 +217,9 @@ export default function RegistryControls({
                     )}
                   >
                     {termLabel(term.id)}
-                    <span className="ml-1 tabular-nums opacity-70">{count}</span>
+                    <span className="ml-1 tabular-nums opacity-70">
+                      {count}
+                    </span>
                   </button>
                 );
               })}

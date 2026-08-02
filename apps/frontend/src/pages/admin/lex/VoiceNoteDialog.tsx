@@ -14,6 +14,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/hooks/use-voice-recorder";
 import { api } from "@/lib/api";
+import { errorMessage } from "@/lib/errorMessage";
 import { useLexControllers } from "@/store/LexStoreProvider";
 
 /**
@@ -52,7 +53,7 @@ export default function VoiceNoteDialog({
       setTranscript(loaded);
       setText(loaded.transcript ?? "");
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -74,7 +75,7 @@ export default function VoiceNoteDialog({
       toast({ title: t.lex.transcriptSaved });
       onClose();
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -88,7 +89,7 @@ export default function VoiceNoteDialog({
       toast({ title: t.lex.retranscribeQueued });
       onClose();
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setRetranscribing(false);
     }

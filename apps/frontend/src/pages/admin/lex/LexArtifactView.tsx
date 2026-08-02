@@ -13,6 +13,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import { errorMessage } from "@/lib/errorMessage";
 
 export default function LexArtifactView() {
   const { id = "" } = useParams();
@@ -32,7 +33,7 @@ export default function LexArtifactView() {
       setArtifact(artifact);
       setVersion(version);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -52,7 +53,7 @@ export default function LexArtifactView() {
       setArtifact(artifact);
       setVersion(version);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setBusy(false);
     }
@@ -70,7 +71,7 @@ export default function LexArtifactView() {
       w.document.write(html);
       w.document.close();
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setBusy(false);
     }
@@ -84,7 +85,7 @@ export default function LexArtifactView() {
         artifact ? `/lex/workspaces/${artifact.workspaceId}/artifacts` : "/lex"
       );
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     }
   };
 
@@ -101,6 +102,22 @@ export default function LexArtifactView() {
   const report = version.verificationReport;
   // Absent on versions generated before sources were recorded, and on manual edits.
   const sources = report?.sources ?? [];
+
+  /**
+   * Why filing export is unavailable, or null when it is available.
+   *
+   * Mirrors the server's condition rather than guessing at it: export.service.ts refuses unless
+   * `verified && signedOff`. Stating which of the two is missing matters — "not verified" is
+   * something the drafter has to fix, "not signed off" is one click away.
+   */
+  const filingBlockedReason = !verified
+    ? t.lex.filingNeedsVerified.replace(
+        "{n}",
+        report ? String(report.unsupported) : "?"
+      )
+    : !signedOff
+      ? t.lex.filingNeedsSignOff
+      : null;
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -150,32 +167,55 @@ export default function LexArtifactView() {
         </span>
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          onClick={handleSignOff}
-          disabled={busy || !verified || signedOff}
-          className="gradient-terracotta text-white"
-        >
-          <CheckCircle2 className="h-4 w-4 mr-2" />
-          {signedOff ? t.lex.signedOff : t.lex.signOff}
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => handleExport(true)}
-          disabled={busy}
-        >
-          <Download className="h-4 w-4 mr-2" />
-          {t.lex.exportForFiling}
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => handleExport(false)}
-          disabled={busy}
-        >
-          <Download className="h-4 w-4 mr-2" />
-          {t.lex.exportDraft}
-        </Button>
+      {/* Actions.
+
+          The filing export is GATED CLIENT-SIDE to match the server, which refuses it with a 409
+          unless the version is both machine-verified and signed off (export.service.ts). It used to
+          be offered unconditionally, so on the common case — any claim unsupported, so
+          verificationStatus 'failed' — clicking it did nothing but log a 409. The server gate stays
+          exactly as strict; what changes is that the UI no longer offers an action it knows will be
+          refused, and says in one sentence what is missing. `blockedReason` is the same test in the
+          same order as the server's. */}
+      <div className="space-y-2">
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={handleSignOff}
+            disabled={busy || !verified || signedOff}
+            title={
+              signedOff
+                ? undefined
+                : !verified
+                  ? t.lex.signOffNeedsVerified
+                  : undefined
+            }
+            className="gradient-terracotta text-white"
+          >
+            <CheckCircle2 className="h-4 w-4 mr-2" />
+            {signedOff ? t.lex.signedOff : t.lex.signOff}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => handleExport(true)}
+            disabled={busy || filingBlockedReason !== null}
+            title={filingBlockedReason ?? undefined}
+          >
+            <Download className="h-4 w-4 mr-2" />
+            {t.lex.exportForFiling}
+          </Button>
+          <Button
+            // The action that IS available while a draft is being worked on, so the row does not
+            // read as three dead buttons.
+            variant={filingBlockedReason ? "default" : "outline"}
+            onClick={() => handleExport(false)}
+            disabled={busy}
+          >
+            <Download className="h-4 w-4 mr-2" />
+            {t.lex.exportDraft}
+          </Button>
+        </div>
+        {filingBlockedReason ? (
+          <p className="text-xs text-muted-foreground">{filingBlockedReason}</p>
+        ) : null}
       </div>
 
       {/* What the draft was written FROM.

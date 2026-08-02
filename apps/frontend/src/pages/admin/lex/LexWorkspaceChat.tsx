@@ -58,8 +58,8 @@ import {
   MAX_RECORDING_SECONDS,
   useVoiceRecorder
 } from "@/hooks/use-voice-recorder";
-import { api } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
+import { errorMessage } from "@/lib/errorMessage";
 import { streamLexMessage } from "@/lib/lexStream";
 import { useCollection, useEntity } from "@/store/hooks";
 import { useLexControllers } from "@/store/LexStoreProvider";
@@ -597,7 +597,7 @@ export default function LexWorkspaceChat() {
       );
       setHasOlder(hasMore);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setLoadingOlder(false);
     }
@@ -612,7 +612,7 @@ export default function LexWorkspaceChat() {
     try {
       await controllers.workspaces.rename(id, next);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     }
   };
 
@@ -665,7 +665,8 @@ export default function LexWorkspaceChat() {
         );
         if (!cancelled) setHasOlder(hasMore);
       } catch (err) {
-        if (!cancelled) toast({ title: String(err), variant: "destructive" });
+        if (!cancelled)
+          toast({ title: errorMessage(err), variant: "destructive" });
       }
     })();
     return () => {
@@ -719,7 +720,7 @@ export default function LexWorkspaceChat() {
         });
       }
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setUploading(false);
       setUploadProgress(null);
@@ -779,7 +780,7 @@ export default function LexWorkspaceChat() {
       // Same direct-to-S3 path as any other document — one upload path, no exceptions.
       await controllers.documents.upload(id, [named]);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setUploading(false);
     }
@@ -827,7 +828,7 @@ export default function LexWorkspaceChat() {
       try {
         await controllers.documents.retry(docId);
       } catch (err) {
-        toast({ title: String(err), variant: "destructive" });
+        toast({ title: errorMessage(err), variant: "destructive" });
       }
     },
     [controllers, toast]
@@ -850,7 +851,7 @@ export default function LexWorkspaceChat() {
       setPinnedDocs((prev) => prev.filter((d) => !ids.includes(d.id)));
       setActivePinnedId((prev) => (prev && ids.includes(prev) ? null : prev));
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     }
   };
 
@@ -865,7 +866,7 @@ export default function LexWorkspaceChat() {
       ]);
       toast({ title: `${t.lex.discarded} (${deleted})` });
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     }
   };
 
@@ -910,7 +911,7 @@ export default function LexWorkspaceChat() {
       } catch (err) {
         // Release the guard, or the composer stays locked for the rest of the session.
         sendingRef.current = false;
-        toast({ title: String(err), variant: "destructive" });
+        toast({ title: errorMessage(err), variant: "destructive" });
         return;
       }
     }
@@ -939,7 +940,7 @@ export default function LexWorkspaceChat() {
         setMode("direct");
       } catch (err) {
         setInput(text); // don't lose a long question because the launch failed
-        toast({ title: String(err), variant: "destructive" });
+        toast({ title: errorMessage(err), variant: "destructive" });
       } finally {
         sendingRef.current = false;
       }
@@ -989,7 +990,7 @@ export default function LexWorkspaceChat() {
       // Pull the persisted user + assistant messages into the store, then drop the local echo.
       await controllers.conversations.loadMessages(convId);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       sendingRef.current = false;
       setStreaming(false);
@@ -1087,7 +1088,7 @@ export default function LexWorkspaceChat() {
       setGenInstructions("");
       toast({ title: t.lex.generationQueued });
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setGenerating(false);
     }

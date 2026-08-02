@@ -5,6 +5,7 @@ import { CheckSquare, Loader2, Send, Square, X } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import { errorMessage } from "@/lib/errorMessage";
 import { loadPdf, type LoadedPdf, type PdfDocument } from "./pdf";
 import { PdfPage } from "./PdfPage";
 
@@ -80,7 +81,8 @@ export default function PinnedDocumentsPanel({
         setPdf(loaded.doc);
         setPageCount(loaded.doc.numPages);
       } catch (err) {
-        if (!cancelled) toast({ title: String(err), variant: "destructive" });
+        if (!cancelled)
+          toast({ title: errorMessage(err), variant: "destructive" });
       } finally {
         if (!cancelled) setLoading(false);
       }

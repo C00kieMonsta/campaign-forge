@@ -10,6 +10,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import { errorMessage } from "@/lib/errorMessage";
 import { streamLexMessage } from "@/lib/lexStream";
 
 // Reuse the shared message type rather than redeclaring its shape.
@@ -77,7 +78,7 @@ export default function LexChat() {
           items.map((m) => ({ id: m.id, role: m.role, content: m.content }))
         );
       } catch (err) {
-        toast({ title: String(err), variant: "destructive" });
+        toast({ title: errorMessage(err), variant: "destructive" });
       }
     },
     [toast]
@@ -88,7 +89,9 @@ export default function LexChat() {
       .then((items) => {
         if (items.length > 0) void selectConversation(items[0].id);
       })
-      .catch((err) => toast({ title: String(err), variant: "destructive" }));
+      .catch((err) =>
+        toast({ title: errorMessage(err), variant: "destructive" })
+      );
   }, [loadConversations, selectConversation, toast]);
 
   useEffect(() => {
@@ -109,7 +112,7 @@ export default function LexChat() {
       setConversations(remaining);
       if (activeId === convId) handleNewConversation();
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     }
   };
 
@@ -132,7 +135,7 @@ export default function LexChat() {
         setActiveId(convId);
         setConversations((prev) => [conversation, ...prev]);
       } catch (err) {
-        toast({ title: String(err), variant: "destructive" });
+        toast({ title: errorMessage(err), variant: "destructive" });
         return;
       }
     }
@@ -173,7 +176,7 @@ export default function LexChat() {
       });
       void loadConversations();
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setStreaming(false);
       setStreamText("");

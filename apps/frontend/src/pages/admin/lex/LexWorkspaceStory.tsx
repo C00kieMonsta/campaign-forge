@@ -31,6 +31,7 @@ import {
   groupIdenticalAmounts,
   summariseMoney
 } from "@/lib/caseStory";
+import { errorMessage } from "@/lib/errorMessage";
 import { cn } from "@/lib/utils";
 
 /**
@@ -113,7 +114,7 @@ export default function LexWorkspaceStory() {
       setDocs(items);
       setStory(payload);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setLoading(false);
     }

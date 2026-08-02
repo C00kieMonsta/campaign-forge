@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/errorMessage";
 import { useCollection } from "@/store/hooks";
 import { useLexControllers } from "@/store/LexStoreProvider";
 
@@ -62,7 +63,7 @@ export default function LexAuthorities() {
     try {
       await controllers.authorities.loadAll();
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -97,7 +98,7 @@ export default function LexAuthorities() {
         });
       }
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setUploading(false);
     }
@@ -111,7 +112,7 @@ export default function LexAuthorities() {
     try {
       await controllers.authorities.update(id, { title: title.trim() });
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     }
   };
 
@@ -119,7 +120,7 @@ export default function LexAuthorities() {
     try {
       await fn();
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     }
   };
 

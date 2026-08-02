@@ -16,6 +16,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import { errorMessage } from "@/lib/errorMessage";
 
 function StatusBadge({ status }: { status: LexArtifact["status"] }) {
   const base = "text-xs px-2 py-0.5 rounded-full";
@@ -48,7 +49,7 @@ export default function LexArtifacts() {
       const { items } = await api.lex.artifacts.list(workspaceId);
       setItems(items);
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -77,7 +78,7 @@ export default function LexArtifacts() {
       setInstructions("");
       toast({ title: t.lex.generationQueued });
     } catch (err) {
-      toast({ title: String(err), variant: "destructive" });
+      toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setIsGenerating(false);
     }
