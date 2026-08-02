@@ -488,13 +488,51 @@ export default function LexWorkspaceChat() {
     [id]
   );
   const tasks = useCollection("lexTasks", taskFilter);
+  /** Finished runs the user has closed. Session-only: reopening the case starts clean. */
+  const [dismissedTasks, setDismissedTasks] = useState<string[]>([]);
+  /**
+   * What the panel shows: live runs, plus any finished run that produced a document.
+   *
+   * The second half matters — a drafting run that vanishes the moment it succeeds leaves the user
+   * hunting for what it made. It stays until dismissed, carrying the button that opens it. Failed
+   * and cancelled runs still disappear: their record is the trace, not the panel.
+   */
   const activeTasks = useMemo(
     () =>
       [...tasks]
-        .filter((task) => task.status === "queued" || task.status === "running")
+        .filter(
+          (task) =>
+            task.status === "queued" ||
+            task.status === "running" ||
+            (task.status === "done" &&
+              Boolean(task.resultArtifactId) &&
+              !dismissedTasks.includes(task.id))
+        )
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [tasks, dismissedTasks]
+  );
+
+  /**
+   * Pulls a finished run's answer into the thread.
+   *
+   * A background run posts its result as a message, and nothing was watching for it: the panel went
+   * quiet, the answer sat in the database, and the user had to reload the page to find out the
+   * ten-minute run had produced anything. Keyed on the ids themselves so it fires once per result
+   * rather than on every store write.
+   */
+  const landedResults = useMemo(
+    () =>
+      tasks
+        .filter((t) => t.status === "done" && t.resultMessageId)
+        .map((t) => t.resultMessageId)
+        .sort()
+        .join(","),
     [tasks]
   );
+  useEffect(() => {
+    if (!activeConvId || landedResults.length === 0) return;
+    void controllers.conversations.loadMessages(activeConvId);
+  }, [landedResults, activeConvId, controllers]);
 
   useEffect(() => {
     controllers.tasks.loadForWorkspace(id).catch(() => {
@@ -1006,21 +1044,48 @@ export default function LexWorkspaceChat() {
     setGenOpen(true);
   };
 
+  /**
+   * Launches the drafting run and closes — it does NOT wait for the document.
+   *
+   * It used to await the whole thing over one HTTP request: retrieve the pack, draft, then one
+   * frontier-model judge per claim, sequentially. That request outlived nginx's default 60s read
+   * timeout, whose 504 carries no CORS header, so the browser reported a CORS failure and the real
+   * cause was invisible — and nothing was persisted until the end, so the run was simply lost.
+   *
+   * Now it queues a task: progress appears in the panel above the thread, the finished document is
+   * posted into the conversation as a link, and closing the tab no longer kills it.
+   */
   const handleGenerate = async () => {
     if (!genTitle.trim() || generating) return;
     setGenerating(true);
     try {
-      const { artifact } = await api.lex.artifacts.generate({
+      let convId = activeConvId;
+      if (!convId) {
+        const conv = await controllers.conversations.create(
+          id,
+          genTitle.trim()
+        );
+        convId = conv.id;
+        setActiveConvId(conv.id);
+      }
+      await controllers.tasks.create({
         workspaceId: id,
-        conversationId: activeConvId ?? undefined,
-        type: genType,
+        conversationId: convId,
+        kind: "generate_artifact",
         title: genTitle.trim(),
         instructions: genInstructions.trim() || undefined,
-        // Empty means the whole file, which the schema expresses as absent rather than as [].
-        documentIds: genDocIds.length > 0 ? genDocIds : undefined,
-        sourceMode: genSourceMode
+        depth: runDepth,
+        params: {
+          type: genType,
+          // Empty means the whole file, which the schema expresses as absent rather than as [].
+          documentIds: genDocIds.length > 0 ? genDocIds : undefined,
+          sourceMode: genSourceMode
+        }
       });
-      navigate(`/lex/artifacts/${artifact.id}`);
+      setGenOpen(false);
+      setGenTitle("");
+      setGenInstructions("");
+      toast({ title: t.lex.generationQueued });
     } catch (err) {
       toast({ title: String(err), variant: "destructive" });
     } finally {
@@ -1306,7 +1371,10 @@ export default function LexWorkspaceChat() {
                 <TaskPanel
                   key={task.id}
                   task={task}
-                  onClose={() => void controllers.tasks.refresh(task.id)}
+                  onClose={() => {
+                    setDismissedTasks((prev) => [...prev, task.id]);
+                    void controllers.tasks.refresh(task.id);
+                  }}
                 />
               ))}
             </div>

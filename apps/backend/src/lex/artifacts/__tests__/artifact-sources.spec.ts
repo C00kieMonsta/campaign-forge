@@ -1,6 +1,9 @@
 import { ARTIFACT_PACK_SIZE } from "@packages/types";
 import type { RetrievedChunk } from "../../ai/rag.service";
-import { summariseSources } from "../artifact-generation.service";
+import {
+  mapWithConcurrency,
+  summariseSources
+} from "../artifact-generation.service";
 
 let nextChunk = 0;
 
@@ -90,5 +93,72 @@ describe("the pack sizes the dialog promises", () => {
     expect(ARTIFACT_PACK_SIZE.full).toBeGreaterThan(ARTIFACT_PACK_SIZE.search);
     // A pack of every chunk in the dev corpus is 12 765 spans; "full" is a wider sample, not that.
     expect(ARTIFACT_PACK_SIZE.full).toBeLessThan(1000);
+  });
+});
+
+/**
+ * Verification used to be a sequential `for` loop: one frontier-model judge per claim, in series.
+ * On a 30-claim draft that is thirty latencies end to end, which is most of why generation outlived
+ * nginx's 60s read timeout. Each claim is judged against its own quote, so nothing depends on
+ * anything else and the loop was serial for no reason.
+ */
+describe("mapWithConcurrency", () => {
+  it("returns results in INPUT order, not completion order", async () => {
+    // The claims are the document's paragraphs. Reordering them by whichever judge answered first
+    // would scramble the argument.
+    const delays = [40, 5, 25, 0, 15];
+    const out = await mapWithConcurrency(delays, 4, async (ms, i) => {
+      await new Promise((r) => setTimeout(r, ms));
+      return i;
+    });
+    expect(out).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("never exceeds the limit", async () => {
+    // The bound is what keeps a 40-claim draft from firing 40 simultaneous completions at the
+    // frontier tier and meeting the account's rate limit mid-document.
+    let inFlight = 0;
+    let peak = 0;
+    await mapWithConcurrency(Array.from({ length: 20 }), 3, async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return null;
+    });
+    expect(peak).toBe(3);
+  });
+
+  it("actually runs concurrently rather than one at a time", async () => {
+    // Guards the regression that matters: a "concurrent" map that awaits each item in turn is
+    // indistinguishable from the old loop except in wall-clock.
+    let concurrentObserved = false;
+    let active = 0;
+    await mapWithConcurrency(Array.from({ length: 6 }), 3, async () => {
+      active += 1;
+      if (active > 1) concurrentObserved = true;
+      await new Promise((r) => setTimeout(r, 10));
+      active -= 1;
+      return null;
+    });
+    expect(concurrentObserved).toBe(true);
+  });
+
+  it("handles an empty list and a limit above the item count", async () => {
+    expect(await mapWithConcurrency([], 8, async () => 1)).toEqual([]);
+    expect(await mapWithConcurrency([1, 2], 99, async (n) => n * 2)).toEqual([
+      2, 4
+    ]);
+  });
+
+  it("propagates a failure rather than returning a hole in the results", async () => {
+    // A claim whose judge call throws must fail the run, not silently leave `undefined` where a
+    // verdict belongs — that would be filed as an unverified claim with no indication why.
+    await expect(
+      mapWithConcurrency([1, 2, 3], 2, async (n) => {
+        if (n === 2) throw new Error("judge unavailable");
+        return n;
+      })
+    ).rejects.toThrow("judge unavailable");
   });
 });

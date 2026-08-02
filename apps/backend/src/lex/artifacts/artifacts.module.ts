@@ -17,6 +17,9 @@ import { VerificationService } from "./verification.service";
     ArtifactGenerationService,
     VerificationService,
     ExportService
-  ]
+  ],
+  // TasksModule needs it: document generation runs on the background task runner, because the
+  // work outlives an HTTP request.
+  exports: [ArtifactsService]
 })
 export class ArtifactsModule {}

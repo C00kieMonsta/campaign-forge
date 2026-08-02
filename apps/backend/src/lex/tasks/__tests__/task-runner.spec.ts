@@ -15,6 +15,7 @@ const runner = new TaskRunner(
   {} as never,
   {} as never,
   {} as never,
+  {} as never,
   {} as never
 ) as unknown as {
   windowsOf(text: string): { parts: string[]; truncated: boolean };

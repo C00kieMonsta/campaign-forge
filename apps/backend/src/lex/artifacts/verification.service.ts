@@ -33,14 +33,72 @@ export function quoteMatchesChunk(quote: string, content: string): boolean {
 }
 
 /**
+ * How much of the source span the judge is shown around the quote.
+ *
+ * The span, not the document: enough to resolve a pronoun and see the sentence the quote sits in,
+ * not enough to let the judge go hunting for support the quote does not carry. The prompt says so
+ * explicitly, because a judge that treats the whole passage as evidence has quietly stopped
+ * checking the citation and started checking the document.
+ */
+export const MAX_JUDGE_CONTEXT_CHARS = 2000;
+
+/**
+ * What the judge is actually asked.
+ *
+ * MEASURED, on three real runs over the 56-document case file. The previous prompt showed the judge
+ * the quote ALONE and told it to default to false, and it rejected 11 of 19 claims — every one of
+ * which carried a verbatim, correctly-indexed quote. Reading its reasons, it was mostly right about
+ * the quote and wrong about the question: a court document's sentences are arguments built on facts,
+ * and it was being asked whether the fact entailed the argument.
+ *
+ * Three failure shapes, all of them the question's fault rather than the drafter's:
+ *
+ *   ANAPHORA     "la citation ne précise pas que « qui » désigne Madame Monique Pirson" — the quote
+ *                had been amputated from the sentence that named her.
+ *   ATTRIBUTION  "n'indique pas qu'elle émane du notaire-liquidateur" — the attribution is WHICH
+ *                DOCUMENT the quote is from, and the judge was not shown it.
+ *   ADVOCACY     "n'indique pas que la défense le fera valoir" — true, and unfalsifiable: no 1996
+ *                bank letter says what the defence will argue in 2026.
+ *
+ * So the judge now sees the passage and the document, and rules on the sentence's FACTUAL content.
+ * Measured against the same rejected claims: 1/8 passed under the old prompt, 5/8 with the passage
+ * and document, 6/8 with the factual-core rule. The two that still fail are genuine overreach —
+ * including "ce crédit a financé les travaux", where the quote establishes only that the mortgage
+ * was taken out. On a case that turns on the money trail, that is exactly the claim to stop.
+ *
+ * What this does NOT relax: a date, a party, an amount, a document or a further category that the
+ * quote does not carry still fails, and so does a sentence that states the relation between facts
+ * differently from its source.
+ */
+export const JUDGE_SYSTEM =
+  "You are a strict legal fact-checker verifying one sentence of a court document.\n" +
+  "A sentence may combine a FACTUAL ASSERTION about the case file with ARGUMENT — what a party " +
+  "will contend, request, or submit, and how strongly. Your job is ONLY the factual assertion: " +
+  "does the QUOTE, read in its SOURCE PASSAGE and attributed to its SOURCE DOCUMENT, establish " +
+  "the facts the sentence asserts?\n" +
+  "The passage and the document name are there to resolve pronouns, references and attribution in " +
+  "the quote. They are NOT evidence for anything the quote itself does not say.\n" +
+  "Answer true when every factual element is carried by the quote, even if the sentence also " +
+  "argues from it, characterises it, or says what will be requested.\n" +
+  "Answer false when the sentence asserts ANY fact the quote does not establish — a date, a party, " +
+  "an amount, a document, or a further category — or when it states the relation between facts " +
+  "differently from the quote. Default to false if there is any doubt.";
+
+/**
  * Two-gate verification for a generated claim, in order of increasing cost:
  *  1. Deterministic verbatim backstop — the model's supporting quote must appear verbatim
  *     (whitespace-normalised, case-insensitive) inside the cited chunk's stored span. This
  *     catches hallucinated quotes and wrong-source citations without an LLM.
- *  2. Independent entailment judge — a separate LLM call confirms the quote actually
- *     supports the claim (default-to-false; the reasoning models no longer accept a
- *     temperature, so the conservative default is what keeps the gate strict).
+ *  2. Independent entailment judge — a separate LLM call confirms the quote establishes the FACTS
+ *     the sentence asserts, reading it in its source passage and attributed to its source document
+ *     (default-to-false; the reasoning models no longer accept a temperature, so the conservative
+ *     default is what keeps the gate strict). See JUDGE_SYSTEM for what it is asked and why.
  * A claim is 'supported' only if BOTH gates pass.
+ *
+ * The two failures are deliberately different states, because the user can act on only one of them:
+ * 'unsupported' means nothing usable was cited or the quote is not in the source — no evidence
+ * behind the sentence. 'contradicted' means the quote is real and simply does not carry what the
+ * sentence asserts, which is almost always one claim too many and is fixed by editing the sentence.
  */
 @Injectable()
 export class VerificationService {
@@ -71,11 +129,11 @@ export class VerificationService {
     // Gate 2: independent entailment judge.
     const raw = await this.openai.complete({
       json: true,
-      system:
-        "You are a strict legal fact-checker. Decide ONLY whether the QUOTE, on its own, " +
-        "directly supports the CLAIM. Default to false if there is any doubt.",
+      system: JUDGE_SYSTEM,
       user:
-        `CLAIM: ${claim.text}\n\nQUOTE: ${claim.quote}\n\n` +
+        `SENTENCE: ${claim.text}\n\nQUOTE: ${claim.quote}\n\n` +
+        `SOURCE DOCUMENT: ${source.filename}\n` +
+        `SOURCE PASSAGE:\n${source.content.slice(0, MAX_JUDGE_CONTEXT_CHARS)}\n\n` +
         `Respond as JSON: {"supported": true|false, "reason": "one short sentence"}`
     });
 

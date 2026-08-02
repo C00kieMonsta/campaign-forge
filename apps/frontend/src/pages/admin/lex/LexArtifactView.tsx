@@ -230,10 +230,31 @@ export default function LexArtifactView() {
                 </span>
               </div>
             ) : (
-              <div className="mt-2">
-                <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">
-                  {t.lex.unsupportedClaim}
+              /* Two different problems, and they were rendered identically. `unsupported` means
+                 nothing usable was cited or the quote is not in the source — the sentence has no
+                 evidence behind it. `contradicted` means the quote is real and simply does not
+                 carry what the sentence asserts, which is usually one claim too many and is fixed
+                 by editing the sentence. The judge's reason says which. */
+              <div className="mt-2 space-y-1">
+                <span
+                  className={`text-xs px-2 py-0.5 rounded-full ${
+                    c.status === "contradicted"
+                      ? "bg-amber-100 text-amber-800"
+                      : "bg-red-100 text-red-700"
+                  }`}
+                >
+                  {c.status === "contradicted"
+                    ? t.lex.claimNotCarried
+                    : t.lex.unsupportedClaim}
                 </span>
+                {c.reason ? (
+                  <p className="text-xs text-muted-foreground">{c.reason}</p>
+                ) : null}
+                {c.citation?.quote ? (
+                  <p className="text-xs text-muted-foreground italic">
+                    « {c.citation.quote} »
+                  </p>
+                ) : null}
               </div>
             )}
           </div>

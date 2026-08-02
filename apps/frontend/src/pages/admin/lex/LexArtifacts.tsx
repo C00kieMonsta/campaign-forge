@@ -62,16 +62,20 @@ export default function LexArtifacts() {
     if (!title.trim() || isGenerating) return;
     setIsGenerating(true);
     try {
-      const { artifact } = await api.lex.artifacts.generate({
+      // Queued, not awaited — same reason as the composer's dialog: drafting plus one judge call
+      // per claim outlives nginx's default 60s read timeout on this route. No conversation is named
+      // here, so the server creates one for the run to report into.
+      await api.lex.tasks.create({
         workspaceId,
-        type,
+        kind: "generate_artifact",
         title: title.trim(),
-        instructions: instructions.trim() || undefined
+        instructions: instructions.trim() || undefined,
+        params: { type }
       });
       setDialogOpen(false);
       setTitle("");
       setInstructions("");
-      navigate(`/lex/artifacts/${artifact.id}`);
+      toast({ title: t.lex.generationQueued });
     } catch (err) {
       toast({ title: String(err), variant: "destructive" });
     } finally {

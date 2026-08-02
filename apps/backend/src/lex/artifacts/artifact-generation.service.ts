@@ -46,6 +46,51 @@ export function summariseSources(
   );
 }
 
+/**
+ * Judge calls in flight at once.
+ *
+ * Eight rather than unlimited: the judge runs on the frontier tier and a 40-claim draft firing 40
+ * simultaneous completions is how an account meets its rate limit mid-document. Eight turns a
+ * six-minute serial verification into well under a minute while staying far inside the limit.
+ */
+const VERIFY_CONCURRENCY = 8;
+
+/** Where a run has got to, for the task trace. */
+export interface GenerationProgress {
+  phase: "retrieving" | "drafting" | "verifying";
+  done: number;
+  total: number;
+  packSpans: number;
+  packDocuments: number;
+}
+
+/**
+ * Maps with at most `limit` promises in flight, preserving input order in the output.
+ *
+ * Order matters here: the claims are the document's paragraphs and must come back in argument
+ * order, not completion order.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        out[i] = await fn(items[i], i);
+      }
+    }
+  );
+  await Promise.all(workers);
+  return out;
+}
+
 export interface GeneratedArtifact {
   body: LexArtifactBody;
   verificationStatus: LexVerificationStatus;
@@ -81,6 +126,13 @@ export class ArtifactGenerationService {
     documentIds?: string[];
     /** `full` widens the pack to everything in the selection instead of a similarity sample. */
     sourceMode?: "search" | "full";
+    /**
+     * Called as the run advances, so a background task can show what it is doing.
+     *
+     * Awaited rather than fired: the caller persists progress, and a run that outpaced its own
+     * progress writes would show a stale step for minutes at a time.
+     */
+    onProgress?: (p: GenerationProgress) => Promise<void>;
   }): Promise<GeneratedArtifact> {
     const query = `${params.title}\n${params.instructions ?? ""}`.trim();
     // `search` samples by similarity; `full` widens the pack sixteenfold over the same selection.
@@ -97,6 +149,14 @@ export class ArtifactGenerationService {
       params.documentIds
     );
 
+    await params.onProgress?.({
+      phase: "drafting",
+      done: 0,
+      total: 0,
+      packSpans: pack.length,
+      packDocuments: summariseSources(pack).length
+    });
+
     const drafts = await this.draftClaims(
       params.type,
       params.title,
@@ -105,13 +165,35 @@ export class ArtifactGenerationService {
       await this.settings.languageOf(params.ownerEmail)
     );
 
-    const claims: LexArtifactClaim[] = [];
-    for (const draft of drafts) {
-      const verdict = await this.verification.verifyClaim(draft, pack);
-      const claim: LexArtifactClaim = {
+    // Every claim is judged against its OWN quote, so no verdict depends on another: the loop was
+    // sequential for no reason, and on a 30-claim draft that is thirty frontier-model latencies end
+    // to end. Bounded rather than unbounded only because of rate limits. Order is preserved, which
+    // matters — the claims are the document's paragraphs, in argument order.
+    let verified = 0;
+    const verdicts = await mapWithConcurrency(
+      drafts,
+      VERIFY_CONCURRENCY,
+      async (draft) => {
+        const verdict = await this.verification.verifyClaim(draft, pack);
+        verified += 1;
+        await params.onProgress?.({
+          phase: "verifying",
+          done: verified,
+          total: drafts.length,
+          packSpans: pack.length,
+          packDocuments: summariseSources(pack).length
+        });
+        return verdict;
+      }
+    );
+
+    const claims: LexArtifactClaim[] = drafts.map((draft, i) => {
+      const verdict = verdicts[i];
+      return {
         claimId: randomUUID(),
         text: draft.text,
         status: verdict.status,
+        reason: verdict.reason,
         citation:
           verdict.status === "supported" && verdict.source
             ? {
@@ -124,8 +206,7 @@ export class ArtifactGenerationService {
               }
             : null
       };
-      claims.push(claim);
-    }
+    });
 
     const supported = claims.filter((c) => c.status === "supported").length;
     const report: LexArtifactVerificationReport = {

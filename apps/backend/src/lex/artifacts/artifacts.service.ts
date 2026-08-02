@@ -18,7 +18,8 @@ import { sourceKey, type RetrievedChunk } from "../ai/rag.service";
 import { WorkspacesService } from "../workspaces/workspaces.service";
 import {
   ArtifactGenerationService,
-  type GeneratedArtifact
+  type GeneratedArtifact,
+  type GenerationProgress
 } from "./artifact-generation.service";
 
 interface ArtifactRow {
@@ -139,6 +140,7 @@ export class ArtifactsService {
       instructions?: string;
       documentIds?: string[];
       sourceMode?: "search" | "full";
+      onProgress?: (p: GenerationProgress) => Promise<void>;
     }
   ): Promise<{ artifact: LexArtifact; version: LexArtifactVersion }> {
     await this.workspaces.getOrFail(ownerEmail, params.workspaceId);
@@ -150,7 +152,8 @@ export class ArtifactsService {
       title: params.title,
       instructions: params.instructions,
       documentIds: params.documentIds,
-      sourceMode: params.sourceMode
+      sourceMode: params.sourceMode,
+      onProgress: params.onProgress
     });
 
     const packByChunk = new Map<string, RetrievedChunk>();

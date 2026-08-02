@@ -256,6 +256,16 @@ export interface LexArtifactClaim {
     pageTo: number | null;
     quote: string;
   } | null;
+  /**
+   * Why the claim ended up with this status, in the judge's own words.
+   *
+   * Persisted because the UI used to render every non-supported claim as one red badge, and the
+   * three ways a claim fails have nothing to do with each other: nothing was cited, the quote was
+   * not in the source, or the quote does not carry the fact. Without the reason the user cannot
+   * tell "the model invented a source" from "your sentence claims one thing more than its
+   * evidence" — and only the second is something she can fix by editing the sentence.
+   */
+  reason?: string | null;
 }
 
 /** The stored artifact body (a structured, citation-anchored document). */
@@ -383,7 +393,29 @@ export type LexTaskStatus =
  * inferred — everything else in this app refuses to assign a party a role, and a strategic view is
  * not a licence to start guessing one.
  */
-export type LexTaskKind = "assess_documents" | "adverse_case";
+export type LexTaskKind =
+  /** Read every document and answer a question about the file. */
+  | "assess_documents"
+  /** Read every document AGAINST a named party, so her own counsel sees the case coming. */
+  | "adverse_case"
+  /**
+   * Draft a document and verify every claim in it.
+   *
+   * A task rather than a request because the work outlives one: drafting reads up to 200 passages
+   * and then each claim gets its own frontier-model judge, and nginx's default 60s read timeout on
+   * the catch-all location cut that off long before it finished.
+   */
+  | "generate_artifact";
+
+/** What a `generate_artifact` run needs beyond the title and instructions every task has. */
+export interface LexArtifactTaskParams {
+  type: LexArtifactType;
+  /** Which pièces the drafter may use; absent means the whole case file. */
+  documentIds?: string[];
+  sourceMode?: "search" | "full";
+}
+
+export type LexTaskParams = LexArtifactTaskParams | Record<string, never>;
 
 export interface LexTask {
   id: string;
@@ -396,6 +428,10 @@ export interface LexTask {
   instructions?: string | null;
   /** How hard this run was allowed to think. Recorded so a result can be read against its cost. */
   depth: ReasoningDepth;
+  /** Kind-specific inputs. Empty for the assessments, which need only title and instructions. */
+  params?: LexTaskParams | null;
+  /** The document a `generate_artifact` run produced, offered directly from the finished task. */
+  resultArtifactId?: string | null;
   status: LexTaskStatus;
   progressDone: number;
   progressTotal: number;

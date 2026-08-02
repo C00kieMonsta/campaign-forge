@@ -1,6 +1,7 @@
 import { memo, useMemo, type ReactNode } from "react";
 import type { LexCitationEvent } from "@packages/types";
 import ReactMarkdown, { type Components } from "react-markdown";
+import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
 import { remarkCitationMarkers } from "@/lib/remark-citation-markers";
@@ -9,6 +10,16 @@ import { MarkdownBoundary } from "./MarkdownBoundary";
 // Only these protocols may appear in a link the model produced. Everything else (javascript:,
 // data:) is rendered as inert text.
 const SAFE_PROTOCOL = /^(https?:|mailto:)/i;
+
+/**
+ * In-app destinations a message may link to.
+ *
+ * Deliberately a narrow allow-list of paths this app owns, not "any relative URL": message content
+ * is model output, and `//evil.example` is a protocol-relative URL that a naive "starts with /"
+ * check would send off-site. Only the artifact route qualifies today — it is what a finished
+ * drafting run posts so the document is one click from the conversation it was launched in.
+ */
+const INTERNAL_PATH = /^\/lex\/artifacts\/[0-9a-f-]{36}$/i;
 
 /**
  * Renders an assistant reply as Markdown.
@@ -44,6 +55,10 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const components = useMemo<Components>(
     () => ({
       a: ({ href, children }) => {
+        // Internal first: routed, same tab, no `noopener` dance — it is this app.
+        if (typeof href === "string" && INTERNAL_PATH.test(href)) {
+          return <Link to={href}>{children}</Link>;
+        }
         const safe = typeof href === "string" && SAFE_PROTOCOL.test(href);
         if (!safe) return <>{children}</>;
         return (

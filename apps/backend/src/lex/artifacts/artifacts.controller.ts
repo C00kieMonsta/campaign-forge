@@ -11,10 +11,7 @@ import {
   Res,
   UseGuards
 } from "@nestjs/common";
-import {
-  generateArtifactRequestSchema,
-  saveArtifactRequestSchema
-} from "@packages/types";
+import { saveArtifactRequestSchema } from "@packages/types";
 import type { Response } from "express";
 import { AdminGuard } from "../../auth/admin.guard";
 import type { AuthUser } from "../../auth/admin.guard";
@@ -40,14 +37,11 @@ export class ArtifactsController {
     return { items };
   }
 
-  @Post("artifacts/generate")
-  async generate(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const parsed = generateArtifactRequestSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new BadRequestException(formatZodError(parsed.error));
-    }
-    return this.artifacts.generate(user.email, parsed.data);
-  }
+  // NO synchronous `POST artifacts/generate`. Drafting reads up to 200 passages and then spends one
+  // frontier-model judge per claim; that outlived nginx's default 60s read timeout on this route,
+  // and its 504 carries no CORS header, so the browser reported a CORS failure and hid the cause.
+  // Generation is `POST tasks` with kind 'generate_artifact' — one path, on the background runner,
+  // durable across a closed tab. ArtifactsService.generate still exists; the runner calls it.
 
   @Get("artifacts/:id")
   async get(@CurrentUser() user: AuthUser, @Param("id") id: string) {

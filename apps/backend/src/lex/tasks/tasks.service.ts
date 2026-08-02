@@ -10,6 +10,7 @@ import type {
   LexTaskEvent,
   LexTaskEventKind,
   LexTaskKind,
+  LexTaskParams,
   LexTaskStatus,
   ReasoningDepth
 } from "@packages/types";
@@ -35,6 +36,8 @@ interface TaskRow {
   title: string;
   instructions: string | null;
   depth: ReasoningDepth;
+  params: LexTaskParams | null;
+  result_artifact_id: string | null;
   status: LexTaskStatus;
   progress_done: number;
   progress_total: number;
@@ -51,8 +54,8 @@ interface TaskRow {
  * for either), and surfacing them would invite the client to reason about scheduling.
  */
 const TASK_COLUMNS = `id, workspace_id, owner_email, conversation_id, kind, title, instructions,
-  depth, status, progress_done, progress_total, step, result_message_id, error, created_at,
-  updated_at`;
+  depth, params, result_artifact_id, status, progress_done, progress_total, step, result_message_id,
+  error, created_at, updated_at`;
 
 interface TaskEventRow {
   /** BIGSERIAL — the pg driver returns int8 as a string. */
@@ -78,6 +81,8 @@ export function mapTask(r: TaskRow): LexTask {
     title: r.title,
     instructions: r.instructions,
     depth: r.depth,
+    params: r.params,
+    resultArtifactId: r.result_artifact_id,
     status: r.status,
     progressDone: r.progress_done,
     progressTotal: r.progress_total,
@@ -104,6 +109,8 @@ function mapTaskEvent(r: TaskEventRow): LexTaskEvent {
 export interface TaskOutcome {
   status: Extract<LexTaskStatus, "done" | "failed" | "cancelled">;
   resultMessageId?: string | null;
+  /** Set by a `generate_artifact` run, so the finished task can offer the document. */
+  resultArtifactId?: string | null;
   error?: string | null;
 }
 
@@ -159,8 +166,9 @@ export class TasksService {
 
     const res = await this.pg.query<TaskRow>(
       `INSERT INTO lex_tasks
-         (workspace_id, owner_email, conversation_id, kind, title, instructions, depth, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued')
+         (workspace_id, owner_email, conversation_id, kind, title, instructions, depth, params,
+          status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued')
        RETURNING ${TASK_COLUMNS}`,
       [
         dto.workspaceId,
@@ -169,7 +177,8 @@ export class TasksService {
         dto.kind,
         dto.title,
         dto.instructions ?? null,
-        dto.depth
+        dto.depth,
+        JSON.stringify(dto.params ?? {})
       ]
     );
 
@@ -319,6 +328,7 @@ export class TasksService {
       `UPDATE lex_tasks
          SET status = $2,
              result_message_id = COALESCE($3, result_message_id),
+             result_artifact_id = COALESCE($5, result_artifact_id),
              error = $4,
              step = NULL,
              locked_at = NULL,
@@ -328,7 +338,8 @@ export class TasksService {
         taskId,
         outcome.status,
         outcome.resultMessageId ?? null,
-        outcome.error ? sanitizeForStorage(outcome.error).slice(0, 2000) : null
+        outcome.error ? sanitizeForStorage(outcome.error).slice(0, 2000) : null,
+        outcome.resultArtifactId ?? null
       ]
     );
   }

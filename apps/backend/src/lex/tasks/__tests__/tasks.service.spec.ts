@@ -216,7 +216,9 @@ describe("TasksService", () => {
       const [sql, params] = pg.query.mock.calls[0];
       // 'cancelled' matches neither 'running' nor $2='done', so the row stays cancelled.
       expect(sql).toContain("WHERE id = $1 AND status IN ('running', $2)");
-      expect(params).toEqual(["task-1", "done", "msg-1", null]);
+      // Trailing nulls are the error and the result artifact id — a generation run fills the
+      // latter; an assessment leaves it, and COALESCE keeps whatever is already on the row.
+      expect(params).toEqual(["task-1", "done", "msg-1", null, null]);
     });
   });
 

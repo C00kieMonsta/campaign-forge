@@ -345,6 +345,10 @@ export const translations = {
       readingFull: "Lecture élargie",
       readingFullHint:
         "Jusqu'à {n} passages de la sélection. Nettement plus lent et plus coûteux.",
+      claimNotCarried: "La citation n'établit pas ce qui est affirmé",
+      generationQueued:
+        "Rédaction lancée — la progression s'affiche au-dessus de la conversation.",
+      openDocument: "Ouvrir le document",
       sourcesUsed: "Pièces lues",
       sourcesUsedHint:
         "Ce sur quoi la rédaction s'est appuyée. Une pièce listée ici sans citation en dessous n'a rien apporté à ce texte.",
@@ -1054,6 +1058,10 @@ export const translations = {
       readingFull: "Ruime lezing",
       readingFullHint:
         "Tot {n} passages uit de selectie. Merkbaar trager en duurder.",
+      claimNotCarried: "Het citaat staaft niet wat wordt beweerd",
+      generationQueued:
+        "Redactie gestart — de voortgang verschijnt boven het gesprek.",
+      openDocument: "Document openen",
       sourcesUsed: "Gelezen stukken",
       sourcesUsedHint:
         "Waarop de opsteller zich heeft gebaseerd. Een stuk dat hier staat zonder citaat hieronder heeft niets aan deze tekst bijgedragen.",

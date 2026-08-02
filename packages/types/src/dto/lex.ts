@@ -153,24 +153,43 @@ export type UpdateAuthorityRequest = z.infer<
 >;
 
 // ── Background reasoning tasks ────────────────────────────────────────────────────────
-export const createTaskRequestSchema = z.object({
-  workspaceId: z.string().uuid(),
-  conversationId: z.string().uuid().optional(),
-  kind: z
-    .enum(["assess_documents", "adverse_case"])
-    .default("assess_documents"),
-  title: z.string().min(1).max(300),
-  instructions: z.string().max(4000).optional(),
-  /**
-   * How hard the run may think, applied to BOTH passes — the per-document read and the synthesis.
-   *
-   * Defaults to `thorough` rather than the chat default: a user who launched a minutes-long read of
-   * the entire case file is not asking for the cheap option. The dial is still offered, because on a
-   * file that has run for twenty years an exploratory pass and the one before a hearing are
-   * different requests.
-   */
-  depth: z.enum(["quick", "standard", "thorough"]).default("thorough")
-});
+export const createTaskRequestSchema = z
+  .object({
+    workspaceId: z.string().uuid(),
+    conversationId: z.string().uuid().optional(),
+    kind: z
+      .enum(["assess_documents", "adverse_case", "generate_artifact"])
+      .default("assess_documents"),
+    title: z.string().min(1).max(300),
+    instructions: z.string().max(4000).optional(),
+    /**
+     * How hard the run may think, applied to BOTH passes — the per-document read and the synthesis.
+     *
+     * Defaults to `thorough` rather than the chat default: a user who launched a minutes-long read of
+     * the entire case file is not asking for the cheap option. The dial is still offered, because on a
+     * file that has run for twenty years an exploratory pass and the one before a hearing are
+     * different requests.
+     */
+    depth: z.enum(["quick", "standard", "thorough"]).default("thorough"),
+    /**
+     * Kind-specific inputs. Required by `generate_artifact`, unused by the assessments.
+     *
+     * Validated as its own object rather than folded into the top level so the assessment kinds
+     * cannot be handed a `sourceMode` that nothing reads — a field accepted and ignored is the same
+     * class of lie as the two mode toggles that could both be lit.
+     */
+    params: z
+      .object({
+        type: z.enum(["memo", "chronology", "submission"]),
+        documentIds: z.array(z.string().uuid()).max(500).optional(),
+        sourceMode: z.enum(["search", "full"]).default("search")
+      })
+      .optional()
+  })
+  .refine((v) => v.kind !== "generate_artifact" || v.params !== undefined, {
+    message: "generate_artifact requires params",
+    path: ["params"]
+  });
 /** What a CLIENT sends — `z.input`, so `depth`'s default does not become required. */
 export type CreateTaskRequest = z.input<typeof createTaskRequestSchema>;
 /**
@@ -254,44 +273,13 @@ export const ARTIFACT_PACK_SIZE: Record<"search" | "full", number> = {
   full: 200
 };
 
-export const generateArtifactRequestSchema = z.object({
-  workspaceId: z.string().uuid(),
-  conversationId: z.string().uuid().optional(),
-  type: z.enum(["memo", "chronology", "submission"]),
-  title: z.string().min(1).max(200),
-  instructions: z.string().max(4000).optional(),
-  /**
-   * Which pièces the drafter may use. Absent means the whole case file.
-   *
-   * Explicit because the default was indefensible for a court document: retrieval picked 12 chunks
-   * out of 12 765 by similarity to the title, i.e. 0.09% of the file, and the dialog said nothing
-   * about it. A drafter that silently chooses its own evidence is not one a filing can rest on.
-   */
-  documentIds: z.array(z.string().uuid()).max(500).optional(),
-  /**
-   * `search` keeps the old behaviour — a similarity sample of the selected pièces, fast and partial.
-   * `full` widens the pack to ARTIFACT_PACK_SIZE.full spans of the same selection: slower and dearer,
-   * and still a cap rather than the entire file, which is why the version records whether it was hit.
-   */
-  sourceMode: z.enum(["search", "full"]).default("search")
-});
-/**
- * The payload a CLIENT sends — `z.input`, not `z.infer`.
- *
- * `sourceMode` carries a `.default()`, so the inferred OUTPUT type makes it required and every
- * caller that is happy with the default would have to state it. What the server receives is the
- * input side; that is what this type is for.
- */
-export type GenerateArtifactRequest = z.input<
-  typeof generateArtifactRequestSchema
->;
-
 // Validated artifact body (mirrors the LexArtifactBody entity) — so a save cannot persist
 // arbitrary JSON as a court-document body.
 export const lexArtifactClaimSchema = z.object({
   claimId: z.string(),
   text: z.string(),
   status: z.enum(["supported", "unsupported", "contradicted"]),
+  reason: z.string().max(2000).nullish(),
   citation: z
     .object({
       chunkId: z.string(),

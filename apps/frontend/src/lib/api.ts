@@ -6,7 +6,6 @@ import type {
   CreateConversationRequest,
   CreateTaskRequest,
   CreateWorkspaceRequest,
-  GenerateArtifactRequest,
   LexArchivedScope,
   LexArtifact,
   LexArtifactVersion,
@@ -589,12 +588,6 @@ export const api = {
       list(workspaceId: string) {
         return request<{ items: LexArtifact[] }>(
           `/admin/lex/workspaces/${workspaceId}/artifacts`
-        );
-      },
-      generate(data: GenerateArtifactRequest) {
-        return request<{ artifact: LexArtifact; version: LexArtifactVersion }>(
-          "/admin/lex/artifacts/generate",
-          { method: "POST", body: JSON.stringify(data) }
         );
       },
       get(id: string) {

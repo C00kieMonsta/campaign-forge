@@ -6,9 +6,12 @@ import {
   OnModuleInit
 } from "@nestjs/common";
 import type {
+  LexArtifactTaskParams,
+  LexArtifactVerificationReport,
   LexLanguage,
   LexTaskEventKind,
   LexTaskKind,
+  LexTaskParams,
   ReasoningDepth
 } from "@packages/types";
 import type OpenAI from "openai";
@@ -16,6 +19,7 @@ import { z } from "zod";
 import { ConfigService } from "../../config/config.service";
 import { OpenAiService } from "../../shared/openai.service";
 import { PgService } from "../../shared/pg.service";
+import { ArtifactsService } from "../artifacts/artifacts.service";
 import { quoteMatchesChunk } from "../artifacts/verification.service";
 import { extractCitedIndexes } from "../conversations/citation-markers";
 import { sanitizeForStorage, stitchChunks } from "../documents/chunker";
@@ -97,6 +101,8 @@ interface ClaimedTaskRow {
   instructions: string | null;
   /** How hard this run may think — chosen by the user, applied to both passes. */
   depth: ReasoningDepth;
+  /** Kind-specific inputs; only `generate_artifact` fills this. */
+  params: LexTaskParams | null;
   attempts: number;
 }
 
@@ -175,7 +181,8 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     private openai: OpenAiService,
     private tasks: TasksService,
     private settings: SettingsService,
-    private config: ConfigService
+    private config: ConfigService,
+    private artifacts: ArtifactsService
   ) {}
 
   onModuleInit(): void {
@@ -266,7 +273,7 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
          LIMIT 1
        )
        RETURNING id, workspace_id, owner_email, conversation_id, kind, title, instructions,
-                 depth, attempts`
+                 depth, params, attempts`
     );
     if (claim.rows.length === 0) return false;
 
@@ -313,10 +320,169 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
   }
 
   private async execute(task: ClaimedTaskRow, trace: TaskTrace): Promise<void> {
+    if (task.kind === "generate_artifact") {
+      await this.generateArtifact(task, trace);
+      return;
+    }
     if (task.kind !== "assess_documents" && task.kind !== "adverse_case") {
       throw new Error(`Unsupported task kind "${task.kind}"`);
     }
     await this.assessDocuments(task, trace);
+  }
+
+  /**
+   * Drafts a document and verifies every claim in it, as a background run.
+   *
+   * Here rather than behind the HTTP request it used to be, because the work outlives a request:
+   * `/api/admin/lex/artifacts/generate` falls through to nginx's catch-all location and its DEFAULT
+   * 60s read timeout, so anything past a minute came back as a 504 with no CORS header — which the
+   * browser reports as a CORS policy failure, hiding the real cause. Nothing was persisted until
+   * the end either, so a failure late in verification threw the whole run away.
+   */
+  private async generateArtifact(
+    task: ClaimedTaskRow,
+    trace: TaskTrace
+  ): Promise<void> {
+    const params = task.params as LexArtifactTaskParams | null;
+    if (!params?.type) {
+      throw new Error("generate_artifact task has no document type");
+    }
+
+    const scope =
+      params.documentIds && params.documentIds.length > 0
+        ? `${params.documentIds.length} pièce(s)`
+        : "the whole case file";
+    await this.emit(
+      task.id,
+      trace,
+      "progress",
+      `Drafting "${task.title}" from ${scope} (${params.sourceMode === "full" ? "full read" : "targeted search"})`
+    );
+    await this.tasks.updateProgress(task.id, {
+      done: 0,
+      total: 1,
+      step: "reading the selected pièces"
+    });
+
+    const { artifact, version } = await this.artifacts.generate(
+      task.owner_email,
+      {
+        workspaceId: task.workspace_id,
+        conversationId: task.conversation_id ?? undefined,
+        type: params.type,
+        title: task.title,
+        instructions: task.instructions ?? undefined,
+        documentIds: params.documentIds,
+        sourceMode: params.sourceMode,
+        onProgress: async (p) => {
+          if (p.phase === "drafting") {
+            await this.emit(
+              task.id,
+              trace,
+              "progress",
+              `Read ${p.packSpans} passages across ${p.packDocuments} pièces — drafting`
+            );
+            await this.tasks.updateProgress(task.id, {
+              done: 0,
+              total: 1,
+              step: `drafting from ${p.packSpans} passages`
+            });
+            return;
+          }
+          // Verification is the long half, and the only phase with a real denominator: one
+          // frontier-model judge per claim. Reported per claim so the panel moves.
+          await this.tasks.updateProgress(task.id, {
+            done: p.done,
+            total: p.total,
+            step: `verifying claim ${p.done}/${p.total}`
+          });
+        }
+      }
+    );
+
+    const report = version.verificationReport;
+    await this.emit(
+      task.id,
+      trace,
+      "progress",
+      report
+        ? `${report.supported}/${report.total} claims verified against the file`
+        : "Document drafted"
+    );
+
+    const messageId = await this.postArtifactResult(task, artifact, version);
+    await this.tasks.finish(task.id, {
+      status: "done",
+      resultMessageId: messageId,
+      resultArtifactId: artifact.id
+    });
+  }
+
+  /**
+   * Posts the finished document into the conversation.
+   *
+   * The link is the point: the run is launched from the chat, so its result belongs in the chat
+   * rather than somewhere the user has to go and find. The unsupported count is stated plainly —
+   * a draft where the judge refused half the claims is not a draft to file, and burying that
+   * behind a link is how it gets filed anyway.
+   */
+  private async postArtifactResult(
+    task: ClaimedTaskRow,
+    artifact: { id: string; title: string },
+    version: { verificationReport?: LexArtifactVerificationReport | null }
+  ): Promise<string | null> {
+    if (!task.conversation_id) return null;
+    const report = version.verificationReport;
+    const verdict = report
+      ? report.unsupported === 0
+        ? `${report.supported}/${report.total} affirmations sourcées.`
+        : `${report.supported}/${report.total} affirmations sourcées — ` +
+          `${report.unsupported} sans source vérifiable, à revoir avant tout dépôt.`
+      : "";
+
+    const body =
+      `**${artifact.title}** — document rédigé.\n\n${verdict}\n\n` +
+      `[Ouvrir le document](/lex/artifacts/${artifact.id})`;
+
+    // Same conversation lock as postResult and ConversationsService.streamReply: `seq` is UNIQUE
+    // per conversation, so a chat turn sent while this lands would otherwise collide and one of the
+    // two would be lost — here, the result of a run that cost minutes and real money.
+    const assistantId = randomUUID();
+    await this.pg.withTransaction(async (client) => {
+      await client.query(
+        `SELECT 1 FROM lex_conversations WHERE id = $1 FOR UPDATE`,
+        [task.conversation_id]
+      );
+      const seqRes = await client.query<{ m: string }>(
+        `SELECT COALESCE(MAX(seq), 0) AS m FROM lex_messages WHERE conversation_id = $1`,
+        [task.conversation_id]
+      );
+      const base = Number(seqRes.rows[0].m);
+      await client.query(
+        `INSERT INTO lex_messages (conversation_id, owner_email, seq, role, content, status)
+         VALUES ($1, $2, $3, 'user', $4, 'complete')`,
+        [
+          task.conversation_id,
+          task.owner_email,
+          base + 1,
+          `Rédiger : ${task.title}${task.instructions ? `\n\n${task.instructions}` : ""}`
+        ]
+      );
+      await client.query(
+        `INSERT INTO lex_messages
+           (id, conversation_id, owner_email, seq, role, content, status, token_count)
+         VALUES ($1, $2, $3, $4, 'assistant', $5, 'complete', $6)`,
+        [
+          assistantId,
+          task.conversation_id,
+          task.owner_email,
+          base + 2,
+          body,
+          Math.ceil(body.length / 4)
+        ]
+      );
+    });
+    return assistantId;
   }
 
   // ── The reasoning loop ────────────────────────────────────────────────────────────────

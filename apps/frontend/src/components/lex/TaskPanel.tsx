@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { LexTask } from "@packages/types";
 import { Button } from "@packages/ui";
-import { Brain, ChevronDown, ChevronRight, Loader2, X } from "lucide-react";
+import {
+  Brain,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Loader2,
+  X
+} from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { streamLexTask } from "@/lib/taskStream";
 import { useLexControllers } from "@/store/LexStoreProvider";
@@ -33,6 +41,7 @@ export default function TaskPanel({
   onClose: () => void;
 }) {
   const { t } = useLanguage();
+  const navigate = useNavigate();
   const controllers = useLexControllers();
 
   const [trace, setTrace] = useState<TraceLine[]>([]);
@@ -139,6 +148,18 @@ export default function TaskPanel({
             </div>
           ) : null}
         </div>
+        {/* A finished drafting run offers its document right here. The alternative is a line of
+            text saying it worked and leaving the user to go and find it. */}
+        {!running && task.resultArtifactId ? (
+          <Button
+            size="sm"
+            className="shrink-0"
+            onClick={() => navigate(`/lex/artifacts/${task.resultArtifactId}`)}
+          >
+            <FileText className="h-3.5 w-3.5 mr-1.5" />
+            {t.lex.openDocument}
+          </Button>
+        ) : null}
         {running ? (
           <Button
             variant="outline"
