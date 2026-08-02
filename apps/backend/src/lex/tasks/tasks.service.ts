@@ -5,12 +5,13 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import type {
-  CreateTaskRequest,
+  CreateTaskParams,
   LexTask,
   LexTaskEvent,
   LexTaskEventKind,
   LexTaskKind,
-  LexTaskStatus
+  LexTaskStatus,
+  ReasoningDepth
 } from "@packages/types";
 import { PgService } from "../../shared/pg.service";
 import { ConversationsService } from "../conversations/conversations.service";
@@ -33,6 +34,7 @@ interface TaskRow {
   kind: LexTaskKind;
   title: string;
   instructions: string | null;
+  depth: ReasoningDepth;
   status: LexTaskStatus;
   progress_done: number;
   progress_total: number;
@@ -49,7 +51,8 @@ interface TaskRow {
  * for either), and surfacing them would invite the client to reason about scheduling.
  */
 const TASK_COLUMNS = `id, workspace_id, owner_email, conversation_id, kind, title, instructions,
-  status, progress_done, progress_total, step, result_message_id, error, created_at, updated_at`;
+  depth, status, progress_done, progress_total, step, result_message_id, error, created_at,
+  updated_at`;
 
 interface TaskEventRow {
   /** BIGSERIAL — the pg driver returns int8 as a string. */
@@ -74,6 +77,7 @@ export function mapTask(r: TaskRow): LexTask {
     kind: r.kind,
     title: r.title,
     instructions: r.instructions,
+    depth: r.depth,
     status: r.status,
     progressDone: r.progress_done,
     progressTotal: r.progress_total,
@@ -126,7 +130,7 @@ export class TasksService {
    * to land. Creating it here rather than at the end means the client can navigate to the thread
    * while the task is still running.
    */
-  async create(ownerEmail: string, dto: CreateTaskRequest): Promise<LexTask> {
+  async create(ownerEmail: string, dto: CreateTaskParams): Promise<LexTask> {
     await this.workspaces.getOrFail(ownerEmail, dto.workspaceId);
 
     let conversationId = dto.conversationId ?? null;
@@ -155,8 +159,8 @@ export class TasksService {
 
     const res = await this.pg.query<TaskRow>(
       `INSERT INTO lex_tasks
-         (workspace_id, owner_email, conversation_id, kind, title, instructions, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'queued')
+         (workspace_id, owner_email, conversation_id, kind, title, instructions, depth, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued')
        RETURNING ${TASK_COLUMNS}`,
       [
         dto.workspaceId,
@@ -164,7 +168,8 @@ export class TasksService {
         conversationId,
         dto.kind,
         dto.title,
-        dto.instructions ?? null
+        dto.instructions ?? null,
+        dto.depth
       ]
     );
 

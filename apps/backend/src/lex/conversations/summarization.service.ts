@@ -10,6 +10,31 @@ import { SettingsService } from "../settings/settings.service";
 // spare; equal values leave zero headroom and a single failed checkpoint starts truncating.
 const CHECKPOINT_THRESHOLD = 12;
 
+/**
+ * How many messages one checkpoint folds, oldest first.
+ *
+ * Batching is what stops a failed checkpoint compounding. The fold used to take EVERY message past
+ * the watermark: when one failed, the watermark stayed put, the next turn fed a longer transcript to
+ * the same fixed output budget, and each retry was strictly likelier to fail than the last. Once
+ * more than ContextAssembler's RECENT_TURN_LIMIT messages sat behind the stale watermark, the oldest
+ * ones stopped reaching the model at all — a legal thread silently losing its own history.
+ *
+ * With a batch, a backlog DRAINS: every successful checkpoint advances the watermark even if an
+ * earlier one failed, and the work per turn is bounded.
+ */
+const MAX_MESSAGES_PER_CHECKPOINT = 24;
+
+/**
+ * Output budget for the fold, in tokens of prose.
+ *
+ * Scaled by the prior summary, not fixed. The fold must RESTATE everything already summarised plus
+ * the new turns, so a constant ceiling is a promise that breaks precisely when a case thread gets
+ * long enough to need summarising. Roughly four characters to the token, plus room for the batch.
+ */
+function summaryBudget(priorChars: number): number {
+  return Math.min(4000, Math.max(1200, Math.ceil(priorChars / 4) + 800));
+}
+
 interface MsgRow {
   seq: string;
   role: string;
@@ -54,10 +79,11 @@ export class SummarizationService {
     );
     if (msgs.rows.length < CHECKPOINT_THRESHOLD) return;
 
-    const maxSeq = Number(msgs.rows[msgs.rows.length - 1].seq);
-    const transcript = msgs.rows
-      .map((m) => `${m.role}: ${m.content}`)
-      .join("\n");
+    // Oldest first, bounded — see MAX_MESSAGES_PER_CHECKPOINT. A backlog is drained over several
+    // turns rather than attempted whole and failing whole.
+    const batch = msgs.rows.slice(0, MAX_MESSAGES_PER_CHECKPOINT);
+    const maxSeq = Number(batch[batch.length - 1].seq);
+    const transcript = batch.map((m) => `${m.role}: ${m.content}`).join("\n");
 
     const priorRes = await this.pg.query<{ summary: string }>(
       `SELECT summary FROM lex_conversation_summaries
@@ -79,7 +105,7 @@ export class SummarizationService {
         `${prior ? `Prior summary:\n${prior}\n\n` : ""}` +
         `New conversation turns to fold in:\n${transcript}\n\n` +
         `Produce an updated, comprehensive running summary.`,
-      maxTokens: 1200
+      maxTokens: summaryBudget(prior?.length ?? 0)
     });
 
     if (!summary.trim()) return;

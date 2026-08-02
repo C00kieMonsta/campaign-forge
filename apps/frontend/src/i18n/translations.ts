@@ -348,6 +348,32 @@ export const translations = {
       sourcesTruncated:
         "Le plafond de passages a été atteint : la sélection était plus large que ce qui a été lu.",
       passagesCount: "{n} passage(s)",
+      modeLabel: "Type de lecture",
+      modeName: {
+        direct: "Réponse directe",
+        deep: "Analyse approfondie",
+        adverse: "Thèse adverse"
+      },
+      modeHint: {
+        direct:
+          "Recherche ciblée dans le dossier, réponse immédiate dans le fil.",
+        deep: "Lit chaque pièce du dossier, une par une, puis synthétise. Quelques minutes, en arrière-plan.",
+        adverse:
+          "Même lecture intégrale, mais CONTRE la partie que vous nommez — pour voir venir ce qui vous sera opposé. Le champ attend un nom de partie, pas une question."
+      },
+      // La profondeur pilote aussi la passe par pièce, qui représente l'essentiel du coût.
+      runDepthHint: {
+        quick:
+          "Passe économique sur chaque pièce. Pour dégrossir un dossier, pas pour préparer une audience.",
+        standard: "Modèle avancé sur chaque pièce. Bon compromis.",
+        thorough:
+          "Modèle le plus puissant, raisonnement maximal, sur chaque pièce du dossier. Le plus long et le plus coûteux — et le plus complet."
+      },
+      runSummary: {
+        quick: "Lecture intégrale, passe économique.",
+        standard: "Lecture intégrale, modèle avancé.",
+        thorough: "Lecture intégrale, modèle le plus puissant sur chaque pièce."
+      },
       adverseMode: "Thèse adverse",
       adverseHint:
         "Lit tout le dossier CONTRE la partie que vous défendez, moyen par moyen, comme le ferait le conseil d'en face. Chaque élément est cité ; ce qui relève de l'appréciation est signalé comme tel.",
@@ -1030,6 +1056,31 @@ export const translations = {
       sourcesTruncated:
         "De passagelimiet is bereikt: de selectie was ruimer dan wat gelezen is.",
       passagesCount: "{n} passage(s)",
+      modeLabel: "Leestype",
+      modeName: {
+        direct: "Rechtstreeks antwoord",
+        deep: "Grondige analyse",
+        adverse: "Tegenpositie"
+      },
+      modeHint: {
+        direct:
+          "Gerichte zoekopdracht in het dossier, onmiddellijk antwoord in de draad.",
+        deep: "Leest elk stuk van het dossier, één voor één, en synthetiseert daarna. Enkele minuten, op de achtergrond.",
+        adverse:
+          "Dezelfde volledige lezing, maar TEGEN de partij die u noemt — om te zien wat u zal worden tegengeworpen. Het veld verwacht een partijnaam, geen vraag."
+      },
+      runDepthHint: {
+        quick:
+          "Goedkope pas over elk stuk. Om een dossier te verkennen, niet om een zitting voor te bereiden.",
+        standard: "Geavanceerd model op elk stuk. Goed compromis.",
+        thorough:
+          "Krachtigste model, maximaal redeneren, op elk stuk van het dossier. Het traagst en duurst — en het volledigst."
+      },
+      runSummary: {
+        quick: "Volledige lezing, goedkope pas.",
+        standard: "Volledige lezing, geavanceerd model.",
+        thorough: "Volledige lezing, krachtigste model op elk stuk."
+      },
       adverseMode: "Tegenpositie",
       adverseHint:
         "Leest het volledige dossier TEGEN de partij die u verdedigt, middel per middel, zoals de tegenpartij zou doen. Elk element wordt geciteerd; wat een inschatting is, wordt als zodanig aangeduid.",

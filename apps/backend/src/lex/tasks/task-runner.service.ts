@@ -8,7 +8,8 @@ import {
 import type {
   LexLanguage,
   LexTaskEventKind,
-  LexTaskKind
+  LexTaskKind,
+  ReasoningDepth
 } from "@packages/types";
 import type OpenAI from "openai";
 import { z } from "zod";
@@ -63,6 +64,15 @@ const MAX_WINDOWS_PER_DOC = 4;
  * throw away the later sections' findings for no reason. Enough for a dense filing, low enough
  * that the reduce prompt stays inside its budget.
  */
+/**
+ * How much of the file a run may fail to read and still answer.
+ *
+ * Above this it aborts instead of synthesising: a partial read produces an assessment that reads
+ * exactly like a complete one, and the reader has no way to tell. Below it, the shortfall is
+ * reported in the trace and the answer still carries the caveat about sections not read.
+ */
+const MAX_UNREADABLE_FRACTION = 0.1;
+
 const MAX_FINDINGS_PER_SECTION = 6;
 
 /**
@@ -85,6 +95,8 @@ interface ClaimedTaskRow {
   kind: LexTaskKind;
   title: string;
   instructions: string | null;
+  /** How hard this run may think — chosen by the user, applied to both passes. */
+  depth: ReasoningDepth;
   attempts: number;
 }
 
@@ -253,7 +265,8 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
          FOR UPDATE SKIP LOCKED
          LIMIT 1
        )
-       RETURNING id, workspace_id, owner_email, conversation_id, kind, title, instructions, attempts`
+       RETURNING id, workspace_id, owner_email, conversation_id, kind, title, instructions,
+                 depth, attempts`
     );
     if (claim.rows.length === 0) return false;
 
@@ -350,6 +363,10 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     const findings: LocatedFinding[] = [];
     /** Documents whose text exceeded MAX_WINDOWS_PER_DOC — surfaced in the answer as a caveat. */
     const partial: string[] = [];
+    /** Windows the model could not be made to read at all, and how many were attempted. */
+    let windowsRead = 0;
+    let windowsFailed = 0;
+    let firstFailure: string | null = null;
 
     for (let i = 0; i < docs.length; i++) {
       if (await this.wasCancelled(task, trace, i, docs.length)) return;
@@ -389,6 +406,20 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
           partIndex: w,
           partCount: windows.parts.length
         });
+        windowsRead += 1;
+        if (extracted.error) {
+          // Visible in the trace as it happens: a run that quietly read 40% of the file and
+          // answered anyway is the failure this whole subsystem exists to avoid.
+          windowsFailed += 1;
+          firstFailure ??= extracted.error;
+          await this.emit(
+            task.id,
+            trace,
+            "error",
+            `could not read section ${w + 1} of ${doc.filename}: ${extracted.error}`
+          );
+          continue;
+        }
         if (extracted.note) {
           await this.emit(task.id, trace, "reasoning", `${extracted.note}\n`);
         }
@@ -439,6 +470,26 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     }
 
     if (await this.wasCancelled(task, trace, docs.length, docs.length)) return;
+
+    // A few unreadable windows are a caveat; most of them is a different answer to a different
+    // question. Synthesising over the remainder would produce a confident assessment of a file the
+    // run never actually read — and "no counter-argument was found" is exactly the sentence a
+    // practitioner must never be handed on the strength of a third of the evidence.
+    if (windowsFailed > 0) {
+      const ratio = windowsFailed / Math.max(1, windowsRead);
+      await this.emit(
+        task.id,
+        trace,
+        "progress",
+        `${windowsFailed} of ${windowsRead} sections could not be read`
+      );
+      if (ratio > MAX_UNREADABLE_FRACTION) {
+        throw new Error(
+          `Read only ${windowsRead - windowsFailed} of ${windowsRead} sections — ` +
+            `too little of the file to assess it. First failure: ${firstFailure}`
+        );
+      }
+    }
 
     // REDUCE. Run even with zero findings: the synthesis prompt already knows to say plainly that
     // the file does not answer the question, and it says it in the user's pinned language — which
@@ -606,6 +657,8 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
   }): Promise<{
     note: string | null;
     findings: { quote: string; text: string }[];
+    /** Set when the window could not be read at all — an API failure, not an empty result. */
+    error?: string;
   }> {
     const { task, language, doc, part, partIndex, partCount } = params;
     // The page count and the section marker tell the model what it is holding: "section 2 of 4 of
@@ -614,48 +667,66 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
       (doc.page_count ? `, ${doc.page_count} pages` : "") +
       (partCount > 1 ? ` (section ${partIndex + 1} of ${partCount})` : "");
 
-    const raw = await this.openai.complete({
-      // per-window finding extraction — up to 224 calls in a single adverse-case run.
-      fast: true,
-      json: true,
-      maxTokens: 1500,
-      system:
-        (task.kind === "adverse_case"
-          ? // Reading the file AGAINST her. The party is named by her in the title and is never
-            // inferred: the app refuses to assign anyone a role, and this feature is not a licence
-            // to start. Asking for the adverse material specifically is the point — a run that
-            // returns only what helps her is the confirmation bias the exercise exists to break.
-            `You are a legal analyst preparing a Belgian-law case. Your job here is ADVERSARIAL: ` +
-            `read this document for whatever tells AGAINST the party named below, as opposing ` +
-            `counsel would. Extract assertions, admissions, figures, dates and omissions that ` +
-            `undermine that party's position or support the other side. Do NOT extract what ` +
-            `helps them — a separate pass does that. Most documents contain nothing adverse: an ` +
-            `empty findings array is the expected answer, never a failure. `
-          : "You are a legal analyst working through a Belgian-law court file one document at a " +
-            "time. Extract ONLY what bears on the assessment the lawyer asked for — however " +
-            "interesting the rest of the document is, it is noise here. Most documents in a case " +
-            "file are irrelevant to any given question: an empty findings array is the expected " +
-            "answer, never a failure. ") +
-        // Field-scoped language rule, NOT the shared outputLanguageInstruction: `quote` is
-        // matched character-for-character against the stored document, so a translated or
-        // tidied quote is silently discarded and its finding is lost.
-        `Write "note" and every "text" in ${languageName(language)}. Every "quote" must be ` +
-        `copied EXACTLY from the DOCUMENT text below — never translate, correct, shorten with ` +
-        `ellipses or reformat it. A finding whose quote is not found verbatim in the document ` +
-        `is discarded, so a fabricated quote loses you the finding.`,
-      user:
-        (task.kind === "adverse_case"
-          ? `PARTY BEING DEFENDED: ${task.title}\n`
-          : `ASSESSMENT: ${task.title}\n`) +
-        `${task.instructions ? `INSTRUCTIONS: ${task.instructions}\n` : ""}` +
-        `DOCUMENT: ${doc.filename}${where}\n` +
-        `---\n${part}\n---\n\n` +
-        `Respond as JSON: {"note":"one sentence, what this document is and whether it bears ` +
-        `on the assessment","findings":[{"text":"a self-contained finding relevant to the ` +
-        `assessment","quote":"the verbatim excerpt from the document above that establishes ` +
-        `it"}]}\n` +
-        `At most ${MAX_FINDINGS_PER_SECTION} findings — the most relevant ones only.`
-    });
+    let raw: string;
+    try {
+      raw = await this.openai.complete({
+        // Per-window finding extraction — up to 224 calls in a single adverse-case run, and the
+        // expensive half of the job. It used to be pinned to the cheap tier at `low` effort on the
+        // reasoning that a missed finding is recoverable because every quote is gated verbatim
+        // anyway. That is backwards: the gate stops a WRONG finding, it cannot recover a finding the
+        // reader never made. What the cheap tier loses here is silent, and silence in a case file is
+        // the failure that matters. So the user's depth applies to this pass too — a `thorough` run
+        // reads all 224 windows on the frontier tier, which is why the UI states what it costs.
+        depth: task.depth,
+        json: true,
+        maxTokens: 1500,
+        system:
+          (task.kind === "adverse_case"
+            ? // Reading the file AGAINST her. The party is named by her in the title and is never
+              // inferred: the app refuses to assign anyone a role, and this feature is not a licence
+              // to start. Asking for the adverse material specifically is the point — a run that
+              // returns only what helps her is the confirmation bias the exercise exists to break.
+              `You are a legal analyst preparing a Belgian-law case. Your job here is ADVERSARIAL: ` +
+              `read this document for whatever tells AGAINST the party named below, as opposing ` +
+              `counsel would. Extract assertions, admissions, figures, dates and omissions that ` +
+              `undermine that party's position or support the other side. Do NOT extract what ` +
+              `helps them — a separate pass does that. Most documents contain nothing adverse: an ` +
+              `empty findings array is the expected answer, never a failure. `
+            : "You are a legal analyst working through a Belgian-law court file one document at a " +
+              "time. Extract ONLY what bears on the assessment the lawyer asked for — however " +
+              "interesting the rest of the document is, it is noise here. Most documents in a case " +
+              "file are irrelevant to any given question: an empty findings array is the expected " +
+              "answer, never a failure. ") +
+          // Field-scoped language rule, NOT the shared outputLanguageInstruction: `quote` is
+          // matched character-for-character against the stored document, so a translated or
+          // tidied quote is silently discarded and its finding is lost.
+          `Write "note" and every "text" in ${languageName(language)}. Every "quote" must be ` +
+          `copied EXACTLY from the DOCUMENT text below — never translate, correct, shorten with ` +
+          `ellipses or reformat it. A finding whose quote is not found verbatim in the document ` +
+          `is discarded, so a fabricated quote loses you the finding.`,
+        user:
+          (task.kind === "adverse_case"
+            ? `PARTY BEING DEFENDED: ${task.title}\n`
+            : `ASSESSMENT: ${task.title}\n`) +
+          `${task.instructions ? `INSTRUCTIONS: ${task.instructions}\n` : ""}` +
+          `DOCUMENT: ${doc.filename}${where}\n` +
+          `---\n${part}\n---\n\n` +
+          `Respond as JSON: {"note":"one sentence, what this document is and whether it bears ` +
+          `on the assessment","findings":[{"text":"a self-contained finding relevant to the ` +
+          `assessment","quote":"the verbatim excerpt from the document above that establishes ` +
+          `it"}]}\n` +
+          `At most ${MAX_FINDINGS_PER_SECTION} findings — the most relevant ones only.`
+      });
+    } catch (err) {
+      // The CALL is inside the try, not just the parse. It was outside, and the truncation guard
+      // added to OpenAiService.complete then turned one over-long window into a thrown error that
+      // escaped to the task handler, which marks the run failed and does NOT re-queue it: 223 good
+      // extractions discarded because the 224th did not fit. A window is the unit of loss here.
+      //
+      // Reported, never swallowed — the caller counts these and refuses to synthesise a confident
+      // answer out of a file it mostly failed to read.
+      return { note: null, findings: [], error: String(err) };
+    }
 
     try {
       const parsed = findingsResponseSchema.safeParse(JSON.parse(raw));
@@ -814,7 +885,9 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     // runs. Its substance cannot: every finding it draws on has already passed the verbatim gate
     // against the stored document, so a rerun can say the same thing differently but cannot say
     // something the file does not support.
-    for await (const delta of this.openai.streamChat(messages)) {
+    for await (const delta of this.openai.streamChat(messages, {
+      depth: task.depth
+    })) {
       full += delta;
       await params.onDelta(delta);
     }

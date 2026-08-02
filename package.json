@@ -9,11 +9,11 @@
   "scripts": {
     "prepare": "husky install",
     "type-check": "pnpm --filter @packages/types run type-check && pnpm --filter @packages/utils run type-check && pnpm --filter @apps/backend run type-check",
-    "test": "pnpm --filter @apps/backend test && pnpm --filter @apps/frontend test",
+    "test": "pnpm build:types && TZ=Europe/Brussels jest -c jest.config.js",
     "build:types": "pnpm --filter @packages/types build",
     "build:packages": "pnpm build:types",
     "build:backend": "pnpm --filter @apps/backend build",
-    "dev:backend": "pnpm --filter @apps/backend start:dev",
+    "dev:backend": "pnpm build:types && pnpm --filter @apps/backend start:dev",
     "dev:landing": "pnpm --filter landing dev",
     "dev:frontend": "pnpm --filter @apps/frontend dev",
     "build:landing": "pnpm --filter landing build",

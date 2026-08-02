@@ -1,6 +1,19 @@
 const fs = require("fs");
 const path = require("path");
 
+// FOUR projects, and the root `pnpm test` runs all of them in ONE invocation.
+//
+// It used to run `--filter @apps/backend test && --filter @apps/frontend test`, which quietly
+// excluded the `types` and `utils` projects: the model-registry capability tests — written after a
+// model change 400'd every background run — never executed in CI at all. A suite that does not run
+// is worse than no suite, because the green check says otherwise.
+//
+// The root script also BUILDS packages/types first. The backend and frontend projects resolve
+// `@packages/*` to `packages/*/dist` (see moduleNameMapper below), so without that build a test can
+// pass against a stale copy of the very file the change is in. `dev:backend` builds it for the same
+// reason: nest --watch recompiles the backend but not the workspace package, and a new export then
+// fails at runtime as "completionBudget is not a function" rather than as a compile error.
+
 /**
  * Names of the ESM-only packages in the dependency closure of `roots`.
  *

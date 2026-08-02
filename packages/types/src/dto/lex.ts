@@ -160,9 +160,26 @@ export const createTaskRequestSchema = z.object({
     .enum(["assess_documents", "adverse_case"])
     .default("assess_documents"),
   title: z.string().min(1).max(300),
-  instructions: z.string().max(4000).optional()
+  instructions: z.string().max(4000).optional(),
+  /**
+   * How hard the run may think, applied to BOTH passes — the per-document read and the synthesis.
+   *
+   * Defaults to `thorough` rather than the chat default: a user who launched a minutes-long read of
+   * the entire case file is not asking for the cheap option. The dial is still offered, because on a
+   * file that has run for twenty years an exploratory pass and the one before a hearing are
+   * different requests.
+   */
+  depth: z.enum(["quick", "standard", "thorough"]).default("thorough")
 });
-export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
+/** What a CLIENT sends — `z.input`, so `depth`'s default does not become required. */
+export type CreateTaskRequest = z.input<typeof createTaskRequestSchema>;
+/**
+ * What the SERVER holds after parsing: defaults applied, so `depth` and `kind` are present.
+ *
+ * The two types are deliberately distinct. A service that took the client type would have to
+ * re-apply the defaults zod just applied, and the second copy is what drifts.
+ */
+export type CreateTaskParams = z.infer<typeof createTaskRequestSchema>;
 
 /** SSE frames for watching a running task. `replay` events precede live ones. */
 export const lexTaskStreamEventSchema = z.discriminatedUnion("type", [

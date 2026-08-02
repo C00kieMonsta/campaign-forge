@@ -18,6 +18,7 @@ const taskRow = (over: Record<string, unknown> = {}) => ({
   kind: "assess_documents",
   title: "Assess prescription",
   instructions: null,
+  depth: "thorough",
   status: "queued",
   progress_done: 0,
   progress_total: 0,
@@ -58,6 +59,7 @@ describe("TasksService", () => {
       const task = await service.create("lawyer@example.com", {
         workspaceId: "ws-1",
         kind: "assess_documents",
+        depth: "thorough",
         title: "Assess prescription"
       });
 
@@ -83,6 +85,7 @@ describe("TasksService", () => {
           workspaceId: "ws-1",
           conversationId: "conv-2",
           kind: "assess_documents",
+          depth: "thorough",
           title: "Assess prescription"
         })
       ).rejects.toBeInstanceOf(BadRequestException);
@@ -96,6 +99,7 @@ describe("TasksService", () => {
         service.create("intruder@example.com", {
           workspaceId: "ws-1",
           kind: "assess_documents",
+          depth: "thorough",
           title: "Assess prescription"
         })
       ).rejects.toThrow("Workspace not found");

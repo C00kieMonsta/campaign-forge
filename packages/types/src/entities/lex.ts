@@ -9,6 +9,8 @@
 //
 // Timestamps are ISO strings over the wire.
 
+import type { ReasoningDepth } from "../models";
+
 export type LexParseStatus =
   /** Row exists, but the browser has not finished PUTting the bytes to S3 yet. */
   | "awaiting_upload"
@@ -392,6 +394,8 @@ export interface LexTask {
   kind: LexTaskKind;
   title: string;
   instructions?: string | null;
+  /** How hard this run was allowed to think. Recorded so a result can be read against its cost. */
+  depth: ReasoningDepth;
   status: LexTaskStatus;
   progressDone: number;
   progressTotal: number;

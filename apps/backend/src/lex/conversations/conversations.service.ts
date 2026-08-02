@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import type {
-  ReasoningDepth,
   LexCitationEvent,
   LexConversation,
   LexMessage,
-  LexPin
+  LexPin,
+  ReasoningDepth
 } from "@packages/types";
 import { OpenAiService } from "../../shared/openai.service";
 import { PgService } from "../../shared/pg.service";
@@ -73,6 +73,8 @@ function mapMessage(r: MessageRow): LexMessage {
 
 @Injectable()
 export class ConversationsService {
+  private readonly logger = new Logger(ConversationsService.name);
+
   constructor(
     private pg: PgService,
     private openai: OpenAiService,
@@ -242,9 +244,14 @@ export class ConversationsService {
         onToken(delta);
       }
     } catch (err) {
+      // Keep whatever arrived, under status 'failed'. A stream can now end incomplete — truncated,
+      // content-filtered, or empty — and the two wrong answers are symmetric: storing the fragment
+      // as 'complete' hands the reader a legal answer that stops mid-sentence with nothing saying
+      // so, and dropping it throws away a page of work she watched appear on screen. 'failed' plus
+      // the text is the honest pair.
       await this.pg.query(
-        `UPDATE lex_messages SET status = 'failed' WHERE id = $1`,
-        [assistantId]
+        `UPDATE lex_messages SET status = 'failed', content = $2 WHERE id = $1`,
+        [assistantId, full]
       );
       throw err;
     }
@@ -317,11 +324,25 @@ export class ConversationsService {
       );
     });
 
-    // Best-effort rolling checkpoint; never fail the reply on a summary error. A miss is
-    // absorbed by ContextAssembler's RECENT_TURN_LIMIT headroom and retried next turn.
+    // Best-effort rolling checkpoint; never fail the reply on a summary error. A miss is absorbed
+    // by ContextAssembler's RECENT_TURN_LIMIT headroom, and the fold is batched so a backlog drains
+    // rather than compounding.
+    //
+    // LOGGED, not discarded. `.catch(() => undefined)` meant a checkpoint could fail on every turn
+    // of a long case thread with no trace anywhere — and the symptom, a thread quietly losing its
+    // own early history, surfaces far from the cause.
     await this.summarization
       .maybeCheckpoint(conversationId, ownerEmail)
-      .catch(() => undefined);
+      .catch((err: unknown) =>
+        this.logger.warn(
+          JSON.stringify({
+            level: "warn",
+            action: "lexConvSummaryFailed",
+            conversationId,
+            error: String(err)
+          })
+        )
+      );
 
     return { messageId: assistantId, citations };
   }

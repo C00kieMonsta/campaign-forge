@@ -18,6 +18,79 @@ import { SecretsService } from "./secrets.service";
 export const MAX_TRANSCRIBE_BYTES = 25 * 1024 * 1024;
 
 /**
+ * Every field this app is allowed to put on a chat-completion request.
+ *
+ * An ALLOW-LIST rather than a convention, because with this model family the parameters that are
+ * rejected outnumber the ones accepted, and each rejection is a 400 that takes a feature down
+ * rather than a warning that degrades it. Two have already fired in production — `temperature`
+ * ("does not support 0 with this model") and `max_tokens` ("use max_completion_tokens instead").
+ *
+ * The spec asserts the emitted keys are a subset of this set, so adding a parameter at a call site
+ * fails a test rather than a court-document run.
+ */
+export const ALLOWED_REQUEST_FIELDS: ReadonlySet<string> = new Set([
+  "model",
+  "messages",
+  "reasoning_effort",
+  "max_completion_tokens",
+  "max_tokens",
+  "response_format",
+  "stream"
+]);
+
+/**
+ * A stream that ended without saying "stop": truncated, filtered, or empty.
+ *
+ * A distinct type rather than a generic Error because the consumers treat it differently from a
+ * network failure — the text that arrived before it is real and worth keeping, it just must never
+ * be presented as the finished answer. Everything on the streaming path is something a lawyer
+ * reads: a chat reply, or the assessment a filing gets argued from.
+ */
+export class StreamIncompleteError extends Error {
+  constructor(
+    /** The API's finish_reason, or "empty" when the stream carried no content at all. */
+    readonly reason: string,
+    /** Characters that did arrive, so a caller can decide whether the fragment is worth keeping. */
+    readonly produced: number
+  ) {
+    super(
+      reason === "empty"
+        ? "The model returned no content at all"
+        : `The model stopped early (${reason}) after ${produced} characters`
+    );
+    this.name = "StreamIncompleteError";
+  }
+}
+
+/**
+ * The model and reasoning fields for one call, derived from what the model DECLARES it accepts.
+ *
+ * Shared by the streaming and non-streaming paths deliberately. They used to build their own, which
+ * is how `max_tokens` survived on one of them: a capability honoured in one builder and forgotten in
+ * the other is the same bug with a longer fuse.
+ *
+ * `temperature` is absent and stays absent — every model in the registry declares
+ * `supportsTemperature: false`, and there is no caller that wants one. Its enforcement is the
+ * allow-list above plus the spec, not a runtime branch over a parameter nobody sends.
+ */
+export function requestFields(
+  model: ModelDefinition,
+  effort: ReasoningEffort,
+  budget: number | undefined
+): {
+  model: string;
+  reasoning_effort?: ReasoningEffort;
+  max_tokens?: number;
+  max_completion_tokens?: number;
+} {
+  const fields: ReturnType<typeof requestFields> = { model: model.id };
+  if (model.supportsReasoningEffort) fields.reasoning_effort = effort;
+  // Indexed by the registry, never by a literal — that literal was the outage.
+  if (budget !== undefined) fields[model.maxTokensParam] = budget;
+  return fields;
+}
+
+/**
  * Lazy OpenAI client. The API key is resolved on first use from either OPENAI_API_KEY
  * (local dev) or OPENAI_API_KEY_SECRET_ARN via Secrets Manager (prod) — never at boot,
  * so a missing key can't crash the shared process.
@@ -142,10 +215,8 @@ export class OpenAiService {
     const budget = completionBudget(params.maxTokens, effort);
 
     const res = await client.chat.completions.create({
-      model: model.id,
-      ...(model.supportsReasoningEffort ? { reasoning_effort: effort } : {}),
+      ...requestFields(model, effort, budget),
       messages,
-      ...(budget === undefined ? {} : { [model.maxTokensParam]: budget }),
       ...(params.json
         ? { response_format: { type: "json_object" as const } }
         : {})
@@ -211,14 +282,32 @@ export class OpenAiService {
     // than a question about which piece mentions a date.
     const { model, effort } = this.resolve(undefined, opts.depth);
     const stream = await client.chat.completions.create({
-      model: model.id,
-      ...(model.supportsReasoningEffort ? { reasoning_effort: effort } : {}),
+      ...requestFields(model, effort, undefined),
       messages,
       stream: true
     });
+    // The terminal reason arrives on the LAST chunk, after the content. Discarding it is how a
+    // stream that stopped mid-sentence — the model's own ceiling, or a content filter tripping on
+    // quoted material from a case file — got persisted as a finished legal answer.
+    let finish: string | null = null;
+    let produced = 0;
     for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) yield delta;
+      const choice = chunk.choices[0];
+      if (choice?.finish_reason) finish = choice.finish_reason;
+      const delta = choice?.delta?.content;
+      if (delta) {
+        produced += delta.length;
+        yield delta;
+      }
+    }
+
+    // Thrown AFTER everything has been yielded, so a consumer that wants to keep what arrived
+    // already holds it and can persist it as visibly incomplete rather than as the answer.
+    if (finish !== null && finish !== "stop") {
+      throw new StreamIncompleteError(finish, produced);
+    }
+    if (produced === 0) {
+      throw new StreamIncompleteError("empty", 0);
     }
   }
 }

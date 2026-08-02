@@ -69,6 +69,14 @@ import VoiceNoteDialog from "./VoiceNoteDialog";
 /** Left to right, cheapest first — the control reads as a dial. */
 const DEPTH_ORDER: ReasoningDepth[] = ["quick", "standard", "thorough"];
 
+/**
+ * How the next message is read. Exclusive: "adverse" already reads the whole file, so there is no
+ * combination of these that means anything the single choice does not already say.
+ */
+type ChatMode = "direct" | "deep" | "adverse";
+/** Left to right, cheapest and fastest first. */
+const CHAT_MODES: ChatMode[] = ["direct", "deep", "adverse"];
+
 const IN_PROGRESS: ReadonlySet<LexDocument["parseStatus"]> = new Set([
   "uploaded",
   "parsing",
@@ -495,30 +503,47 @@ export default function LexWorkspaceChat() {
   }, [controllers, id]);
 
   /**
-   * Deep mode is a property of the NEXT message, not a separate feature behind a dialog: you type
-   * the question you would have asked anyway, turn this on, and send. A normal turn answers from
-   * retrieval in seconds; a deep turn reads every document in the case file and takes minutes, so
-   * it runs in the background and posts its answer back into this conversation.
-   */
-  const [deepMode, setDeepMode] = useState(false);
-  /**
-   * Reads the file AGAINST a party, so her own counsel sees the case coming.
+   * What KIND of read the next message gets — a property of that message, not a feature behind a
+   * dialog: you type the question you would have asked anyway, pick, and send.
    *
-   * Separate from deep mode rather than a phrasing of it, because the input means something
-   * different: what she types is WHO IS BEING DEFENDED, not a question. The app never infers whose
-   * side it is on — it refuses to assign anyone a role anywhere else, and taking a position is not
-   * a licence to start guessing one.
+   * Exclusive rather than a set of toggles, because the three are not composable and the UI used to
+   * imply they were. Both pills could be lit at once, and the send handler then read only the
+   * adverse one — deep was silently discarded. It cost nothing, since an adverse run already reads
+   * every document; but a control that accepts a combination it does not honour is a control that
+   * lies. There is exactly one axis here, so there is exactly one control.
+   *
+   *   direct   answers from retrieval, streams back in seconds
+   *   deep     reads every document in the case file, minutes, runs in the background
+   *   adverse  the same full read, turned AGAINST a party so her own counsel sees it coming
+   *
+   * Adverse is not a phrasing of deep: what she types means something different — WHO IS BEING
+   * DEFENDED, not a question. The app never infers whose side it is on.
    */
-  const [adverseMode, setAdverseMode] = useState(false);
+  const [mode, setMode] = useState<ChatMode>("direct");
+  const deepMode = mode === "deep";
+  const adverseMode = mode === "adverse";
+  const background = mode !== "direct";
   /**
-   * How much deliberation this turn gets. Persisted, because it is a working preference rather than
-   * a per-question decision — but per-turn on the wire, so raising it for one filing does not raise
-   * it for every follow-up afterwards.
+   * How much deliberation to spend. Persisted, because it is a working preference rather than a
+   * per-question decision — but per-turn on the wire, so raising it for one filing does not raise it
+   * for every follow-up afterwards.
+   *
+   * TWO preferences, not one. A background run is a different economic decision from a chat turn: it
+   * reads the whole file on the tier chosen here, so `thorough` there is the frontier model over
+   * every window. Sharing one value would mean either a chat turn quietly costing what a run costs,
+   * or a run quietly dropping to what a chat turn costs — and the second is the one that loses
+   * findings silently.
    */
-  const [depth, setDepth] = useLocalStorage<ReasoningDepth>(
+  const [chatDepth, setChatDepth] = useLocalStorage<ReasoningDepth>(
     "lex_chat_depth",
     DEFAULT_DEPTH
   );
+  const [runDepth, setRunDepth] = useLocalStorage<ReasoningDepth>(
+    "lex_run_depth",
+    "thorough"
+  );
+  const depth = background ? runDepth : chatDepth;
+  const setDepth = background ? setRunDepth : setChatDepth;
 
   // Older messages exist beyond the loaded page (a years-long thread is never fetched whole).
   const [hasOlder, setHasOlder] = useState(false);
@@ -869,10 +894,11 @@ export default function LexWorkspaceChat() {
           title: adverseMode
             ? text.trim().slice(0, 200)
             : text.split("\n")[0].slice(0, 200),
-          instructions: adverseMode ? undefined : content
+          instructions: adverseMode ? undefined : content,
+          // Applies to BOTH passes of the run — the per-document read and the synthesis.
+          depth: runDepth
         });
-        setDeepMode(false);
-        setAdverseMode(false);
+        setMode("direct");
       } catch (err) {
         setInput(text); // don't lose a long question because the launch failed
         toast({ title: String(err), variant: "destructive" });
@@ -1469,71 +1495,81 @@ export default function LexWorkspaceChat() {
                 </Button>
               </div>
 
-              {/* Deep mode: a property of the next message, in the composer where the question is
-                  written — not a separate action elsewhere in the UI. */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setDeepMode((prev) => !prev)}
-                  aria-pressed={deepMode}
-                  title={t.lex.deepAssessmentHint}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                    deepMode
-                      ? "border-sidebar-primary bg-sidebar-primary/10 text-sidebar-primary font-medium"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
+              {/* Two dials, in the composer where the question is written rather than behind a
+                  dialog elsewhere: WHAT KIND of read (exclusive), and HOW HARD (applies to all
+                  three). They used to be three toggles that could contradict each other. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div
+                  className="flex items-center rounded-full border p-0.5"
+                  role="group"
+                  aria-label={t.lex.modeLabel}
                 >
-                  <Brain className="h-3.5 w-3.5" />
-                  {t.lex.deepAssessment}
-                </button>
-                {/* Depth applies to a normal turn. Deep and adverse runs read the whole file
-                    through the background runner, which sets its own tier — offering a dial that
-                    does nothing there would be a lie. */}
-                {!deepMode && !adverseMode ? (
-                  <div
-                    className="flex items-center rounded-full border p-0.5"
-                    role="group"
-                    aria-label={t.lex.depthLabel}
-                  >
-                    {DEPTH_ORDER.map((option) => (
+                  {CHAT_MODES.map((option) => {
+                    const active = mode === option;
+                    // Adverse is the only one that carries a warning colour: it is the one whose
+                    // input means something different, and mistaking it for a question wastes
+                    // minutes and money on a run that answers the wrong thing.
+                    const tone = active
+                      ? option === "adverse"
+                        ? "bg-destructive/10 text-destructive"
+                        : "bg-secondary text-secondary-foreground"
+                      : "text-muted-foreground hover:text-foreground";
+                    return (
                       <button
                         key={option}
                         type="button"
-                        onClick={() => setDepth(option)}
-                        aria-pressed={depth === option}
-                        title={t.lex.depthHint[option]}
-                        className={
-                          depth === option
-                            ? "rounded-full px-2.5 py-1 text-xs bg-secondary text-secondary-foreground font-medium"
-                            : "rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
-                        }
+                        onClick={() => setMode(option)}
+                        aria-pressed={active}
+                        title={t.lex.modeHint[option]}
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors ${tone} ${
+                          active ? "font-medium" : ""
+                        }`}
                       >
-                        {t.lex.depthName[option]}
+                        {option === "direct" ? (
+                          <Send className="h-3.5 w-3.5" />
+                        ) : option === "deep" ? (
+                          <Brain className="h-3.5 w-3.5" />
+                        ) : (
+                          <ShieldAlert className="h-3.5 w-3.5" />
+                        )}
+                        {t.lex.modeName[option]}
                       </button>
-                    ))}
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAdverseMode((prev) => !prev);
-                    setDeepMode(false);
-                  }}
-                  aria-pressed={adverseMode}
-                  title={t.lex.adverseHint}
-                  className={
-                    adverseMode
-                      ? "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs bg-destructive/10 border-destructive/30 text-destructive"
-                      : "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
-                  }
+                    );
+                  })}
+                </div>
+
+                {/* Depth now applies to background runs too, and means considerably more there: it
+                    picks the tier for the per-document pass, which is 200+ calls on a full file. */}
+                <div
+                  className="flex items-center rounded-full border p-0.5"
+                  role="group"
+                  aria-label={t.lex.depthLabel}
                 >
-                  <ShieldAlert className="h-3.5 w-3.5" />
-                  {t.lex.adverseMode}
-                </button>
-                {deepMode ? (
-                  <span className="text-[11px] text-muted-foreground">
-                    {t.lex.deepModeOn}
-                  </span>
-                ) : null}
+                  {DEPTH_ORDER.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => setDepth(option)}
+                      aria-pressed={depth === option}
+                      title={
+                        background
+                          ? t.lex.runDepthHint[option]
+                          : t.lex.depthHint[option]
+                      }
+                      className={
+                        depth === option
+                          ? "rounded-full px-2.5 py-1 text-xs bg-secondary text-secondary-foreground font-medium"
+                          : "rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+                      }
+                    >
+                      {t.lex.depthName[option]}
+                    </button>
+                  ))}
+                </div>
+
+                <span className="text-[11px] text-muted-foreground">
+                  {background ? t.lex.runSummary[depth] : t.lex.modeHint.direct}
+                </span>
               </div>
             </div>
           )}
