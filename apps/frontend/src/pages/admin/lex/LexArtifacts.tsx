@@ -148,7 +148,7 @@ export default function LexArtifacts() {
               </select>
             </div>
             <div className="space-y-2">
-              <Label>{t.lex.workspaceName}</Label>
+              <Label>{t.lex.artifactTitle}</Label>
               <Input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}

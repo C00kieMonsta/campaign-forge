@@ -1604,11 +1604,16 @@ export default function LexWorkspaceChat() {
 
       {/* Generate artifact dialog */}
       <Dialog open={genOpen} onOpenChange={setGenOpen}>
-        <DialogContent>
+        {/* DialogContent is a `grid`, whose items default to `min-width: auto` — so one long
+            filename in the pièce list stretched the whole column and the rows rendered outside the
+            dialog, over the page behind it. `minmax(0,1fr)` on the body row is the fix, and it also
+            makes that row the one that scrolls: with 72 pièces the dialog is taller than the
+            viewport, and without it the middle of the form was simply clipped. */}
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] grid-rows-[auto_minmax(0,1fr)_auto]">
           <DialogHeader>
             <DialogTitle>{t.lex.newArtifact}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="min-w-0 space-y-4 overflow-y-auto py-2 pr-1">
             <div className="space-y-2">
               <Label>{t.lex.artifactType}</Label>
               <select
@@ -1622,7 +1627,7 @@ export default function LexWorkspaceChat() {
               </select>
             </div>
             <div className="space-y-2">
-              <Label>{t.lex.workspaceName}</Label>
+              <Label>{t.lex.artifactTitle}</Label>
               <Input
                 value={genTitle}
                 onChange={(e) => setGenTitle(e.target.value)}
@@ -1678,7 +1683,7 @@ export default function LexWorkspaceChat() {
                 />
               ) : null}
 
-              <div className="max-h-44 overflow-y-auto rounded-md border divide-y">
+              <div className="max-h-56 min-w-0 divide-y overflow-y-auto overflow-x-hidden rounded-md border">
                 {genVisibleDocs.length === 0 ? (
                   <p className="px-2 py-3 text-xs text-muted-foreground">
                     {t.lex.noDocumentsReady}
@@ -1687,7 +1692,7 @@ export default function LexWorkspaceChat() {
                   genVisibleDocs.map((d) => (
                     <label
                       key={d.id}
-                      className="flex items-start gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-muted/50"
+                      className="flex min-w-0 cursor-pointer items-center gap-2 px-2 py-1.5 text-xs hover:bg-muted/50"
                     >
                       <input
                         type="checkbox"
@@ -1699,7 +1704,7 @@ export default function LexWorkspaceChat() {
                               : prev.filter((x) => x !== d.id)
                           )
                         }
-                        className="mt-0.5 shrink-0"
+                        className="shrink-0"
                       />
                       <span className="min-w-0 flex-1 truncate">
                         {d.filename}
@@ -1718,13 +1723,13 @@ export default function LexWorkspaceChat() {
             {/* How much of that selection actually reaches the drafter. */}
             <div className="space-y-2">
               <Label>{t.lex.readingMode}</Label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {(["search", "full"] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
                     onClick={() => setGenSourceMode(mode)}
-                    className={`rounded-md border p-2 text-left text-xs transition-colors ${
+                    className={`h-full min-w-0 rounded-md border p-2 text-left text-xs transition-colors ${
                       genSourceMode === mode
                         ? "border-primary bg-primary/5"
                         : "hover:bg-muted/50"

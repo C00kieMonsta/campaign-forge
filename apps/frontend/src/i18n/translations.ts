@@ -197,6 +197,9 @@ export const translations = {
       newWorkspace: "Nouvel espace",
       createWorkspace: "Créer l'espace",
       workspaceName: "Nom",
+      // Le titre de la PIÈCE générée, pas celui du dossier. Les deux dialogues réutilisaient la
+      // même chaîne, ce qui donnait un champ « Nom » sans objet dans « Générer un document ».
+      artifactTitle: "Titre du document",
       description: "Description",
       noWorkspaces: "Aucun espace de travail pour l'instant",
       openWorkspace: "Ouvrir",
@@ -908,6 +911,7 @@ export const translations = {
       newWorkspace: "Nieuwe werkruimte",
       createWorkspace: "Werkruimte aanmaken",
       workspaceName: "Naam",
+      artifactTitle: "Titel van het document",
       description: "Beschrijving",
       noWorkspaces: "Nog geen werkruimten",
       openWorkspace: "Openen",
