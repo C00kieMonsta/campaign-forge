@@ -269,22 +269,43 @@ export default function LexArtifactView() {
   const sources = report?.sources ?? [];
 
   /**
+   * Whether re-verification can change anything at all.
+   *
+   * It re-reads each claim's STORED citation — that is the whole point, so a re-check grades a
+   * sentence against the passage its quote was actually taken from rather than against whatever a
+   * fresh search turns up. The corollary is that a claim carrying no citation has nothing to
+   * re-read: the run can only return "No valid source cited" again, however many times it is asked.
+   *
+   * A whole document in that state — the drafter answered `sourceIndex: null` for every sentence, so
+   * nothing was ever grounded — can therefore never reach 'verified' by re-verifying, and offering
+   * the button as the primary action promises a fix it cannot deliver. What fixes it is a fresh
+   * generation run (with a wider reading mode, or a narrower selection of pièces), which is a
+   * different action in a different place.
+   */
+  const anyCitation = claims.some((c) => Boolean(c.citation));
+  const nothingToReverify = !anyCitation;
+
+  /**
    * Why filing export is unavailable, or null when it is available.
    *
    * Mirrors the server's condition rather than guessing at it: export.service.ts refuses unless
    * `verified && signedOff`. Stating which of the two is missing matters — "not verified" is
    * something the drafter has to fix, "not signed off" is one click away.
    */
-  const filingBlockedReason = unverified
-    ? t.lex.filingNeedsReverify
-    : !verified
-      ? t.lex.filingNeedsVerified.replace(
-          "{n}",
-          report ? String(report.unsupported) : "?"
-        )
-      : !signedOff
-        ? t.lex.filingNeedsSignOff
-        : null;
+  const filingBlockedReason = nothingToReverify
+    ? // Stated FIRST, because it is the only one of these the other messages would mislead about:
+      // "corrigez-les puis relancez la vérification" is advice that cannot work here.
+      t.lex.filingNeedsSources
+    : unverified
+      ? t.lex.filingNeedsReverify
+      : !verified
+        ? t.lex.filingNeedsVerified.replace(
+            "{n}",
+            report ? String(report.unsupported) : "?"
+          )
+        : !signedOff
+          ? t.lex.filingNeedsSignOff
+          : null;
 
   const updateClaim = (claimId: string, patch: Partial<LexArtifactClaim>) =>
     setDraft(
@@ -369,6 +390,17 @@ export default function LexArtifactView() {
         </span>
       </div>
 
+      {/* A draft that was never grounded at all.
+          Its own state, because it is a DIFFERENT problem from claims the judge rejected, and the
+          advice for the two is opposite: a rejected claim is corrected here, whereas a draft where
+          the drafter cited nothing has nothing to correct against and has to be generated again. Two
+          minutes of clicking "Vérifier" is what the previous wording bought. */}
+      {nothingToReverify && !editing ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          {t.lex.noSourcesAtAll}
+        </div>
+      ) : null}
+
       {verifying ? (
         <div className="rounded-xl border bg-card p-3 text-sm flex items-center gap-2">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -422,10 +454,23 @@ export default function LexArtifactView() {
                 {t.lex.editClaims}
               </Button>
               <Button
-                variant={filingBlockedReason ? "default" : "outline"}
+                // Not the primary action when it cannot help: a green button on a document with no
+                // citation to re-read invites the user to click it repeatedly and conclude the
+                // verification is broken, when the draft simply was never grounded.
+                variant={
+                  filingBlockedReason && !nothingToReverify
+                    ? "default"
+                    : "outline"
+                }
                 onClick={handleReverify}
-                disabled={busy || verifying || signedOff}
-                title={signedOff ? t.lex.signedOffReadOnly : undefined}
+                disabled={busy || verifying || signedOff || nothingToReverify}
+                title={
+                  signedOff
+                    ? t.lex.signedOffReadOnly
+                    : nothingToReverify
+                      ? t.lex.reverifyNothingToDo
+                      : undefined
+                }
               >
                 <RefreshCw
                   className={`h-4 w-4 mr-2 ${verifying ? "animate-spin" : ""}`}

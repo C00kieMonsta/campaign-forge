@@ -377,6 +377,11 @@ export const translations = {
         "Document signé : créez une nouvelle version pour le modifier.",
       filingNeedsReverify:
         "Export pour dépôt indisponible : le document a été modifié et doit être revérifié.",
+      filingNeedsSources:
+        "Export pour dépôt indisponible : aucun passage de ce document n'est rattaché à une pièce.",
+      noSourcesAtAll:
+        "Aucun passage de ce document n'est rattaché à une pièce : la rédaction n'a cité aucune source. La vérification ne peut rien y changer — régénérez le document depuis le dossier, si possible en lecture élargie ou sur une sélection de pièces plus étroite.",
+      reverifyNothingToDo: "Rien à vérifier : aucun passage ne cite de pièce.",
       citedPassage: "Passage cité",
       openAtPage: "Ouvrir la pièce à la page citée",
       sourceUnavailable:
@@ -1131,6 +1136,12 @@ export const translations = {
         "Ondertekend document: maak een nieuwe versie om het te wijzigen.",
       filingNeedsReverify:
         "Export voor neerlegging niet beschikbaar: het document is gewijzigd en moet opnieuw gecontroleerd worden.",
+      filingNeedsSources:
+        "Export voor neerlegging niet beschikbaar: geen enkele passage in dit document verwijst naar een stuk.",
+      noSourcesAtAll:
+        "Geen enkele passage in dit document verwijst naar een stuk: de redactie heeft geen enkele bron aangehaald. Een controle verandert daar niets aan — genereer het document opnieuw vanuit het dossier, indien mogelijk met ruime lezing of op een striktere selectie van stukken.",
+      reverifyNothingToDo:
+        "Niets te controleren: geen enkele passage haalt een stuk aan.",
       citedPassage: "Aangehaalde passage",
       openAtPage: "Stuk openen op de aangehaalde pagina",
       sourceUnavailable:
