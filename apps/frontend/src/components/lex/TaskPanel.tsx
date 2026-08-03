@@ -172,7 +172,12 @@ export default function TaskPanel({
         ) : (
           <button
             onClick={onClose}
-            aria-label={t.lex.cancel}
+            // "Masquer", not "Annuler": this hides a finished run's panel. It was labelled with the
+            // cancel string, which for a screen reader announced a close button as one that would
+            // stop the run — the opposite of what it does, and there is a real Cancel above for
+            // that.
+            aria-label={t.lex.dismissTask}
+            title={t.lex.dismissTask}
             className="text-muted-foreground hover:text-foreground shrink-0"
           >
             <X className="h-4 w-4" />

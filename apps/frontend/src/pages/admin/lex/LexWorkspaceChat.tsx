@@ -531,25 +531,39 @@ export default function LexWorkspaceChat() {
     [id]
   );
   const tasks = useCollection("lexTasks", taskFilter);
-  /** Finished runs the user has closed. Session-only: reopening the case starts clean. */
+  /** Runs the user has closed. Session-only: reopening the case starts clean. */
   const [dismissedTasks, setDismissedTasks] = useState<string[]>([]);
   /**
-   * What the panel shows: live runs, plus any finished run that produced a document.
+   * What the panel shows: live runs, plus a finished DRAFTING run.
    *
    * The second half matters — a drafting run that vanishes the moment it succeeds leaves the user
    * hunting for what it made. It stays until dismissed, carrying the button that opens it. Failed
    * and cancelled runs still disappear: their record is the trace, not the panel.
+   *
+   * A finished `verify_artifact` does NOT linger, and the kind is tested explicitly rather than
+   * inferred from `resultArtifactId` (which a re-verification also sets, to record which document it
+   * checked). The linger rule exists because a run PRODUCED something the user now has to find; a
+   * re-check produced no new document, and the verdicts it wrote are on the page the user was
+   * already looking at. Without the distinction every re-check left a permanent card in the chat, and
+   * they stacked up one per run.
    */
   const activeTasks = useMemo(
     () =>
       [...tasks]
+        // Dismissal applies to EVERY state, not only the finished ones. It used to be tested inside
+        // the `done` branch alone, so closing a card whose store row still read 'running' did
+        // nothing at all — the X appears as soon as the panel's own stream reports terminal, which
+        // is before the row is refreshed, and a refresh that never lands left the card stuck on
+        // screen with a close button that did not close it. Dismiss is not cancel: there is a
+        // separate Cancel button while a run is live, and the run continues either way.
+        .filter((task) => !dismissedTasks.includes(task.id))
         .filter(
           (task) =>
             task.status === "queued" ||
             task.status === "running" ||
             (task.status === "done" &&
-              Boolean(task.resultArtifactId) &&
-              !dismissedTasks.includes(task.id))
+              task.kind === "generate_artifact" &&
+              Boolean(task.resultArtifactId))
         )
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     [tasks, dismissedTasks]

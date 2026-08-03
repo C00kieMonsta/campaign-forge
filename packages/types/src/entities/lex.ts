@@ -514,7 +514,14 @@ export interface LexTask {
   depth: ReasoningDepth;
   /** Kind-specific inputs. Empty for the assessments, which need only title and instructions. */
   params?: LexTaskParams | null;
-  /** The document a `generate_artifact` run produced, offered directly from the finished task. */
+  /**
+   * The document this run concerned: what a `generate_artifact` run PRODUCED (offered directly from
+   * the finished task), or what a `verify_artifact` run re-checked.
+   *
+   * The two are not interchangeable for presentation, so a UI deciding whether a finished run is
+   * still worth showing must test `kind` rather than the presence of this field: a drafting run made
+   * something the user has to be led to, a re-check did not.
+   */
   resultArtifactId?: string | null;
   status: LexTaskStatus;
   progressDone: number;
