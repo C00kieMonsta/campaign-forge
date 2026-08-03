@@ -148,8 +148,15 @@ export default function TaskPanel({
             </div>
           ) : null}
         </div>
-        {/* A finished drafting run offers its document right here. The alternative is a line of
-            text saying it worked and leaving the user to go and find it. */}
+        {/* A drafting run offers its document the moment it finishes — the panel's own stream reports
+            terminal a beat before the store row does, so this is the handoff between the card and the
+            link the run posts into the thread, which is where the document lives from then on. Kept
+            for that beat, and for a re-verification launched elsewhere in the workspace: this is the
+            only place in the chat that names the document it was checking.
+
+            NOT the durable record. The card unmounts once the row goes terminal (see activeTasks) —
+            a permanent copy of this button above the conversation was the thing that would not go
+            away, however often it was closed. */}
         {!running && task.resultArtifactId ? (
           <Button
             size="sm"
@@ -169,20 +176,24 @@ export default function TaskPanel({
           >
             {t.lex.cancel}
           </Button>
-        ) : (
-          <button
-            onClick={onClose}
-            // "Masquer", not "Annuler": this hides a finished run's panel. It was labelled with the
-            // cancel string, which for a screen reader announced a close button as one that would
-            // stop the run — the opposite of what it does, and there is a real Cancel above for
-            // that.
-            aria-label={t.lex.dismissTask}
-            title={t.lex.dismissTask}
-            className="text-muted-foreground hover:text-foreground shrink-0"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
+        ) : null}
+        {/* Available WHILE the run is going, which is the only time it is useful now that a finished
+            card clears itself. A multi-minute read the user has seen enough of should be closable
+            without stopping it — the two are different intentions, and Cancel above is the other one.
+            It used to render only on a terminal card, so once those stopped lingering the button
+            would have appeared for the instant between the stream reporting done and the row
+            refreshing, and never otherwise. */}
+        <button
+          onClick={onClose}
+          // "Masquer", not "Annuler": this hides the panel. It was labelled with the cancel string,
+          // which for a screen reader announced it as a button that would stop the run — the
+          // opposite of what it does.
+          aria-label={t.lex.dismissTask}
+          title={t.lex.dismissTask}
+          className="text-muted-foreground hover:text-foreground shrink-0"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
 
       {expanded && trace.length > 0 ? (

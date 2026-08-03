@@ -534,37 +534,29 @@ export default function LexWorkspaceChat() {
   /** Runs the user has closed. Session-only: reopening the case starts clean. */
   const [dismissedTasks, setDismissedTasks] = useState<string[]>([]);
   /**
-   * What the panel shows: live runs, plus a finished DRAFTING run.
+   * What the panel shows: runs that are still going. Nothing else.
    *
-   * The second half matters — a drafting run that vanishes the moment it succeeds leaves the user
-   * hunting for what it made. It stays until dismissed, carrying the button that opens it. Failed
-   * and cancelled runs still disappear: their record is the trace, not the panel.
+   * A finished run used to stay until dismissed, on the reasoning that a drafting run vanishing the
+   * moment it succeeds leaves the user hunting for what it made. That reasoning was already served
+   * elsewhere and better: the run posts its result INTO this conversation as a message carrying
+   * `[Ouvrir le document](/lex/artifacts/…)` (postArtifactResult), and `landedResults` below pulls
+   * that message in as soon as the run lands. The thread is the durable record — it survives a
+   * reload, which the panel never did, because `dismissedTasks` is session state.
    *
-   * A finished `verify_artifact` does NOT linger, and the kind is tested explicitly rather than
-   * inferred from `resultArtifactId` (which a re-verification also sets, to record which document it
-   * checked). The linger rule exists because a run PRODUCED something the user now has to find; a
-   * re-check produced no new document, and the verdicts it wrote are on the page the user was
-   * already looking at. Without the distinction every re-check left a permanent card in the chat, and
-   * they stacked up one per run.
+   * So the card was a second copy of a link the thread already held, sitting permanently above the
+   * conversation and coming back on every reload however often it was closed. Progress panels show
+   * progress; when there is none left to show they go away.
    */
   const activeTasks = useMemo(
     () =>
       [...tasks]
         // Dismissal applies to EVERY state, not only the finished ones. It used to be tested inside
-        // the `done` branch alone, so closing a card whose store row still read 'running' did
-        // nothing at all — the X appears as soon as the panel's own stream reports terminal, which
-        // is before the row is refreshed, and a refresh that never lands left the card stuck on
-        // screen with a close button that did not close it. Dismiss is not cancel: there is a
-        // separate Cancel button while a run is live, and the run continues either way.
+        // a `done` branch alone, so closing a card whose store row still read 'running' did nothing
+        // at all, and a row that never refreshed left the card stuck on screen with a close button
+        // that did not close it. Dismiss is not cancel: there is a separate Cancel button, and the
+        // run carries on regardless — this only stops the user having to watch it.
         .filter((task) => !dismissedTasks.includes(task.id))
-        .filter(
-          (task) =>
-            task.status === "queued" ||
-            task.status === "running" ||
-            (task.status === "done" &&
-              task.kind === "generate_artifact" &&
-              Boolean(task.resultArtifactId))
-        )
+        .filter((task) => task.status === "queued" || task.status === "running")
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     [tasks, dismissedTasks]
   );
