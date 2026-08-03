@@ -24,6 +24,7 @@ import {
   type GenerationProgress
 } from "./artifact-generation.service";
 import {
+  reconcileClaims,
   ReverificationService,
   type ReverifyProgress
 } from "./reverification.service";
@@ -243,11 +244,20 @@ export class ArtifactsService {
   }
 
   /**
-   * Saves an edited body as a NEW version and re-sets verification to 'unverified' (edits
-   * must be re-verified before filing — see reverify, which is how a corrected draft gets back to
-   * 'verified'; without it this method was a one-way door out of the filing path). Enforces the
-   * citation-drop invariant: a claim that carried a citation in the current version may not
-   * disappear unless the caller says so explicitly.
+   * Saves an edited body as a NEW version, staling ONLY the claims that actually changed.
+   *
+   * The verdicts are reconciled claim by claim (see reconcileClaims): an untouched paragraph keeps
+   * the verdict and the citation the server last wrote for it, and only an edited or new one drops to
+   * `pending`. This used to reset the whole version to 'unverified', which meant correcting one
+   * sentence blanked every other citation in the document and sent all sixteen claims back through
+   * the judge — fifteen frontier-model calls to re-derive answers that were already true.
+   *
+   * A consequence worth having: a save that only DELETED an unsupported claim comes back `verified`
+   * immediately, with no model call at all, because every surviving claim still holds the verdict it
+   * earned against its own quote. "Retirez-les" is now a one-step fix.
+   *
+   * Also enforces the citation-drop invariant: a claim that carried a citation in the current version
+   * may not disappear unless the caller says so explicitly.
    */
   async saveVersion(
     ownerEmail: string,
@@ -275,43 +285,54 @@ export class ArtifactsService {
       );
     }
 
+    // Per-claim reconciliation, and the verdict fields come from the STORED claim rather than the
+    // request: that is what stops a client marking its own edit `supported`.
+    const claims = reconcileClaims(
+      body.claims ?? [],
+      current.body_json?.claims ?? []
+    );
+    const reconciled: LexArtifactBody = { type: "lex-artifact", claims };
+    const status = statusForClaims(claims);
+    const report: LexArtifactVerificationReport = {
+      ...tallyClaims(claims),
+      // The PROVENANCE carries forward. Which pièces the draft was written from is still true after
+      // the lawyer rewrites a sentence — and dropping it (as this used to) made the "Pièces lues"
+      // panel vanish the moment anyone edited anything, taking with it the only way to see a
+      // selected pièce that contributed nothing.
+      sources: current.verification_report?.sources,
+      sourceMode: current.verification_report?.sourceMode,
+      truncated: current.verification_report?.truncated
+    };
+
     const nextVersion = row.current_version + 1;
     const result = await this.pg.withTransaction(async (client) => {
       const verRes = await client.query<VersionRow>(
         `INSERT INTO lex_artifact_versions
            (artifact_id, version, body_json, verification_status, verification_report)
-         VALUES ($1, $2, $3, 'unverified', $4) RETURNING *`,
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
         [
           row.id,
           nextVersion,
-          JSON.stringify(body),
-          // The PROVENANCE carries forward, the verdict does not. Which pièces the draft was
-          // written from is still true after the lawyer rewrites a sentence — and dropping it (as
-          // this used to) made the "Pièces lues" panel vanish the moment anyone edited anything,
-          // taking with it the only way to see a selected pièce that contributed nothing. The
-          // counts are recomputed but must not be read as a verdict: the version is 'unverified',
-          // and the UI says so instead of showing them.
-          JSON.stringify({
-            ...tallyClaims(body.claims ?? []),
-            sources: current.verification_report?.sources,
-            sourceMode: current.verification_report?.sourceMode,
-            truncated: current.verification_report?.truncated
-          })
+          JSON.stringify(reconciled),
+          status,
+          JSON.stringify(report)
         ]
       );
       const version = verRes.rows[0];
-      // Carry citations forward from the edited body (offsets/hash unknown on manual edits).
+      // Only the claims that KEPT a verdict are filed as citations — insertCitations already skips
+      // anything not `supported`, so a pending claim's citation is held in the body (re-verification
+      // needs its anchor) without being recorded as an established reference.
       await this.insertCitations(
         client,
         ownerEmail,
         version.id,
-        body,
+        reconciled,
         new Map()
       );
       const artRes = await client.query<ArtifactRow>(
-        `UPDATE lex_artifacts SET current_version = $2, status = 'draft', updated_at = now()
+        `UPDATE lex_artifacts SET current_version = $2, status = $3, updated_at = now()
          WHERE id = $1 RETURNING *`,
-        [row.id, nextVersion]
+        [row.id, nextVersion, status === "verified" ? "verified" : "draft"]
       );
       return { artifact: artRes.rows[0], version };
     });
@@ -359,20 +380,14 @@ export class ArtifactsService {
       throw new BadRequestException("This version has no claims to verify");
     }
 
-    // The version this one was edited from, for the carry-forward test: an untouched claim keeps
-    // its verdict instead of paying a frontier-model judge to reach the same conclusion again.
-    const previous =
-      row.current_version > 1
-        ? await this.versionRow(row.id, row.current_version - 1).catch(
-            () => null
-          )
-        : null;
-
+    // No earlier version is read: each claim's stored status already corresponds to its stored text
+    // (reconcileClaims guarantees it at save time), so a claim standing `supported` keeps its verdict
+    // and a `pending` one is judged. Comparing against version N-1 would answer a question that has
+    // already been answered, and would answer it wrongly the moment a version is skipped.
     const result = await this.reverification.reverify({
       ownerEmail,
       workspaceId: row.workspace_id,
       claims,
-      previous: previous?.body_json?.claims,
       onProgress
     });
 

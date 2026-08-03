@@ -366,8 +366,12 @@ export const translations = {
         "Ce passage est sourcé. Le retirer supprime aussi sa citation du document. Continuer ?",
       editingHint:
         "Corrigez ou retirez les passages, ou changez leur nature. À l'enregistrement, une nouvelle version est créée et doit être revérifiée avant dépôt.",
-      savedNeedsReverify: "Version enregistrée — lancez la vérification",
-      needsReverify: "Modifié — vérification à relancer",
+      savedNeedsReverify: "Version enregistrée — {n} passage(s) à vérifier",
+      savedNowVerified: "Version enregistrée — document vérifié",
+      savedNoReverifyNeeded:
+        "Version enregistrée — aucune vérification nécessaire",
+      needsReverify: "Vérification incomplète",
+      pendingCount: "en attente",
       claimPendingReverify: "En attente de vérification",
       reverify: "Vérifier",
       reverifyQueued: "Vérification lancée…",
@@ -376,7 +380,7 @@ export const translations = {
       signedOffReadOnly:
         "Document signé : créez une nouvelle version pour le modifier.",
       filingNeedsReverify:
-        "Export pour dépôt indisponible : le document a été modifié et doit être revérifié.",
+        "Export pour dépôt indisponible : certains passages modifiés n'ont pas encore été vérifiés. Les autres citations restent établies — relancez la vérification, elle ne recontrôle que ce qui a changé.",
       filingNeedsSources:
         "Export pour dépôt indisponible : aucun passage de ce document n'est rattaché à une pièce.",
       noSourcesAtAll:
@@ -1125,8 +1129,11 @@ export const translations = {
         "Deze passage is gestaafd. Verwijderen wist ook haar citaat uit het document. Doorgaan?",
       editingHint:
         "Corrigeer of verwijder passages, of wijzig hun soort. Bij opslaan wordt een nieuwe versie gemaakt die opnieuw gecontroleerd moet worden vóór neerlegging.",
-      savedNeedsReverify: "Versie opgeslagen — start de controle",
-      needsReverify: "Gewijzigd — controle opnieuw uitvoeren",
+      savedNeedsReverify: "Versie opgeslagen — {n} passage(s) te controleren",
+      savedNowVerified: "Versie opgeslagen — document geverifieerd",
+      savedNoReverifyNeeded: "Versie opgeslagen — geen controle nodig",
+      needsReverify: "Controle onvolledig",
+      pendingCount: "in afwachting",
       claimPendingReverify: "Wacht op controle",
       reverify: "Controleren",
       reverifyQueued: "Controle gestart…",
@@ -1135,7 +1142,7 @@ export const translations = {
       signedOffReadOnly:
         "Ondertekend document: maak een nieuwe versie om het te wijzigen.",
       filingNeedsReverify:
-        "Export voor neerlegging niet beschikbaar: het document is gewijzigd en moet opnieuw gecontroleerd worden.",
+        "Export voor neerlegging niet beschikbaar: sommige gewijzigde passages zijn nog niet gecontroleerd. De andere citaten blijven gestaafd — start de controle, die enkel het gewijzigde opnieuw nakijkt.",
       filingNeedsSources:
         "Export voor neerlegging niet beschikbaar: geen enkele passage in dit document verwijst naar een stuk.",
       noSourcesAtAll:

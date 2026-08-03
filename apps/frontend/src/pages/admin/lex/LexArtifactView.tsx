@@ -206,7 +206,17 @@ export default function LexArtifactView() {
       setVersion(version);
       setDraft(null);
       setDroppedCited([]);
-      toast({ title: t.lex.savedNeedsReverify });
+      // What the save actually cost, in claims. A save that only deleted a bad claim needs no
+      // re-verification at all, and saying "lancez la vérification" then would send the drafter to
+      // pay for a run with nothing to do.
+      const pending = version.verificationReport?.pending ?? 0;
+      toast({
+        title: pending
+          ? t.lex.savedNeedsReverify.replace("{n}", String(pending))
+          : version.verificationStatus === "verified"
+            ? t.lex.savedNowVerified
+            : t.lex.savedNoReverifyNeeded
+      });
     } catch (err) {
       toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
@@ -282,8 +292,9 @@ export default function LexArtifactView() {
    * generation run (with a wider reading mode, or a narrower selection of pièces), which is a
    * different action in a different place.
    */
-  const anyCitation = claims.some((c) => Boolean(c.citation));
-  const nothingToReverify = !anyCitation;
+  const nothingToReverify = !claims.some(
+    (c) => c.status === "pending" || Boolean(c.citation)
+  );
 
   /**
    * Why filing export is unavailable, or null when it is available.
@@ -359,34 +370,41 @@ export default function LexArtifactView() {
 
       {/* Verification banner.
 
-          THREE states, not two. `unverified` — an edit that has not been re-checked — used to fall
-          into the "failed" branch and report stale counts as though a judge had rejected something,
-          which is both wrong and the opposite of actionable. */}
+          THREE states, not two. `unverified` means some claim is awaiting a verdict — it used to fall
+          into the "failed" branch and report the pending claims as though a judge had rejected them,
+          which is both wrong and the opposite of actionable. It is BLUE rather than amber for the
+          same reason: an edit in progress is not a problem with the document. */}
       <div
         className={`rounded-xl border p-3 text-sm flex items-center gap-2 ${
           verified
             ? "bg-green-50 border-green-200 text-green-800"
-            : "bg-amber-50 border-amber-200 text-amber-800"
+            : unverified
+              ? "bg-blue-50 border-blue-200 text-blue-900"
+              : "bg-amber-50 border-amber-200 text-amber-800"
         }`}
       >
         {verified ? <ShieldCheck className="h-4 w-4" /> : null}
         <span>
-          {unverified ? (
-            t.lex.needsReverify
-          ) : (
-            <>
-              {verified ? t.lex.verified : t.lex.verificationFailed}
-              {report
-                ? ` — ${report.supported}/${report.total} ${t.lex.claimsSupported}`
-                : ""}
-              {/* Stated, never folded into the count: these sentences assert no fact, and hiding
-                  them would make the document's own voice invisible. */}
-              {report?.notChecked
-                ? ` · ${report.notChecked} ${t.lex.notCheckedCount}`
-                : ""}
-              {signedOff ? ` · ${t.lex.signedOff}` : ""}
-            </>
-          )}
+          {/* The counts are shown in EVERY state, including 'unverified'.
+              Suppressing them while anything was pending was the version-level thinking again: it
+              told the drafter "modifié" and hid the eleven claims that were still established, so an
+              edit looked like it had cost her the whole document. What an edit changes is how many
+              claims are awaiting a verdict, which is its own number. */}
+          {unverified
+            ? t.lex.needsReverify
+            : verified
+              ? t.lex.verified
+              : t.lex.verificationFailed}
+          {report
+            ? ` — ${report.supported}/${report.total} ${t.lex.claimsSupported}`
+            : ""}
+          {report?.pending ? ` · ${report.pending} ${t.lex.pendingCount}` : ""}
+          {/* Stated, never folded into the count: these sentences assert no fact, and hiding
+              them would make the document's own voice invisible. */}
+          {report?.notChecked
+            ? ` · ${report.notChecked} ${t.lex.notCheckedCount}`
+            : ""}
+          {signedOff ? ` · ${t.lex.signedOff}` : ""}
         </span>
       </div>
 
@@ -618,13 +636,24 @@ export default function LexArtifactView() {
             ) : (
               <>
                 <p className="text-sm whitespace-pre-wrap">{c.text}</p>
-                {/* Three renderings for three genuinely different states, and the version-level
-                    `unverified` overrides all of them: after an edit no verdict on this page has
-                    been re-established, so showing a green citation chip under a sentence nobody
-                    has re-checked would be the one lie this screen must not tell. */}
-                {unverified ? (
-                  <div className="mt-2 text-xs text-muted-foreground">
-                    {t.lex.claimPendingReverify}
+                {/* One rendering per state, decided PER CLAIM.
+                    This used to be gated on the version-level `unverified`, which meant one edited
+                    paragraph replaced every citation chip on the page with "awaiting verification" —
+                    fifteen sentences whose verdicts were still perfectly valid, reported as unknown.
+                    A verdict belongs to its own claim, so only the claim the drafter touched sits at
+                    `pending`; the rest keep showing what they are. */}
+                {c.status === "pending" ? (
+                  <div className="mt-2 space-y-1">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                      {t.lex.claimPendingReverify}
+                    </span>
+                    {/* Its quote stays visible: it is what the drafter is editing the sentence
+                        against, and it is the anchor the re-check will read. */}
+                    {c.citation?.quote ? (
+                      <p className="text-xs text-muted-foreground italic">
+                        « {c.citation.quote} »
+                      </p>
+                    ) : null}
                   </div>
                 ) : c.status === "supported" && c.citation ? (
                   <div className="mt-2 space-y-1">

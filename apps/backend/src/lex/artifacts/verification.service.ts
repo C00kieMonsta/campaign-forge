@@ -58,16 +58,22 @@ export function tallyClaims(
   claims: readonly LexArtifactClaim[]
 ): Pick<
   LexArtifactVerificationReport,
-  "total" | "supported" | "unsupported" | "notChecked"
+  "total" | "supported" | "unsupported" | "notChecked" | "pending"
 > {
-  const notChecked = claims.filter((c) => c.status === "not_checked").length;
-  const verifiable = claims.length - notChecked;
-  const supported = claims.filter((c) => c.status === "supported").length;
+  const count = (s: LexArtifactClaim["status"]) =>
+    claims.filter((c) => c.status === s).length;
+  const notChecked = count("not_checked");
+  const pending = count("pending");
+  const supported = count("supported");
   return {
-    total: verifiable,
+    total: claims.length - notChecked,
     supported,
-    unsupported: verifiable - supported,
-    notChecked
+    // Judged and REFUSED. Pending claims are subtracted out: counting a sentence nobody has looked
+    // at yet as one the judge rejected is how "you edited a paragraph" got reported as "you now have
+    // sixteen unsupported claims".
+    unsupported: claims.length - notChecked - supported - pending,
+    notChecked,
+    pending
   };
 }
 
@@ -81,11 +87,18 @@ export function tallyClaims(
  * A body with no assertions at all is NOT verified. A court document that establishes nothing is
  * either mis-labelled by the drafter or empty, and a green banner on it would be the most
  * misleading state this system could produce.
+ *
+ * `unverified` when anything is still awaiting a verdict, and that is a THIRD state on purpose: an
+ * edited draft has not failed, it has not been looked at, and reporting it as `failed` sends the
+ * drafter hunting for a rejection that does not exist. The distinction is also what lets a save that
+ * only DELETED a bad claim come back `verified` without a single model call — every surviving claim
+ * still holds the verdict it earned against its own quote.
  */
 export function statusForClaims(
   claims: readonly LexArtifactClaim[]
 ): LexVerificationStatus {
-  const { total, supported } = tallyClaims(claims);
+  const { total, supported, pending } = tallyClaims(claims);
+  if (pending) return "unverified";
   return total > 0 && supported === total ? "verified" : "failed";
 }
 

@@ -38,11 +38,12 @@ export interface ReverifyResult {
 }
 
 /**
- * True when a claim is textually identical to how it stood in the previous version.
+ * True when a claim is materially identical to how it stood in the stored version.
  *
- * All three fields, because each one changes what the verdict means: the SENTENCE is what is being
- * judged, the QUOTE is the evidence offered for it, and the ANCHOR is which span that quote is read
- * in. Two of the three matching is not the same claim.
+ * FOUR fields, because each one changes what a verdict about this claim would mean: the SENTENCE is
+ * what is being judged, the QUOTE is the evidence offered for it, the ANCHOR is which span that
+ * quote is read in, and the KIND decides whether it is judged at all. Three of the four matching is
+ * not the same claim.
  */
 export function isUnchanged(
   claim: LexArtifactClaim,
@@ -50,31 +51,60 @@ export function isUnchanged(
 ): boolean {
   return (
     claim.text === previous.text &&
+    (claim.kind ?? "assertion") === (previous.kind ?? "assertion") &&
     (claim.citation?.quote ?? null) === (previous.citation?.quote ?? null) &&
     (claim.citation?.chunkId ?? null) === (previous.citation?.chunkId ?? null)
   );
 }
 
 /**
- * Whether a claim's previous verdict can stand instead of paying for a fresh judge call.
+ * The verdicts a saved body may keep, claim by claim.
  *
- * Three conditions, and the third is the one that is easy to leave out: the claim must be identical,
- * it must have been SUPPORTED before (a previous rejection is re-judged, since the point of the
- * re-check is to give a corrected claim another hearing), and the quote must still be present in the
- * span AS IT STANDS TODAY. Gate 1 is free, and the passage can have changed underneath an untouched
- * claim — a re-ingested pièce, a rebuilt page index — which is precisely the case a carried-forward
- * verdict must not paper over.
+ * THE granularity fix. A verdict is established for one claim against one quote, independently of
+ * every other claim in the document — so editing one paragraph invalidates exactly that paragraph.
+ * Holding the staleness at the version level instead (which is what this replaced) meant a single
+ * reworded sentence blanked fifteen standing citations and sent the whole document back through the
+ * judge, at fifteen frontier-model calls for no new information.
  *
- * `span` absent means the anchor no longer resolves at all: nothing to carry forward.
+ * The verdict fields come from the STORED claim, never from the submission: an unchanged claim keeps
+ * what the server itself last wrote, and a changed one is forced to `pending`. That is what makes a
+ * citation chip believable — a client cannot mark its own edit `supported`, because its `status` is
+ * discarded either way. A claim with no counterpart in the stored body is new, so it is `pending`.
+ *
+ * `reason` is cleared on a pending claim: it explained a verdict that no longer applies, and leaving
+ * "la citation n'établit pas ce qui est affirmé" under a sentence the drafter has just rewritten to
+ * fix precisely that is worse than saying nothing.
  */
-export function canCarryForward(
+export function reconcileClaims(
+  submitted: readonly LexArtifactClaim[],
+  stored: readonly LexArtifactClaim[]
+): LexArtifactClaim[] {
+  const storedById = new Map(stored.map((c) => [c.claimId, c]));
+  return submitted.map((claim) => {
+    const previous = storedById.get(claim.claimId);
+    if (previous && isUnchanged(claim, previous)) return previous;
+    return { ...claim, status: "pending", reason: null };
+  });
+}
+
+/**
+ * Whether a claim's standing verdict can be kept instead of paying for a fresh judge call.
+ *
+ * No diff here, deliberately: by the time re-verification runs, a claim's stored status ALREADY
+ * corresponds to its stored text and quote — reconcileClaims guarantees it at save time, and a claim
+ * that was edited is sitting at `pending`. So the question is only whether the verdict was positive
+ * and whether it still holds against the source as it stands today.
+ *
+ * Gate 1 re-runs even on this fast path because it is free, and because the SPAN can change
+ * underneath an untouched claim — a re-ingested pièce, a rebuilt page index. That is exactly the case
+ * a kept verdict must not paper over. `span` absent means the anchor no longer resolves at all.
+ */
+export function canKeepVerdict(
   claim: LexArtifactClaim,
-  previous: LexArtifactClaim | undefined,
   span: RetrievedChunk | undefined
 ): boolean {
-  if (!previous || previous.status !== "supported") return false;
+  if (claim.status !== "supported") return false;
   if (!claim.citation || !span) return false;
-  if (!isUnchanged(claim, previous)) return false;
   return quoteMatchesChunk(claim.citation.quote, span.content);
 }
 
@@ -88,16 +118,16 @@ export function canCarryForward(
  * Three ways a claim gets its verdict here, cheapest first:
  *
  *   EXEMPT     asserts no fact and cites nothing → `not_checked`, no work. Same rule as generation.
- *   CARRIED    the sentence, its quote and its anchor are byte-identical to a version where the
- *              claim was already `supported`, and gate 1 still passes against the span as it stands
- *              today → the previous verdict is reused. Gate 2 is deterministic in its inputs, so
- *              re-asking a frontier model the identical question to get the identical answer is
- *              pure cost. Gate 1 is re-run anyway because it is free and because the SPAN can have
- *              changed underneath an unchanged claim — a re-ingested pièce, a rebuilt page index —
- *              which is exactly the case a carried-forward verdict must not paper over.
- *   JUDGED     everything else: one judge call, as at generation.
+ *   KEPT       the claim already stands `supported` and gate 1 still passes against the span as it
+ *              is today → the verdict is kept. Gate 2 is deterministic in its inputs, so re-asking a
+ *              frontier model the identical question to get the identical answer is pure cost.
+ *   JUDGED     everything else — every `pending` claim, and every claim a judge previously refused,
+ *              which is the point: a corrected sentence gets a fresh hearing.
  *
- * So fixing three sentences in a sixteen-claim draft costs three judge calls, not sixteen.
+ * It reads the STORED body and nothing else. No comparison against an earlier version is needed,
+ * because reconcileClaims already did that work at save time: a claim's stored status corresponds to
+ * its stored text, and anything edited is sitting at `pending`. So fixing three sentences in a
+ * sixteen-claim draft costs three judge calls, not sixteen.
  */
 @Injectable()
 export class ReverificationService {
@@ -110,14 +140,9 @@ export class ReverificationService {
     ownerEmail: string;
     workspaceId: string;
     claims: readonly LexArtifactClaim[];
-    /** The same claims as they stood in the previous version, for the carry-forward test. */
-    previous?: readonly LexArtifactClaim[];
     onProgress?: (p: ReverifyProgress) => Promise<void>;
   }): Promise<ReverifyResult> {
     const { ownerEmail, workspaceId, claims } = params;
-    const previousById = new Map(
-      (params.previous ?? []).map((c) => [c.claimId, c])
-    );
 
     // Every anchor in one round trip, before any judging: the spans are what both gates read, and
     // fetching them per claim would be one query per claim for no benefit.
@@ -133,7 +158,7 @@ export class ReverificationService {
     const needsJudge = claims.filter(
       (c) =>
         !isExemptFromVerification(c.kind, Boolean(c.citation)) &&
-        !canCarryForward(c, previousById.get(c.claimId), spanOf(c))
+        !canKeepVerdict(c, spanOf(c))
     ).length;
 
     let judged = 0;
@@ -151,11 +176,10 @@ export class ReverificationService {
           };
         }
 
-        const previous = previousById.get(claim.claimId);
         const span = spanOf(claim);
-        if (previous && canCarryForward(claim, previous, span)) {
+        if (canKeepVerdict(claim, span)) {
           carriedForward += 1;
-          return { ...claim, status: "supported", reason: previous.reason };
+          return claim;
         }
 
         // An assertion with no citation left — the drafter removed it, or never had one. Nothing to

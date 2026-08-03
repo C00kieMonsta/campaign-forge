@@ -1,6 +1,11 @@
 import type { LexArtifactClaim } from "@packages/types";
 import type { RetrievedChunk } from "../../ai/rag.service";
-import { canCarryForward, isUnchanged } from "../reverification.service";
+import {
+  canKeepVerdict,
+  isUnchanged,
+  reconcileClaims
+} from "../reverification.service";
+import { statusForClaims, tallyClaims } from "../verification.service";
 
 function span(content: string): RetrievedChunk {
   return {
@@ -42,18 +47,17 @@ function claim(over: Partial<LexArtifactClaim> = {}): LexArtifactClaim {
 }
 
 /**
- * WHEN A RE-CHECK MAY REUSE THE LAST VERDICT.
+ * STALENESS IS PER-CLAIM.
  *
- * Re-verification exists so a corrected draft can reach 'verified' again — before it, saving an edit
- * reset the version to 'unverified' and nothing could ever produce a second 'verified', so fixing a
- * claim made the document permanently unfilable. But a naive re-check re-judges every claim, which
- * is one frontier-model call per sentence to re-derive answers already given. Carrying an untouched
- * verdict forward is what makes fixing three sentences in a sixteen-claim draft cost three calls.
- *
- * Everything below is about not carrying one forward when it would be a lie.
+ * A verdict is established for one sentence against one quote, independently of every other sentence
+ * in the document. Holding "nothing here is verified" at the version level — which is what these
+ * rules replaced — meant correcting a single paragraph blanked the standing citations of every other
+ * paragraph and sent all of them back to the judge: fifteen frontier-model calls to re-derive answers
+ * that were still true, and a screen where sixteen well-sourced sentences all read "awaiting
+ * verification".
  */
 describe("isUnchanged", () => {
-  it("is true only when the sentence, the quote and the anchor all match", () => {
+  it("is true only when the sentence, kind, quote and anchor all match", () => {
     expect(isUnchanged(claim(), claim())).toBe(true);
   });
 
@@ -63,6 +67,17 @@ describe("isUnchanged", () => {
     expect(isUnchanged(claim({ text: "Une autre phrase." }), claim())).toBe(
       false
     );
+  });
+
+  // The KIND decides whether the claim is judged at all, so changing it invalidates the verdict.
+  it("is false when the kind was changed", () => {
+    expect(isUnchanged(claim({ kind: "relief" }), claim())).toBe(false);
+  });
+
+  // A missing kind reads as `assertion` on both sides, so an untouched legacy claim is not dragged
+  // back through the judge just for lacking a field that did not exist when it was drafted.
+  it("treats a missing kind as assertion on both sides", () => {
+    expect(isUnchanged(claim({ kind: undefined }), claim())).toBe(true);
   });
 
   // The quote is the EVIDENCE OFFERED. Swapping it changes what the sentence rests on.
@@ -91,70 +106,145 @@ describe("isUnchanged", () => {
       )
     ).toBe(false);
   });
-
-  it("is true for two claims that both cite nothing", () => {
-    expect(
-      isUnchanged(claim({ citation: null }), claim({ citation: null }))
-    ).toBe(true);
-  });
 });
 
-describe("canCarryForward", () => {
-  it("reuses the verdict of an untouched claim whose quote is still in the span", () => {
-    expect(canCarryForward(claim(), claim(), span(PASSAGE))).toBe(true);
-  });
+describe("reconcileClaims", () => {
+  const stored = [
+    claim({ claimId: "a" }),
+    claim({ claimId: "b" }),
+    claim({ claimId: "c", status: "contradicted" })
+  ];
 
-  it("refuses when there is no previous version to carry from", () => {
-    expect(canCarryForward(claim(), undefined, span(PASSAGE))).toBe(false);
+  // THE regression this whole change is about.
+  it("stales only the edited claim and leaves its neighbours' verdicts standing", () => {
+    const submitted = [
+      claim({ claimId: "a" }),
+      claim({ claimId: "b", text: "Reformulée par l'avocate." }),
+      claim({ claimId: "c", status: "contradicted" })
+    ];
+    const out = reconcileClaims(submitted, stored);
+    expect(out.map((c) => c.status)).toEqual([
+      "supported",
+      "pending",
+      "contradicted"
+    ]);
+    // And the untouched claim keeps its citation, so its chip stays on the page.
+    expect(out[0].citation?.quote).toBe(QUOTE);
   });
 
   /**
-   * A previously REJECTED claim is always re-judged. This is the point of the feature: the lawyer
-   * corrected the sentence (or its kind, or its citation) precisely to get a second hearing, and
-   * carrying the rejection forward would mean the fix could never take effect.
+   * A pending claim KEEPS its citation. Re-verification needs the anchor to re-read the passage, and
+   * the drafter needs the quote in front of her to edit the sentence down to what it establishes.
+   * It is not recorded as an established reference: insertCitations files only `supported` claims.
    */
-  it("re-judges a claim that was not supported before", () => {
+  it("keeps the citation on a staled claim but clears the stale reason", () => {
+    const out = reconcileClaims(
+      [claim({ text: "Reformulée.", reason: "old verdict" })],
+      [claim()]
+    );
+    expect(out[0].status).toBe("pending");
+    expect(out[0].citation?.quote).toBe(QUOTE);
+    expect(out[0].reason).toBeNull();
+  });
+
+  /**
+   * The forgery guard. Verdict fields are taken from the STORED claim, never from the submission —
+   * so a client that PATCHes `status: "supported"` onto a sentence it just rewrote gets `pending`,
+   * and one that does it to an unchanged claim gets back the verdict the server actually wrote.
+   * Without this the citation chip would mean nothing.
+   */
+  it("ignores a client-supplied status", () => {
+    const forgedEdit = reconcileClaims(
+      [claim({ text: "Rewritten.", status: "supported" })],
+      [claim({ status: "contradicted" })]
+    );
+    expect(forgedEdit[0].status).toBe("pending");
+
+    const forgedUnchanged = reconcileClaims(
+      [claim({ status: "supported" })],
+      [claim({ status: "contradicted" })]
+    );
+    expect(forgedUnchanged[0].status).toBe("contradicted");
+  });
+
+  it("treats a claim with no stored counterpart as new, so it gets judged", () => {
+    const out = reconcileClaims([claim({ claimId: "brand-new" })], stored);
+    expect(out[0].status).toBe("pending");
+  });
+
+  /**
+   * Deleting the one bad claim is a COMPLETE fix, with no model call.
+   *
+   * Every surviving claim still holds the verdict it earned against its own quote, so the version is
+   * verified the moment the unsupported sentence is gone. Before, the save reset everything to
+   * 'unverified' and the lawyer had to pay for a full re-verification to learn what was already known.
+   */
+  it("verifies a save that only removed the unsupported claim", () => {
+    const out = reconcileClaims(
+      [claim({ claimId: "a" }), claim({ claimId: "b" })],
+      stored
+    );
+    expect(out.every((c) => c.status === "supported")).toBe(true);
+    expect(statusForClaims(out)).toBe("verified");
+  });
+
+  it("reports a body with a pending claim as unverified, not failed", () => {
+    const out = reconcileClaims(
+      [claim({ claimId: "a" }), claim({ claimId: "b", text: "Reformulée." })],
+      stored
+    );
+    expect(statusForClaims(out)).toBe("unverified");
+    // The pending claim is NOT counted as one a judge refused: 2 assertions, 1 supported, 0 refused.
+    expect(tallyClaims(out)).toEqual({
+      total: 2,
+      supported: 1,
+      unsupported: 0,
+      notChecked: 0,
+      pending: 1
+    });
+  });
+});
+
+describe("canKeepVerdict", () => {
+  it("keeps a standing supported verdict whose quote is still in the span", () => {
+    expect(canKeepVerdict(claim(), span(PASSAGE))).toBe(true);
+  });
+
+  /**
+   * Anything not already `supported` is re-judged — a pending claim because it has never been judged,
+   * and a refused one because the lawyer edited it precisely to get a second hearing. Carrying a
+   * rejection forward would mean the fix could never take effect.
+   */
+  it("re-judges every other status", () => {
     for (const status of [
+      "pending",
       "unsupported",
       "contradicted",
       "not_checked"
     ] as const) {
-      expect(canCarryForward(claim(), claim({ status }), span(PASSAGE))).toBe(
-        false
-      );
+      expect(canKeepVerdict(claim({ status }), span(PASSAGE))).toBe(false);
     }
   });
 
-  it("refuses when the claim was edited", () => {
-    expect(
-      canCarryForward(claim({ text: "Rewritten." }), claim(), span(PASSAGE))
-    ).toBe(false);
-  });
-
   /**
-   * THE case a carried-forward verdict must not paper over: the claim is untouched, but the passage
-   * under it is not. A pièce re-ingested with different OCR, or a rebuilt page index, can leave a
-   * verbatim quote no longer present in the span it was taken from — and a citation that no longer
-   * matches its source is exactly what gate 1 exists to catch. Gate 1 is free, so it runs even on
-   * the fast path.
+   * THE case a kept verdict must not paper over: the claim is untouched, but the passage under it is
+   * not. A pièce re-ingested with different OCR, or a rebuilt page index, can leave a verbatim quote
+   * no longer present in the span it was taken from — and a citation that no longer matches its source
+   * is exactly what gate 1 exists to catch. Gate 1 is free, so it runs even on the fast path.
    */
-  it("refuses when the quote is no longer in the span, even for an identical claim", () => {
+  it("refuses when the quote is no longer in the span", () => {
     expect(
-      canCarryForward(claim(), claim(), span("Un texte entièrement différent."))
+      canKeepVerdict(claim(), span("Un texte entièrement différent."))
     ).toBe(false);
   });
 
   it("refuses when the anchor no longer resolves to any span", () => {
-    expect(canCarryForward(claim(), claim(), undefined)).toBe(false);
+    expect(canKeepVerdict(claim(), undefined)).toBe(false);
   });
 
   it("refuses a claim with no citation at all", () => {
-    expect(
-      canCarryForward(
-        claim({ citation: null }),
-        claim({ citation: null }),
-        span(PASSAGE)
-      )
-    ).toBe(false);
+    expect(canKeepVerdict(claim({ citation: null }), span(PASSAGE))).toBe(
+      false
+    );
   });
 });

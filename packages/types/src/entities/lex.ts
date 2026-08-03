@@ -263,15 +263,25 @@ export interface LexArtifact {
 export type LexClaimKind = "assertion" | "argument" | "relief" | "heading";
 
 /**
- * `not_checked` is not a fourth way to fail. It means verification did not apply to this sentence
- * — it asserts no fact and cites nothing — and it is counted separately from the assertions so a
- * report can never present an unverifiable request as an unsupported fact.
+ * A claim's verdict. Two of these five are NOT ways of failing.
+ *
+ * `not_checked` means verification did not apply to this sentence — it asserts no fact and cites
+ * nothing — and it is counted separately from the assertions so a report can never present an
+ * unverifiable request as an unsupported fact.
+ *
+ * `pending` means this sentence was EDITED and has not been judged since. It exists because the
+ * alternative was to hold the "nothing here is verified" state at the version level, and that made
+ * one corrected paragraph discard the standing verdicts of every other paragraph in the document:
+ * fifteen sentences with valid citations rendered as "awaiting verification" because a sixteenth had
+ * been reworded. Verdicts are per-claim — each was established against its own quote, independently
+ * of every other — so staleness is per-claim too. Only the edited sentence goes back to the judge.
  */
 export type LexClaimStatus =
   | "supported"
   | "unsupported"
   | "contradicted"
-  | "not_checked";
+  | "not_checked"
+  | "pending";
 
 /** A single factual claim in a generated artifact, anchored to a source span (or flagged). */
 export interface LexArtifactClaim {
@@ -328,9 +338,17 @@ export interface LexArtifactVerificationReport {
    */
   total: number;
   supported: number;
+  /** Assertions a judge REFUSED. Does not include the ones still awaiting a verdict. */
   unsupported: number;
   /** Sentences verification did not apply to (argument, relief, heading). See LexClaimKind. */
   notChecked?: number;
+  /**
+   * Assertions edited since they were last judged. `total = supported + unsupported + pending`.
+   *
+   * Reported apart from `unsupported` because the two call for opposite actions: an unsupported
+   * claim needs the sentence corrected, a pending one needs nothing but a re-check.
+   */
+  pending?: number;
   /**
    * What the draft was written FROM. Absent on versions generated before this was recorded, and on
    * manual edits.

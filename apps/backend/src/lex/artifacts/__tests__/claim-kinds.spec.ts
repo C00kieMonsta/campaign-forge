@@ -70,7 +70,8 @@ describe("the evidence tally", () => {
       total: 3,
       supported: 2,
       unsupported: 1,
-      notChecked: 2
+      notChecked: 2,
+      pending: 0
     });
   });
 
@@ -79,7 +80,8 @@ describe("the evidence tally", () => {
       total: 0,
       supported: 0,
       unsupported: 0,
-      notChecked: 0
+      notChecked: 0,
+      pending: 0
     });
   });
 });

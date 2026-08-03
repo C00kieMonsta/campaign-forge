@@ -306,7 +306,19 @@ export const lexArtifactClaimSchema = z.object({
    * as `assertion` everywhere (see LexClaimKind).
    */
   kind: z.enum(["assertion", "argument", "relief", "heading"]).optional(),
-  status: z.enum(["supported", "unsupported", "contradicted", "not_checked"]),
+  /**
+   * Accepted on the wire but NEVER trusted: saveVersion recomputes every claim's status by diffing
+   * the submitted body against the stored one — an unchanged claim keeps the verdict the SERVER
+   * wrote, and a changed one is forced to `pending`. So a client cannot mark its own edit
+   * `supported`, which is the whole reason a citation chip can be believed.
+   */
+  status: z.enum([
+    "supported",
+    "unsupported",
+    "contradicted",
+    "not_checked",
+    "pending"
+  ]),
   reason: z.string().max(2000).nullish(),
   citation: z
     .object({
