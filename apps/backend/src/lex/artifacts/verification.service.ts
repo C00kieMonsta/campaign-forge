@@ -1,10 +1,18 @@
 import { Injectable } from "@nestjs/common";
+import type {
+  LexArtifactClaim,
+  LexArtifactVerificationReport,
+  LexClaimKind,
+  LexVerificationStatus
+} from "@packages/types";
 import { z } from "zod";
 import { OpenAiService } from "../../shared/openai.service";
 import type { RetrievedChunk } from "../ai/rag.service";
 
 export interface ClaimDraft {
   text: string;
+  /** What the sentence IS, which decides whether it is verified at all. See LexClaimKind. */
+  kind: LexClaimKind;
   sourceIndex: number | null; // 1-based into the frozen evidence pack
   quote: string;
 }
@@ -14,6 +22,71 @@ export interface ClaimVerdict {
   reason: string;
   source?: RetrievedChunk;
   quote?: string;
+}
+
+/**
+ * Whether verification simply does not apply to this sentence.
+ *
+ * TWO conditions, and the second is what keeps the first honest: a sentence is exempt only if it
+ * declares itself something other than a factual assertion AND cites nothing at all. A claim that
+ * came with a source is verified whatever it calls itself, so a drafter cannot relabel a shaky
+ * factual sentence as `argument` to smuggle its citation past the judge — it would still be judged,
+ * and the judge's question already separates a sentence's facts from its advocacy (JUDGE_SYSTEM).
+ *
+ * What remains, necessarily, is that an uncited sentence labelled `argument` is not checked. That
+ * is not closable here — it is the same freedom the drafter has to omit the sentence entirely — so
+ * it is handled by VISIBILITY instead: such claims are counted apart in the report and rendered
+ * with their kind on the page and in the export, where the lawyer signing the document sees that
+ * this sentence was filed as argument rather than as evidence.
+ *
+ * A missing kind means a draft from before kinds existed, where every sentence was judged as an
+ * assertion. It must keep being judged as one, so `undefined` is never exempt.
+ */
+export function isExemptFromVerification(
+  kind: LexClaimKind | undefined,
+  citesASource: boolean
+): boolean {
+  return !citesASource && kind !== undefined && kind !== "assertion";
+}
+
+/**
+ * The evidence counts for a body of claims: assertions only, with the exempt sentences apart.
+ *
+ * Shared by generation and re-verification so the two can never disagree about what "11/16" meant.
+ */
+export function tallyClaims(
+  claims: readonly LexArtifactClaim[]
+): Pick<
+  LexArtifactVerificationReport,
+  "total" | "supported" | "unsupported" | "notChecked"
+> {
+  const notChecked = claims.filter((c) => c.status === "not_checked").length;
+  const verifiable = claims.length - notChecked;
+  const supported = claims.filter((c) => c.status === "supported").length;
+  return {
+    total: verifiable,
+    supported,
+    unsupported: verifiable - supported,
+    notChecked
+  };
+}
+
+/**
+ * A version is `verified` only when every verifiable claim is supported.
+ *
+ * Still all-or-nothing on the FACTS — one sentence the file does not establish keeps a document out
+ * of a court filing, which is the whole point of the gate. What changed is the denominator: it is
+ * the assertions, not every sentence in the document.
+ *
+ * A body with no assertions at all is NOT verified. A court document that establishes nothing is
+ * either mis-labelled by the drafter or empty, and a green banner on it would be the most
+ * misleading state this system could produce.
+ */
+export function statusForClaims(
+  claims: readonly LexArtifactClaim[]
+): LexVerificationStatus {
+  const { total, supported } = tallyClaims(claims);
+  return total > 0 && supported === total ? "verified" : "failed";
 }
 
 const judgmentSchema = z.object({
@@ -115,10 +188,27 @@ export class VerificationService {
     ) {
       return { status: "unsupported", reason: "No valid source cited" };
     }
-    const source = pack[claim.sourceIndex - 1];
+    return this.verifyAgainstSource(
+      claim.text,
+      claim.quote,
+      pack[claim.sourceIndex - 1]
+    );
+  }
 
+  /**
+   * Both gates against a source span already resolved by the caller.
+   *
+   * Separated from verifyClaim so re-verification runs the SAME two gates: it starts from a stored
+   * citation's anchor rather than from an index into a freshly-retrieved pack, and a second copy of
+   * the gates is how the filing rule and the re-check rule drift apart.
+   */
+  async verifyAgainstSource(
+    text: string,
+    quote: string,
+    source: RetrievedChunk
+  ): Promise<ClaimVerdict> {
     // Gate 1: verbatim backstop against the exact chunk span.
-    if (!quoteMatchesChunk(claim.quote, source.content)) {
+    if (!quoteMatchesChunk(quote, source.content)) {
       return {
         status: "unsupported",
         reason: "Supporting quote not found verbatim in the cited source",
@@ -131,7 +221,7 @@ export class VerificationService {
       json: true,
       system: JUDGE_SYSTEM,
       user:
-        `SENTENCE: ${claim.text}\n\nQUOTE: ${claim.quote}\n\n` +
+        `SENTENCE: ${text}\n\nQUOTE: ${quote}\n\n` +
         `SOURCE DOCUMENT: ${source.filename}\n` +
         `SOURCE PASSAGE:\n${source.content.slice(0, MAX_JUDGE_CONTEXT_CHARS)}\n\n` +
         `Respond as JSON: {"supported": true|false, "reason": "one short sentence"}`
@@ -153,6 +243,6 @@ export class VerificationService {
     }
 
     if (!supported) return { status: "contradicted", reason, source };
-    return { status: "supported", reason, source, quote: claim.quote };
+    return { status: "supported", reason, source, quote };
   }
 }

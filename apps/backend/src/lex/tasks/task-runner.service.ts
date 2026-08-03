@@ -12,6 +12,7 @@ import type {
   LexTaskEventKind,
   LexTaskKind,
   LexTaskParams,
+  LexVerifyArtifactTaskParams,
   ReasoningDepth
 } from "@packages/types";
 import type OpenAI from "openai";
@@ -324,6 +325,10 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
       await this.generateArtifact(task, trace);
       return;
     }
+    if (task.kind === "verify_artifact") {
+      await this.verifyArtifact(task, trace);
+      return;
+    }
     if (task.kind !== "assess_documents" && task.kind !== "adverse_case") {
       throw new Error(`Unsupported task kind "${task.kind}"`);
     }
@@ -415,6 +420,64 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
       status: "done",
       resultMessageId: messageId,
       resultArtifactId: artifact.id
+    });
+  }
+
+  /**
+   * Re-verifies an edited draft, as a background run.
+   *
+   * A task for the same reason generation is one — a judge call per re-checked claim outruns
+   * nginx's 60s read timeout — and it reports no result into a conversation: the lawyer is looking
+   * at the document, which is where the new verdicts appear.
+   */
+  private async verifyArtifact(
+    task: ClaimedTaskRow,
+    trace: TaskTrace
+  ): Promise<void> {
+    const params = task.params as LexVerifyArtifactTaskParams | null;
+    if (!params?.artifactId) {
+      throw new Error("verify_artifact task names no artifact");
+    }
+
+    await this.emit(
+      task.id,
+      trace,
+      "progress",
+      `Re-verifying "${task.title}" against the case file`
+    );
+    await this.tasks.updateProgress(task.id, {
+      done: 0,
+      total: 1,
+      step: "reading the cited passages"
+    });
+
+    const { version, judged, carriedForward } = await this.artifacts.reverify(
+      task.owner_email,
+      params.artifactId,
+      async (p) => {
+        await this.tasks.updateProgress(task.id, {
+          done: p.done,
+          total: p.total,
+          step: `re-checking claim ${p.done}/${p.total}`
+        });
+      }
+    );
+
+    const report = version.verificationReport;
+    await this.emit(
+      task.id,
+      trace,
+      "progress",
+      // Both numbers, because they answer different questions: what the document now stands at, and
+      // how much of the re-check was actually paid for rather than carried forward from the last one.
+      (report
+        ? `${report.supported}/${report.total} claims established`
+        : "Re-verified") + ` — ${judged} re-judged, ${carriedForward} unchanged`
+    );
+
+    await this.tasks.finish(task.id, {
+      status: "done",
+      resultArtifactId: params.artifactId
     });
   }
 
@@ -1133,12 +1196,16 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
         if (!f) continue;
         await client.query(
           `INSERT INTO lex_citations
-             (owner_email, message_id, chunk_id, document_id, quote, page_from, page_to,
-              char_start, char_end)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+             (owner_email, message_id, marker_index, chunk_id, document_id, quote, page_from,
+              page_to, char_start, char_end)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           [
             task.owner_email,
             assistantId,
+            // The finding's number, which is the [n] the answer cites it by. An assessment over a
+            // large file cites into the [300]s, and without this the reader had a bracketed number
+            // with nothing behind it — see the marker_index migration.
+            n,
             f.chunk.chunkId,
             f.documentId,
             f.quote,

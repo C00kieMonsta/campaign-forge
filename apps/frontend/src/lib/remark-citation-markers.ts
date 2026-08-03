@@ -34,7 +34,7 @@ function citeNode(index: number): MdNode {
 }
 
 /** Splits one text node into alternating text and cite nodes. Returns null when no marker. */
-function splitText(node: MdNode, maxIndex: number): MdNode[] | null {
+function splitText(node: MdNode, known: ReadonlySet<number>): MdNode[] | null {
   const value = node.value ?? "";
   MARKER.lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -43,10 +43,10 @@ function splitText(node: MdNode, maxIndex: number): MdNode[] | null {
 
   while ((match = MARKER.exec(value)) !== null) {
     const index = Number(match[1]);
-    // Only bounded markers become citations: the model occasionally writes a bracketed number
-    // that is not a source (a date range, an article number), and an out-of-range chip would
-    // point at nothing.
-    if (index < 1 || index > maxIndex) continue;
+    // Only markers with a citation behind them become chips: the model occasionally writes a
+    // bracketed number that is not a source (a date range, an article number), and a chip that
+    // opens nothing is worse than plain text.
+    if (!known.has(index)) continue;
     if (match.index > cursor) {
       out.push({ type: "text", value: value.slice(cursor, match.index) });
     }
@@ -61,7 +61,7 @@ function splitText(node: MdNode, maxIndex: number): MdNode[] | null {
   return out;
 }
 
-function walk(node: MdNode | undefined, maxIndex: number): void {
+function walk(node: MdNode | undefined, known: ReadonlySet<number>): void {
   if (!node?.children) return;
   const next: MdNode[] = [];
   for (const child of node.children) {
@@ -70,7 +70,7 @@ function walk(node: MdNode | undefined, maxIndex: number): void {
       continue;
     }
     if (child.type === "text") {
-      const split = splitText(child, maxIndex);
+      const split = splitText(child, known);
       if (split) {
         next.push(...split);
         continue;
@@ -78,7 +78,7 @@ function walk(node: MdNode | undefined, maxIndex: number): void {
       next.push(child);
       continue;
     }
-    walk(child, maxIndex);
+    walk(child, known);
     next.push(child);
   }
   node.children = next;
@@ -86,16 +86,24 @@ function walk(node: MdNode | undefined, maxIndex: number): void {
 
 /**
  * A unified/remark PLUGIN: it takes options and returns the transformer. Register it in the tuple
- * form — `[remarkCitationMarkers, { maxIndex }]` — never pre-invoked, or unified calls the
+ * form — `[remarkCitationMarkers, { indexes }]` — never pre-invoked, or unified calls the
  * transformer itself with no arguments.
  *
- * `maxIndex` is the number of sources known for the message; markers above it stay plain text.
+ * `indexes` are the marker numbers this message actually has a citation for. A SET, not a ceiling:
+ * the bound used to be `maxIndex = citations.length`, which silently assumed the markers were
+ * 1..N. They are not — they are positions in the source list assembled for that one call, so an
+ * assessment over a large case file cites [249] and [397] while holding a dozen citations. Every
+ * one of those markers failed `index > maxIndex` and rendered as bare digits, which is precisely
+ * the reference a lawyer cannot trace. Membership answers the question the ceiling was guessing at.
+ *
  * Options are optional and the tree is checked, so a mis-registration degrades to "no citation
  * chips" instead of throwing inside render and blanking the conversation.
  */
-export function remarkCitationMarkers(options?: { maxIndex?: number }) {
-  const maxIndex = options?.maxIndex ?? 0;
+export function remarkCitationMarkers(options?: {
+  indexes?: Iterable<number>;
+}) {
+  const known = new Set(options?.indexes ?? []);
   return (tree?: MdNode): void => {
-    if (maxIndex > 0) walk(tree, maxIndex);
+    if (known.size > 0) walk(tree, known);
   };
 }

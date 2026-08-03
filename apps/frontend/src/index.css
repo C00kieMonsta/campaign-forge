@@ -296,3 +296,31 @@
   vertical-align: super;
   cursor: help;
 }
+
+/* A marker that resolves to a citation is a control, not a footnote: it opens the pièce at the
+   cited page. Styled to LOOK clickable — an underline and a pointer — because a reference the
+   reader does not know they can follow is one they will not follow. */
+.lex-markdown .lex-cite:has(.lex-cite-button) {
+  background: hsl(var(--primary) / 0.12);
+  color: hsl(var(--primary));
+  cursor: pointer;
+}
+.lex-markdown .lex-cite-button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.1em;
+}
+.lex-markdown .lex-cite:has(.lex-cite-button):hover {
+  background: hsl(var(--primary) / 0.2);
+}
+.lex-markdown .lex-cite-button:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 1px;
+  border-radius: 999px;
+}

@@ -241,12 +241,48 @@ export interface LexArtifact {
   updatedAt: string;
 }
 
-export type LexClaimStatus = "supported" | "unsupported" | "contradicted";
+/**
+ * WHAT a sentence in a drafted document is, which decides whether citing it is even meaningful.
+ *
+ * A court document is not a list of facts. It states facts, argues from them, and then asks the
+ * court for something — and only the first of those can be established by a quote from the case
+ * file. Without this distinction every sentence was graded on the same evidentiary scale, so
+ * "Il est proposé de demander au Tribunal de reconnaître l'accord" came back `unsupported` and
+ * dragged an otherwise sound draft to `failed`, with nothing the drafter could do about it: no
+ * pièce in any case file says what her client will request.
+ *
+ * Only `assertion` is verified. The other three are the document's own voice:
+ *   argument  what a party contends or infers, stated as advocacy rather than as fact.
+ *   relief    what the court is asked to order — a prayer for relief or a procedural request.
+ *   heading   a title, a transition, a section label. Structure, asserting nothing.
+ *
+ * NOT a loophole: the exemption applies only to a claim that cites NOTHING (see
+ * isExemptFromVerification). A claim carrying a quote is verified whatever it calls itself, so
+ * labelling a sentence `argument` cannot launder a citation the quote does not support.
+ */
+export type LexClaimKind = "assertion" | "argument" | "relief" | "heading";
+
+/**
+ * `not_checked` is not a fourth way to fail. It means verification did not apply to this sentence
+ * — it asserts no fact and cites nothing — and it is counted separately from the assertions so a
+ * report can never present an unverifiable request as an unsupported fact.
+ */
+export type LexClaimStatus =
+  | "supported"
+  | "unsupported"
+  | "contradicted"
+  | "not_checked";
 
 /** A single factual claim in a generated artifact, anchored to a source span (or flagged). */
 export interface LexArtifactClaim {
   claimId: string;
   text: string;
+  /**
+   * Absent on versions generated before kinds existed, where every sentence was drafted and
+   * judged as a factual assertion. Readers must therefore default a missing kind to `assertion`
+   * rather than to "exempt", or a re-verification would silently stop checking old drafts.
+   */
+  kind?: LexClaimKind;
   status: LexClaimStatus;
   citation?: {
     chunkId: string;
@@ -283,9 +319,18 @@ export interface LexArtifactSource {
 }
 
 export interface LexArtifactVerificationReport {
+  /**
+   * The VERIFIABLE claims — the factual assertions. Not the sentence count.
+   *
+   * These three counts describe the document's evidence, so a sentence that asserts no fact has
+   * no place in them: including the prayer for relief in `total` and in `unsupported` is what
+   * reported a sound draft as "11/16" and blocked it from filing.
+   */
   total: number;
   supported: number;
   unsupported: number;
+  /** Sentences verification did not apply to (argument, relief, heading). See LexClaimKind. */
+  notChecked?: number;
   /**
    * What the draft was written FROM. Absent on versions generated before this was recorded, and on
    * manual edits.
@@ -405,7 +450,20 @@ export type LexTaskKind =
    * and then each claim gets its own frontier-model judge, and nginx's default 60s read timeout on
    * the catch-all location cut that off long before it finished.
    */
-  | "generate_artifact";
+  | "generate_artifact"
+  /**
+   * Re-verify an edited draft, so a corrected claim can reach `verified` again.
+   *
+   * Without this the edit path was a one-way door: saving a version resets it to `unverified`,
+   * sign-off requires `verified`, and nothing could ever produce that second `verified`. Fixing a
+   * claim therefore made the document permanently unfilable.
+   *
+   * A task for the SAME reason as generation, not for symmetry: the judge runs on the frontier
+   * tier with reasoning, so a re-check of a rewritten sixteen-claim draft is sixteen of those
+   * calls and would meet nginx's 60s read timeout — as a 504 with no CORS header, which the
+   * browser reports as a CORS failure and hides the cause.
+   */
+  | "verify_artifact";
 
 /** What a `generate_artifact` run needs beyond the title and instructions every task has. */
 export interface LexArtifactTaskParams {
@@ -415,7 +473,15 @@ export interface LexArtifactTaskParams {
   sourceMode?: "search" | "full";
 }
 
-export type LexTaskParams = LexArtifactTaskParams | Record<string, never>;
+/** Which document a `verify_artifact` run re-checks. Its current version is the one verified. */
+export interface LexVerifyArtifactTaskParams {
+  artifactId: string;
+}
+
+export type LexTaskParams =
+  | LexArtifactTaskParams
+  | LexVerifyArtifactTaskParams
+  | Record<string, never>;
 
 export interface LexTask {
   id: string;

@@ -158,7 +158,12 @@ export const createTaskRequestSchema = z
     workspaceId: z.string().uuid(),
     conversationId: z.string().uuid().optional(),
     kind: z
-      .enum(["assess_documents", "adverse_case", "generate_artifact"])
+      .enum([
+        "assess_documents",
+        "adverse_case",
+        "generate_artifact",
+        "verify_artifact"
+      ])
       .default("assess_documents"),
     title: z.string().min(1).max(300),
     instructions: z.string().max(4000).optional(),
@@ -172,24 +177,41 @@ export const createTaskRequestSchema = z
      */
     depth: z.enum(["quick", "standard", "thorough"]).default("thorough"),
     /**
-     * Kind-specific inputs. Required by `generate_artifact`, unused by the assessments.
+     * Kind-specific inputs. Required by `generate_artifact` and `verify_artifact`, unused by the
+     * assessments.
      *
      * Validated as its own object rather than folded into the top level so the assessment kinds
      * cannot be handed a `sourceMode` that nothing reads — a field accepted and ignored is the same
      * class of lie as the two mode toggles that could both be lit.
+     *
+     * Every field is optional HERE and required by the refinements below, per kind. Two kinds now
+     * fill this column with disjoint shapes, and the alternative — a discriminated union keyed on
+     * the sibling `kind` — is not expressible in one zod object. So the requirement lives in the
+     * refinements, where the message can name the kind that is missing what.
      */
     params: z
       .object({
-        type: z.enum(["memo", "chronology", "submission"]),
+        type: z.enum(["memo", "chronology", "submission"]).optional(),
         documentIds: z.array(z.string().uuid()).max(500).optional(),
-        sourceMode: z.enum(["search", "full"]).default("search")
+        sourceMode: z.enum(["search", "full"]).default("search"),
+        artifactId: z.string().uuid().optional()
       })
       .optional()
   })
-  .refine((v) => v.kind !== "generate_artifact" || v.params !== undefined, {
-    message: "generate_artifact requires params",
-    path: ["params"]
-  });
+  .refine(
+    (v) => v.kind !== "generate_artifact" || v.params?.type !== undefined,
+    {
+      message: "generate_artifact requires params.type",
+      path: ["params", "type"]
+    }
+  )
+  .refine(
+    (v) => v.kind !== "verify_artifact" || v.params?.artifactId !== undefined,
+    {
+      message: "verify_artifact requires params.artifactId",
+      path: ["params", "artifactId"]
+    }
+  );
 /** What a CLIENT sends — `z.input`, so `depth`'s default does not become required. */
 export type CreateTaskRequest = z.input<typeof createTaskRequestSchema>;
 /**
@@ -278,7 +300,13 @@ export const ARTIFACT_PACK_SIZE: Record<"search" | "full", number> = {
 export const lexArtifactClaimSchema = z.object({
   claimId: z.string(),
   text: z.string(),
-  status: z.enum(["supported", "unsupported", "contradicted"]),
+  /**
+   * Optional on the wire, and deliberately so: a body saved from a version drafted before kinds
+   * existed carries none, and rejecting it would make old drafts uneditable. A missing kind reads
+   * as `assertion` everywhere (see LexClaimKind).
+   */
+  kind: z.enum(["assertion", "argument", "relief", "heading"]).optional(),
+  status: z.enum(["supported", "unsupported", "contradicted", "not_checked"]),
   reason: z.string().max(2000).nullish(),
   citation: z
     .object({
@@ -298,7 +326,17 @@ export const lexArtifactBodySchema = z.object({
 });
 
 export const saveArtifactRequestSchema = z.object({
-  bodyJson: lexArtifactBodySchema
+  bodyJson: lexArtifactBodySchema,
+  /**
+   * Claims the editor is deleting ON PURPOSE even though the saved version cites them.
+   *
+   * The server refuses to drop a cited claim, because a citation disappearing from a court draft
+   * without anyone saying so is the one edit that must never be silent. That guarantee is about
+   * SILENCE, not about permanence — so the acknowledgement is the escape hatch, and it costs one
+   * request instead of forcing the client to strip each citation in a separate round trip first.
+   * A claim cited but neither present nor listed here is still refused.
+   */
+  dropCitedClaimIds: z.array(z.string()).max(500).optional()
 });
 export type SaveArtifactRequest = z.infer<typeof saveArtifactRequestSchema>;
 

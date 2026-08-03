@@ -16,9 +16,17 @@ const source = (index: number, over: Partial<LexCitationEvent> = {}) =>
     ...over
   }) as LexCitationEvent;
 
-function render(content: string, citations: LexCitationEvent[] = []) {
+function render(
+  content: string,
+  citations: LexCitationEvent[] = [],
+  onTrace?: (c: LexCitationEvent) => void
+) {
   return renderToStaticMarkup(
-    <MarkdownMessage content={content} citations={citations} />
+    <MarkdownMessage
+      content={content}
+      citations={citations}
+      onTrace={onTrace}
+    />
   );
 }
 
@@ -64,6 +72,37 @@ describe("MarkdownMessage", () => {
     const html = render("Aucune source ici [1].", []);
     expect(html).not.toContain("lex-cite");
     expect(html).toContain("[1]");
+  });
+
+  /**
+   * SPARSE markers — the bug that made an assessment's references untraceable.
+   *
+   * Markers are positions in the source list of the call that wrote the answer, not 1..N. An adverse
+   * read over a large case file cites [249] and [397] while carrying a handful of citations, and the
+   * plugin used to be bounded by `citations.length` — so every one of those markers rendered as bare
+   * digits, and a lawyer reading a filed document had references pointing at nothing.
+   */
+  it("chips markers numbered far above the citation count", () => {
+    const html = render("Les attestations [249] et le refus [410].", [
+      source(249),
+      source(410)
+    ]);
+    expect(html.match(/class="lex-cite"/g)).toHaveLength(2);
+    expect(html).toContain("piece-249.pdf, p.249");
+  });
+
+  // A reference must be FOLLOWABLE, not merely labelled: with a handler the chip is a button that
+  // opens the pièce at the cited page. Hovering to read a filename is not tracing a citation.
+  it("renders a resolvable marker as a button when it can be traced", () => {
+    const html = render("Établie [1].", [source(1)], () => undefined);
+    expect(html).toContain("lex-cite-button");
+    expect(html).toContain("<button");
+  });
+
+  it("renders a plain chip when there is nowhere to trace to", () => {
+    const html = render("Établie [1].", [source(1)]);
+    expect(html).toContain('class="lex-cite"');
+    expect(html).not.toContain("<button");
   });
 
   // Safety invariants — this is model output.

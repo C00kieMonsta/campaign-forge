@@ -346,8 +346,43 @@ export const translations = {
       readingFullHint:
         "Jusqu'à {n} passages de la sélection. Nettement plus lent et plus coûteux.",
       claimNotCarried: "La citation n'établit pas ce qui est affirmé",
+      // Les quatre natures de phrase. Seule une « affirmation » est vérifiée contre le dossier :
+      // une demande au Tribunal ou un titre n'affirme aucun fait qu'une pièce pourrait établir.
+      claimKind: {
+        assertion: "Affirmation",
+        argument: "Argument",
+        relief: "Demande",
+        heading: "Intertitre"
+      },
+      notCheckedCount: "non vérifiable(s)",
+      notCheckedHint:
+        "Cette phrase n'affirme aucun fait du dossier : elle n'est donc ni sourcée ni comptée comme non établie.",
+      editClaims: "Corriger le texte",
+      saveChanges: "Enregistrer",
+      removeClaim: "Retirer ce passage",
+      removeCitation: "Retirer la citation",
+      confirmRemoveClaim: "Retirer ce passage du document ?",
+      confirmRemoveCitedClaim:
+        "Ce passage est sourcé. Le retirer supprime aussi sa citation du document. Continuer ?",
+      editingHint:
+        "Corrigez ou retirez les passages, ou changez leur nature. À l'enregistrement, une nouvelle version est créée et doit être revérifiée avant dépôt.",
+      savedNeedsReverify: "Version enregistrée — lancez la vérification",
+      needsReverify: "Modifié — vérification à relancer",
+      claimPendingReverify: "En attente de vérification",
+      reverify: "Vérifier",
+      reverifyQueued: "Vérification lancée…",
+      reverifyDone: "Vérification terminée",
+      reverifyFailed: "La vérification a échoué",
+      signedOffReadOnly:
+        "Document signé : créez une nouvelle version pour le modifier.",
+      filingNeedsReverify:
+        "Export pour dépôt indisponible : le document a été modifié et doit être revérifié.",
+      citedPassage: "Passage cité",
+      openAtPage: "Ouvrir la pièce à la page citée",
+      sourceUnavailable:
+        "Pièce introuvable : elle a été supprimée ou remplacée par un doublon.",
       filingNeedsVerified:
-        "Export pour dépôt indisponible : {n} affirmation(s) ne sont pas établies par leur citation. Corrigez-les ou retirez-les, puis validez et signez.",
+        "Export pour dépôt indisponible : {n} affirmation(s) ne sont pas établies par leur citation. Corrigez-les, retirez-les ou changez leur nature, puis relancez la vérification.",
       filingNeedsSignOff:
         "Export pour dépôt indisponible : le document est vérifié mais pas encore validé et signé.",
       signOffNeedsVerified:
@@ -1065,8 +1100,43 @@ export const translations = {
       readingFullHint:
         "Tot {n} passages uit de selectie. Merkbaar trager en duurder.",
       claimNotCarried: "Het citaat staaft niet wat wordt beweerd",
+      // De vier soorten zinnen. Enkel een "bewering" wordt tegen het dossier gecontroleerd: een
+      // vordering aan de rechtbank of een tussentitel beweert geen feit dat een stuk kan staven.
+      claimKind: {
+        assertion: "Bewering",
+        argument: "Argument",
+        relief: "Vordering",
+        heading: "Tussentitel"
+      },
+      notCheckedCount: "niet-controleerbaar",
+      notCheckedHint:
+        "Deze zin beweert geen feit uit het dossier: ze wordt dus niet gestaafd en ook niet als ongestaafd geteld.",
+      editClaims: "Tekst corrigeren",
+      saveChanges: "Opslaan",
+      removeClaim: "Deze passage verwijderen",
+      removeCitation: "Citaat verwijderen",
+      confirmRemoveClaim: "Deze passage uit het document verwijderen?",
+      confirmRemoveCitedClaim:
+        "Deze passage is gestaafd. Verwijderen wist ook haar citaat uit het document. Doorgaan?",
+      editingHint:
+        "Corrigeer of verwijder passages, of wijzig hun soort. Bij opslaan wordt een nieuwe versie gemaakt die opnieuw gecontroleerd moet worden vóór neerlegging.",
+      savedNeedsReverify: "Versie opgeslagen — start de controle",
+      needsReverify: "Gewijzigd — controle opnieuw uitvoeren",
+      claimPendingReverify: "Wacht op controle",
+      reverify: "Controleren",
+      reverifyQueued: "Controle gestart…",
+      reverifyDone: "Controle afgerond",
+      reverifyFailed: "De controle is mislukt",
+      signedOffReadOnly:
+        "Ondertekend document: maak een nieuwe versie om het te wijzigen.",
+      filingNeedsReverify:
+        "Export voor neerlegging niet beschikbaar: het document is gewijzigd en moet opnieuw gecontroleerd worden.",
+      citedPassage: "Aangehaalde passage",
+      openAtPage: "Stuk openen op de aangehaalde pagina",
+      sourceUnavailable:
+        "Stuk niet gevonden: het is verwijderd of vervangen door een duplicaat.",
       filingNeedsVerified:
-        "Export voor neerlegging niet beschikbaar: {n} bewering(en) worden niet gestaafd door hun citaat. Corrigeer of verwijder ze, en onderteken daarna.",
+        "Export voor neerlegging niet beschikbaar: {n} bewering(en) worden niet gestaafd door hun citaat. Corrigeer ze, verwijder ze of wijzig hun soort, en start daarna de controle opnieuw.",
       filingNeedsSignOff:
         "Export voor neerlegging niet beschikbaar: het document is geverifieerd maar nog niet ondertekend.",
       signOffNeedsVerified:

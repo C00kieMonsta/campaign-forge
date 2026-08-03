@@ -31,12 +31,18 @@ const INTERNAL_PATH = /^\/lex\/artifacts\/[0-9a-f-]{36}$/i;
  */
 export const MarkdownMessage = memo(function MarkdownMessage({
   content,
-  citations
+  citations,
+  onTrace
 }: {
   content: string;
   citations: LexCitationEvent[];
+  /**
+   * Opens the cited passage in its document. Without it a marker is a dead end: the tooltip could
+   * name the pièce and the page, and the reader still had to go and find it by hand.
+   */
+  onTrace?: (citation: LexCitationEvent) => void;
 }) {
-  // Marker → the source it points at, so a chip can name its document on hover.
+  // Marker → the source it points at, so a chip can name its document and open it.
   const byIndex = useMemo(() => {
     const map = new Map<number, LexCitationEvent>();
     for (const c of citations) if (c.index) map.set(c.index, c);
@@ -47,9 +53,23 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   // options to obtain a transformer. Passing `remarkCitationMarkers({...})` handed it an
   // already-built transformer, which unified then called with no arguments — so the transformer
   // received `tree === undefined` and threw, taking the whole conversation view down with it.
+  //
+  // The keys of `byIndex`, not a count: markers are positions in the source list of the call that
+  // wrote the answer, so they are sparse ([249], [397]) and a ceiling of `citations.length` left
+  // nearly all of them as plain digits. See remarkCitationMarkers.
+  const markerKey = useMemo(
+    () => [...byIndex.keys()].sort((a, b) => a - b).join(","),
+    [byIndex]
+  );
   const plugins = useMemo<PluggableList>(
-    () => [remarkGfm, [remarkCitationMarkers, { maxIndex: citations.length }]],
-    [citations.length]
+    () => [
+      remarkGfm,
+      [
+        remarkCitationMarkers,
+        { indexes: markerKey ? markerKey.split(",").map(Number) : [] }
+      ]
+    ],
+    [markerKey]
   );
 
   const components = useMemo<Components>(
@@ -74,21 +94,39 @@ export const MarkdownMessage = memo(function MarkdownMessage({
           (props as Record<string, unknown>)["data-cite"] ?? 0
         );
         const source = byIndex.get(index);
+        // The marker carries WHAT it points at, not just a number. A bare [397] is unreadable in a
+        // legal document — the reader cannot tell an exhibit reference from an article number — so
+        // the chip shows the pièce and page it resolves to and opens it on click. The number stays,
+        // because it is what ties the sentence to the reference list underneath.
+        const label = source
+          ? `${source.filename ?? "source"}${source.pageFrom ? `, p.${source.pageFrom}` : ""}`
+          : null;
+        const title = source
+          ? `${label}${source.quote ? `\n\n« ${source.quote} »` : ""}`
+          : undefined;
+        if (!source || !onTrace) {
+          return (
+            <sup className="lex-cite" title={title}>
+              {children as ReactNode}
+            </sup>
+          );
+        }
         return (
-          <sup
-            className="lex-cite"
-            title={
-              source
-                ? `${source.filename ?? "source"}${source.pageFrom ? `, p.${source.pageFrom}` : ""}${source.quote ? `\n\n${source.quote}` : ""}`
-                : undefined
-            }
-          >
-            {children as ReactNode}
+          <sup className="lex-cite">
+            <button
+              type="button"
+              onClick={() => onTrace(source)}
+              title={title}
+              aria-label={`${label} — ${index}`}
+              className="lex-cite-button"
+            >
+              {children as ReactNode}
+            </button>
           </sup>
         );
       }
     }),
-    [byIndex]
+    [byIndex, onTrace]
   );
 
   return (

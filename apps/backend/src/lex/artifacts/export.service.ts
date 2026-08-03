@@ -46,6 +46,14 @@ export class ExportService {
           });
           return `<p>${esc(c.text)}<sup>[${n}]</sup></p>`;
         }
+        // A sentence verification did not apply to is NOT an unsupported one, and stamping it
+        // "[UNSUPPORTED — not for filing]" was the same category error as counting it against the
+        // document: it reads as a defect in the draft when it is a request to the court. It carries
+        // no footnote — there is nothing to cite — and its kind instead, so a reader can see the
+        // document's own voice separated from what the file establishes.
+        if (c.status === "not_checked") {
+          return `<p class="unchecked">${esc(c.text)} <span class="kind">[${esc(c.kind ?? "argument")}]</span></p>`;
+        }
         return `<p class="unsupported">${esc(c.text)} <span class="flag">[UNSUPPORTED — not for filing]</span></p>`;
       })
       .join("\n");
@@ -73,6 +81,7 @@ export class ExportService {
   sup { color: #b45309; font-size: 0.75em; }
   .meta { color: #666; font-size: 12px; margin-bottom: 24px; }
   .unsupported { color: #991b1b; } .flag { font-size: 0.8em; font-weight: bold; }
+  .unchecked .kind { color: #6b7280; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; }
   ol li { margin-bottom: 6px; font-size: 13px; color: #333; }
   .watermark { position: fixed; top: 40%; left: 50%; transform: translate(-50%,-50%) rotate(-30deg);
     font-size: 64px; color: rgba(200,0,0,0.12); font-weight: bold; pointer-events: none; z-index: 0; }

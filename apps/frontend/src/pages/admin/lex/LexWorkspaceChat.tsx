@@ -320,28 +320,71 @@ const DocumentRow = memo(function DocumentRow({
   );
 });
 
+/**
+ * The reference list for one answer: every marker in it, in order, with what it points at.
+ *
+ * The counterpart to the inline chips, and the reason the numbers in the text mean anything. It was
+ * a row of hover-only pills before, which asked the reader to mouse over each one to discover the
+ * pièce and offered nothing to click — so a reference could be read but not followed. Now each
+ * entry states its marker, its pièce and its page, shows the quote, and opens the page.
+ */
 const SourceChips = memo(function SourceChips({
-  citations
+  citations,
+  onTrace
 }: {
   citations: LexCitationEvent[];
+  onTrace?: (citation: LexCitationEvent) => void;
 }) {
   const { t } = useLanguage();
   if (citations.length === 0) return null;
+  // By marker, so the list reads in the order the answer cites them.
+  const ordered = [...citations].sort(
+    (a, b) => (a.index ?? 0) - (b.index ?? 0)
+  );
   return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
-      <span className="text-xs text-muted-foreground mr-1">
-        {t.lex.sources}:
-      </span>
-      {citations.map((c) => (
-        <span
-          key={`${c.chunkId}-${c.index ?? 0}`}
-          title={c.quote ?? ""}
-          className="text-xs px-2 py-0.5 rounded-full bg-muted text-foreground/80"
-        >
-          [{c.index ?? "?"}] {c.filename ?? "source"}
-          {c.pageFrom ? `, p.${c.pageFrom}` : ""}
-        </span>
-      ))}
+    <div className="mt-3 border-t pt-2">
+      <div className="text-xs font-medium text-muted-foreground mb-1">
+        {t.lex.referencesLabel}
+      </div>
+      <ol className="space-y-1">
+        {ordered.map((c) => (
+          <li
+            key={`${c.chunkId}-${c.index ?? 0}`}
+            className="text-xs flex gap-2 items-baseline"
+          >
+            <span className="tabular-nums text-muted-foreground shrink-0">
+              [{c.index ?? "?"}]
+            </span>
+            <span className="min-w-0">
+              {onTrace ? (
+                <button
+                  type="button"
+                  onClick={() => onTrace(c)}
+                  className="text-left font-medium underline decoration-dotted hover:text-primary"
+                  title={t.lex.openAtPage}
+                >
+                  {c.filename ?? "source"}
+                  {c.pageFrom ? `, p.${c.pageFrom}` : ""}
+                </button>
+              ) : (
+                <span className="font-medium">
+                  {c.filename ?? "source"}
+                  {c.pageFrom ? `, p.${c.pageFrom}` : ""}
+                </span>
+              )}
+              {/* Visible, not a tooltip: the quote is what lets a reader judge whether the
+                  reference actually supports the sentence without opening anything. */}
+              {c.quote ? (
+                <span className="text-muted-foreground italic">
+                  {" — « "}
+                  {c.quote}
+                  {" »"}
+                </span>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 });
@@ -529,10 +572,31 @@ export default function LexWorkspaceChat() {
         .join(","),
     [tasks]
   );
+  /**
+   * Loads a page of messages AND the citations that make its [n] markers traceable.
+   *
+   * Every path into the thread goes through here — first open, "load earlier", a finished run
+   * landing, a reply just sent — because a page loaded without its citations renders every
+   * reference in it as inert digits, and that is exactly the bug that made an assessment
+   * untraceable: the citations only ever arrived on the live SSE stream, so an answer written by a
+   * background run had none, and any answer at all lost them on reload.
+   */
+  const loadMessages = useCallback(
+    async (conversationId: string, beforeSeq?: number) => {
+      const { hasMore, citations } =
+        await controllers.conversations.loadMessages(conversationId, beforeSeq);
+      // Merged, not replaced: paging backwards accumulates messages, so it must accumulate their
+      // references too.
+      setCitationsByMessage((prev) => ({ ...prev, ...citations }));
+      return { hasMore };
+    },
+    [controllers]
+  );
+
   useEffect(() => {
     if (!activeConvId || landedResults.length === 0) return;
-    void controllers.conversations.loadMessages(activeConvId);
-  }, [landedResults, activeConvId, controllers]);
+    void loadMessages(activeConvId);
+  }, [landedResults, activeConvId, loadMessages]);
 
   useEffect(() => {
     controllers.tasks.loadForWorkspace(id).catch(() => {
@@ -591,10 +655,7 @@ export default function LexWorkspaceChat() {
     if (loadingOlder || messages.length === 0 || !activeConvId) return;
     setLoadingOlder(true);
     try {
-      const { hasMore } = await controllers.conversations.loadMessages(
-        activeConvId,
-        messages[0].seq
-      );
+      const { hasMore } = await loadMessages(activeConvId, messages[0].seq);
       setHasOlder(hasMore);
     } catch (err) {
       toast({ title: errorMessage(err), variant: "destructive" });
@@ -621,6 +682,14 @@ export default function LexWorkspaceChat() {
   const [openVoiceNote, setOpenVoiceNote] = useState<LexDocument | null>(null);
   // The document open in the modal viewer — a one-off look.
   const [openDoc, setOpenDoc] = useState<LexDocument | null>(null);
+  /**
+   * The reference being traced: which page to open at, and the quote being checked.
+   *
+   * Separate from `openDoc` because it is a different intent. Opening a pièce from the list is
+   * "let me read this"; following a [n] is "show me the passage this sentence rests on", and it
+   * must land on the page rather than at the top of a 200-page filing.
+   */
+  const [tracing, setTracing] = useState<LexCitationEvent | null>(null);
   // Documents held open as tabs in the right-hand panel, and which tab is showing.
   const [pinnedDocs, setPinnedDocs] = useState<LexDocument[]>([]);
   const [activePinnedId, setActivePinnedId] = useState<string | null>(null);
@@ -660,9 +729,7 @@ export default function LexWorkspaceChat() {
           (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")
         )[0];
         setActiveConvId(active.id);
-        const { hasMore } = await controllers.conversations.loadMessages(
-          active.id
-        );
+        const { hasMore } = await loadMessages(active.id);
         if (!cancelled) setHasOlder(hasMore);
       } catch (err) {
         if (!cancelled)
@@ -672,7 +739,7 @@ export default function LexWorkspaceChat() {
     return () => {
       cancelled = true;
     };
-  }, [id, controllers, toast]);
+  }, [id, controllers, loadMessages, toast]);
 
   // Poll while any document is still ingesting.
   const anyInProgress = useMemo(
@@ -988,7 +1055,7 @@ export default function LexWorkspaceChat() {
         depth
       );
       // Pull the persisted user + assistant messages into the store, then drop the local echo.
-      await controllers.conversations.loadMessages(convId);
+      await loadMessages(convId);
     } catch (err) {
       toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
@@ -999,6 +1066,32 @@ export default function LexWorkspaceChat() {
       setPendingUser(null);
     }
   };
+
+  /**
+   * Follows a reference to the passage behind it.
+   *
+   * The pièce is resolved from the loaded documents by id, and a citation whose document is gone
+   * (deleted, or superseded as a duplicate) says so instead of opening an empty viewer — an
+   * untraceable reference must be reported, not silently ignored.
+   */
+  /** Opening a pièce to read it, not to check a reference — so any page/quote target is cleared. */
+  const handleOpenDoc = useCallback((doc: LexDocument) => {
+    setTracing(null);
+    setOpenDoc(doc);
+  }, []);
+
+  const handleTrace = useCallback(
+    (citation: LexCitationEvent) => {
+      const target = documents.find((d) => d.id === citation.documentId);
+      if (!target) {
+        toast({ title: t.lex.sourceUnavailable, variant: "destructive" });
+        return;
+      }
+      setTracing(citation);
+      setOpenDoc(target);
+    },
+    [documents, t, toast]
+  );
 
   const genDocIdSet = useMemo(() => new Set(genDocIds), [genDocIds]);
 
@@ -1327,7 +1420,7 @@ export default function LexWorkspaceChat() {
                     selected={selectedDocs.includes(primary.id)}
                     onSelect={toggleDocSelected}
                     onOpen={(d) =>
-                      isVoiceNote(d) ? setOpenVoiceNote(d) : setOpenDoc(d)
+                      isVoiceNote(d) ? setOpenVoiceNote(d) : handleOpenDoc(d)
                     }
                     onPin={pinDocument}
                     isPinned={pinnedDocs.some((p) => p.id === primary.id)}
@@ -1347,7 +1440,9 @@ export default function LexWorkspaceChat() {
                         selected={selectedDocs.includes(dupe.id)}
                         onSelect={toggleDocSelected}
                         onOpen={(d) =>
-                          isVoiceNote(d) ? setOpenVoiceNote(d) : setOpenDoc(d)
+                          isVoiceNote(d)
+                            ? setOpenVoiceNote(d)
+                            : handleOpenDoc(d)
                         }
                         onPin={pinDocument}
                         isPinned={pinnedDocs.some((p) => p.id === dupe.id)}
@@ -1414,8 +1509,12 @@ export default function LexWorkspaceChat() {
                     <MarkdownMessage
                       content={m.content}
                       citations={citationsByMessage[m.id] ?? []}
+                      onTrace={handleTrace}
                     />
-                    <SourceChips citations={citationsByMessage[m.id] ?? []} />
+                    <SourceChips
+                      citations={citationsByMessage[m.id] ?? []}
+                      onTrace={handleTrace}
+                    />
                     <div className="mt-1.5 flex justify-end opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                       <button
                         onClick={() => void handleCopyMessage(m.content)}
@@ -1447,6 +1546,7 @@ export default function LexWorkspaceChat() {
                     <MarkdownMessage
                       content={throttledStreamText}
                       citations={streamCitations}
+                      onTrace={handleTrace}
                     />
                   ) : (
                     <span className="inline-flex items-center gap-2 text-muted-foreground">
@@ -1454,7 +1554,10 @@ export default function LexWorkspaceChat() {
                       {t.lex.thinking}
                     </span>
                   )}
-                  <SourceChips citations={streamCitations} />
+                  <SourceChips
+                    citations={streamCitations}
+                    onTrace={handleTrace}
+                  />
                 </div>
               </div>
             ) : null}
@@ -1667,7 +1770,12 @@ export default function LexWorkspaceChat() {
       {openDoc ? (
         <DocumentViewerDialog
           document={openDoc}
-          onClose={() => setOpenDoc(null)}
+          initialPage={tracing?.pageFrom ?? null}
+          highlight={tracing?.quote ?? null}
+          onClose={() => {
+            setOpenDoc(null);
+            setTracing(null);
+          }}
         />
       ) : null}
 

@@ -7,6 +7,7 @@ import { ArtifactGenerationService } from "./artifact-generation.service";
 import { ArtifactsController } from "./artifacts.controller";
 import { ArtifactsService } from "./artifacts.service";
 import { ExportService } from "./export.service";
+import { ReverificationService } from "./reverification.service";
 import { VerificationService } from "./verification.service";
 
 @Module({
@@ -16,6 +17,7 @@ import { VerificationService } from "./verification.service";
     ArtifactsService,
     ArtifactGenerationService,
     VerificationService,
+    ReverificationService,
     ExportService
   ],
   // TasksModule needs it: document generation runs on the background task runner, because the

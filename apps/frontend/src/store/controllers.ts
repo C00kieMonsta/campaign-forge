@@ -140,14 +140,19 @@ export class ConversationController {
    * Loads a page of messages into the store. Returns `hasMore` so the page can offer "load
    * earlier" without guessing. UPSERT_MANY merges, so paging backwards simply accumulates —
    * no ordering or de-duplication work is needed on the client.
+   *
+   * `citations` is returned rather than stored: it is keyed by message id, not an entity with one
+   * of its own, and the caller merges it into the map the conversation view renders chips from.
+   * Returning it here is what makes a reference traceable after a reload — before, citations
+   * arrived only on the live SSE stream and every [n] in a reloaded answer was inert text.
    */
   async loadMessages(conversationId: string, beforeSeq?: number) {
-    const { items, hasMore } = await api.lex.conversations.messages(
+    const { items, hasMore, citations } = await api.lex.conversations.messages(
       conversationId,
       beforeSeq === undefined ? undefined : { beforeSeq }
     );
     this.writer.upsertMany("lexMessages", items);
-    return { items, hasMore };
+    return { items, hasMore, citations: citations ?? {} };
   }
 }
 

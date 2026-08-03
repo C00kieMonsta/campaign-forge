@@ -155,7 +155,12 @@ export class ConversationsService {
     ownerEmail: string,
     id: string,
     opts: { beforeSeq?: number; limit?: number } = {}
-  ): Promise<{ items: LexMessage[]; hasMore: boolean }> {
+  ): Promise<{
+    items: LexMessage[];
+    hasMore: boolean;
+    /** Citations for the assistant messages in THIS page, keyed by message id. See citationsFor. */
+    citations: Record<string, LexCitationEvent[]>;
+  }> {
     await this.getOrFail(ownerEmail, id);
     const limit = Math.min(Math.max(opts.limit ?? MESSAGE_PAGE_SIZE, 1), 200);
 
@@ -178,7 +183,76 @@ export class ConversationsService {
     const hasMore = res.rows.length > limit;
     const page = hasMore ? res.rows.slice(0, limit) : res.rows;
     // Reverse into chronological order — the DESC + LIMIT was only how to reach the newest.
-    return { items: page.reverse().map(mapMessage), hasMore };
+    const items = page.reverse().map(mapMessage);
+    return {
+      items,
+      hasMore,
+      // WITH the page, not behind a second endpoint the client has to remember to call. Citations
+      // used to reach the browser only over the live SSE stream, so a reply was traceable in the
+      // minute it was written and never again: after a reload — and always, for an assessment
+      // written by a background run this browser never streamed — every [n] in the text rendered as
+      // plain unclickable digits. Paged with the messages so walking back through a years-long
+      // thread carries its references with it.
+      citations: await this.citationsFor(
+        ownerEmail,
+        items.filter((m) => m.role === "assistant").map((m) => m.id)
+      )
+    };
+  }
+
+  /**
+   * The persisted citations for a set of messages, grouped by message and ordered by marker.
+   *
+   * Only rows that recorded WHICH marker they answer for are returned. A row without one cannot be
+   * traced back to a place in the text — it predates marker_index, or belongs to an artifact claim —
+   * and inventing a number for it would put a chip in the answer pointing at a source the model may
+   * not have cited there. Silence is the honest failure here.
+   */
+  async citationsFor(
+    ownerEmail: string,
+    messageIds: readonly string[]
+  ): Promise<Record<string, LexCitationEvent[]>> {
+    const out: Record<string, LexCitationEvent[]> = {};
+    if (messageIds.length === 0) return out;
+
+    const res = await this.pg.query<{
+      message_id: string;
+      marker_index: number;
+      chunk_id: string | null;
+      page_id: string | null;
+      document_id: string | null;
+      filename: string | null;
+      quote: string | null;
+      page_from: number | null;
+      page_to: number | null;
+    }>(
+      `SELECT c.message_id, c.marker_index, c.chunk_id, c.page_id, c.document_id,
+              d.filename, c.quote, c.page_from, c.page_to
+       FROM lex_citations c
+       LEFT JOIN lex_documents d ON d.id = c.document_id
+       WHERE c.owner_email = $1
+         AND c.message_id = ANY($2::uuid[])
+         AND c.marker_index IS NOT NULL
+       ORDER BY c.message_id, c.marker_index`,
+      [ownerEmail, messageIds]
+    );
+
+    for (const r of res.rows) {
+      const list = (out[r.message_id] ??= []);
+      list.push({
+        index: r.marker_index,
+        // Rebuilt table-prefixed, exactly as the stream sends it: the two id columns are separate
+        // foreign keys and the UI keys chips off this string, so a bare uuid here would make a
+        // reloaded citation and a streamed one look like different sources.
+        chunkId: r.chunk_id ? `chunk:${r.chunk_id}` : `page:${r.page_id}`,
+        documentId: r.document_id ?? "",
+        filename: r.filename ?? undefined,
+        pageFrom: r.page_from,
+        pageTo: r.page_to,
+        quote: r.quote ?? undefined
+      });
+    }
+    return out;
   }
 
   /**
@@ -298,12 +372,15 @@ export class ConversationsService {
           // rebuild of the page index can re-anchor this citation, or honestly refuse to.
           await client.query(
             `INSERT INTO lex_citations
-               (owner_email, message_id, chunk_id, page_id, page_ordinal, page_text_hash,
-                document_id, quote, page_from, page_to, char_start, char_end)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+               (owner_email, message_id, marker_index, chunk_id, page_id, page_ordinal,
+                page_text_hash, document_id, quote, page_from, page_to, char_start, char_end)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
             [
               ownerEmail,
               assistantId,
+              // The marker this row answers for. Without it the row is a source the answer used
+              // but not one a reader can follow [n] to — see the marker_index migration.
+              c.index,
               s.chunkId,
               s.pageId,
               s.pageOrdinal,

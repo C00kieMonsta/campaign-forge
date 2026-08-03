@@ -12,6 +12,7 @@ import type {
   LexAuthority,
   LexAuthorityDigest,
   LexAuthorityUploadSlot,
+  LexCitationEvent,
   LexConversation,
   LexDocument,
   LexLanguage,
@@ -567,9 +568,12 @@ export const api = {
           params.set("beforeSeq", String(opts.beforeSeq));
         if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
         const qs = params.toString() ? `?${params}` : "";
-        return request<{ items: LexMessage[]; hasMore: boolean }>(
-          `/admin/lex/conversations/${id}/messages${qs}`
-        );
+        return request<{
+          items: LexMessage[];
+          hasMore: boolean;
+          /** Per-message citations, keyed by message id — what makes each [n] traceable. */
+          citations: Record<string, LexCitationEvent[]>;
+        }>(`/admin/lex/conversations/${id}/messages${qs}`);
       },
       rename(id: string, title: string) {
         return request<{ conversation: LexConversation }>(

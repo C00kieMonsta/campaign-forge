@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { LexDocument } from "@packages/types";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@packages/ui";
 import { Download, Loader2 } from "lucide-react";
@@ -22,10 +22,19 @@ const PAGE_WIDTH = 720;
  */
 export default function DocumentViewerDialog({
   document: doc,
-  onClose
+  onClose,
+  initialPage,
+  highlight
 }: {
   document: LexDocument;
   onClose: () => void;
+  /**
+   * The page to open at, 1-based. Set when the dialog was opened by following a citation: landing
+   * on page 1 of a 200-page filing and asking the reader to scroll is not tracing a reference.
+   */
+  initialPage?: number | null;
+  /** The cited text, shown above the page so the reader knows what they came here to check. */
+  highlight?: string | null;
 }) {
   const { t } = useLanguage();
   const { toast } = useToast();
@@ -34,6 +43,7 @@ export default function DocumentViewerDialog({
   const [pdf, setPdf] = useState<PdfDocument | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const pageRefs = useRef(new Map<number, HTMLDivElement>());
 
   const isPdf =
     (doc.contentType ?? "").toLowerCase().includes("pdf") ||
@@ -72,12 +82,55 @@ export default function DocumentViewerDialog({
     };
   }, [doc.id, isPdf, toast]);
 
+  /**
+   * Registers each rendered page so the cited one can be scrolled to.
+   *
+   * A ref callback rather than an index lookup: PdfPage rasterises asynchronously, so the element
+   * for page 6 exists before it has a height, and a scroll computed from the container would land
+   * somewhere else once the pages above it grew.
+   */
+  const registerPage = useCallback(
+    (pageNumber: number) => (el: HTMLDivElement | null) => {
+      if (el) pageRefs.current.set(pageNumber, el);
+      else pageRefs.current.delete(pageNumber);
+    },
+    []
+  );
+
+  const target = initialPage && initialPage > 0 ? initialPage : null;
+  useEffect(() => {
+    if (!target || loading) return;
+    // Two frames, not one: the page element mounts empty and PdfPage sets its size when the canvas
+    // paints, so a scroll on the first frame is measured against a zero-height page.
+    const el = pageRefs.current.get(target);
+    if (!el) return;
+    const raf = requestAnimationFrame(() =>
+      requestAnimationFrame(() =>
+        el.scrollIntoView({ block: "start", behavior: "auto" })
+      )
+    );
+    return () => cancelAnimationFrame(raf);
+  }, [target, loading, pageCount]);
+
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-5xl">
         <DialogHeader>
           <DialogTitle className="truncate pr-8">{doc.filename}</DialogTitle>
         </DialogHeader>
+
+        {/* Why the reader is here. When the dialog was opened by following a reference, the quote
+            is the thing being checked — showing it beside the page turns "is this the right pièce"
+            into a comparison the reader can make without holding the sentence in their head. */}
+        {highlight ? (
+          <div className="rounded-lg border bg-muted/40 px-3 py-2 text-xs">
+            <span className="text-muted-foreground">
+              {t.lex.citedPassage}
+              {target ? ` · ${t.lex.page} ${target}` : ""}
+            </span>
+            <p className="mt-1 italic">« {highlight} »</p>
+          </div>
+        ) : null}
 
         <div className="flex items-center gap-3 pb-2 border-b text-xs text-muted-foreground">
           <span>
@@ -109,12 +162,36 @@ export default function DocumentViewerDialog({
             <div className="flex flex-col items-center gap-3 pt-3">
               {Array.from({ length: pageCount }, (_, i) => i + 1).map(
                 (pageNumber) => (
-                  <div key={pageNumber} className="w-full max-w-[720px]">
-                    <PdfPage
-                      doc={pdf}
-                      pageNumber={pageNumber}
-                      width={PAGE_WIDTH}
-                    />
+                  <div
+                    key={pageNumber}
+                    ref={registerPage(pageNumber)}
+                    className="w-full max-w-[720px]"
+                  >
+                    {/* The number is always visible, not only on the cited page: a reference reads
+                        "p. 6" and a reader who cannot see which page they are looking at has to
+                        count. */}
+                    <div
+                      className={`mb-1 text-[11px] ${
+                        pageNumber === target
+                          ? "font-medium text-primary"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {t.lex.page} {pageNumber}
+                    </div>
+                    <div
+                      className={
+                        pageNumber === target
+                          ? "rounded-md ring-2 ring-primary/60"
+                          : undefined
+                      }
+                    >
+                      <PdfPage
+                        doc={pdf}
+                        pageNumber={pageNumber}
+                        width={PAGE_WIDTH}
+                      />
+                    </div>
                   </div>
                 )
               )}

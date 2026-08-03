@@ -285,6 +285,108 @@ export class RagService {
     return out;
   }
 
+  /**
+   * The spans named by a set of `sourceKey` anchors, keyed by that same anchor.
+   *
+   * The inverse of sourceKey, and the reason re-verification does not have to re-retrieve: a stored
+   * citation already names the exact span its quote was taken from, so re-checking a claim reads
+   * that one span instead of running a fresh similarity search whose pack may no longer contain it.
+   * A search-based re-check would silently grade the claim against a DIFFERENT passage.
+   *
+   * Full text, never truncated: gate 1 compares the quote against the whole span, exactly as it did
+   * when the citation was first filed.
+   *
+   * Same hard scope as every other read here — owner + workspace + lifecycle_state='active' — so an
+   * anchor cannot resolve into another user's file or resurrect a superseded duplicate. A key that
+   * resolves to nothing is simply absent from the map, which the caller must treat as a claim whose
+   * source is gone rather than as a claim that passed.
+   */
+  async loadSpans(
+    ownerEmail: string,
+    workspaceId: string,
+    keys: readonly string[]
+  ): Promise<Map<string, RetrievedChunk>> {
+    const out = new Map<string, RetrievedChunk>();
+    // Anchors reach here from a persisted artifact body, which a manual edit may have written by
+    // hand. Anything not shaped like `chunk:<uuid>` / `page:<uuid>` is dropped rather than bound:
+    // Postgres rejects a malformed uuid with 22P02, which would fail the whole re-verification
+    // over one bad row.
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const chunkIds: string[] = [];
+    const pageIds: string[] = [];
+    for (const key of new Set(keys)) {
+      const [table, id] = [
+        key.slice(0, key.indexOf(":")),
+        key.slice(key.indexOf(":") + 1)
+      ];
+      if (!uuid.test(id)) continue;
+      if (table === "chunk") chunkIds.push(id);
+      else if (table === "page") pageIds.push(id);
+    }
+
+    if (chunkIds.length > 0) {
+      const res = await this.pg.query<ChunkRow>(
+        `SELECT c.id, c.document_id, d.filename, c.page_from, c.page_to,
+                c.char_start, c.char_end, c.content
+         FROM lex_document_chunks c
+         JOIN lex_documents d ON d.id = c.document_id
+         WHERE c.workspace_id = $1 AND c.owner_email = $2
+           AND d.lifecycle_state = 'active'
+           AND c.id = ANY($3::uuid[])`,
+        [workspaceId, ownerEmail, chunkIds]
+      );
+      for (const r of res.rows) {
+        out.set(`chunk:${r.id}`, {
+          chunkId: r.id,
+          pageId: null,
+          pageOrdinal: null,
+          pageTextHash: null,
+          documentId: r.document_id,
+          filename: r.filename,
+          pageFrom: r.page_from,
+          pageTo: r.page_to,
+          charStart: r.char_start,
+          charEnd: r.char_end,
+          content: r.content,
+          // Not ranked: this span was named, not found. The score exists only for the shared shape.
+          score: Number.POSITIVE_INFINITY
+        });
+      }
+    }
+
+    if (pageIds.length > 0) {
+      const res = await this.pg.query<PageRowResult>(
+        `SELECT p.id, p.document_id, d.filename, p.ordinal, p.page_number, p.page_label,
+                p.char_start, p.char_end, p.text
+         FROM lex_document_pages p
+         JOIN lex_documents d ON d.id = p.document_id
+         WHERE p.workspace_id = $1 AND p.owner_email = $2
+           AND d.lifecycle_state = 'active'
+           AND p.id = ANY($3::uuid[])`,
+        [workspaceId, ownerEmail, pageIds]
+      );
+      for (const r of res.rows) {
+        out.set(`page:${r.id}`, {
+          chunkId: null,
+          pageId: r.id,
+          pageOrdinal: r.ordinal,
+          pageTextHash: pageTextHash(r.text),
+          documentId: r.document_id,
+          filename: r.filename,
+          pageFrom: r.page_number,
+          pageTo: r.page_number,
+          charStart: r.char_start,
+          charEnd: r.char_end,
+          content: r.text,
+          score: Number.POSITIVE_INFINITY
+        });
+      }
+    }
+
+    return out;
+  }
+
   async retrieve(
     ownerEmail: string,
     workspaceId: string,

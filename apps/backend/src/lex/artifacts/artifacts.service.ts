@@ -3,12 +3,14 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException
 } from "@nestjs/common";
 import type {
   LexArtifact,
   LexArtifactBody,
   LexArtifactType,
+  LexArtifactVerificationReport,
   LexArtifactVersion,
   LexVerificationStatus
 } from "@packages/types";
@@ -21,6 +23,11 @@ import {
   type GeneratedArtifact,
   type GenerationProgress
 } from "./artifact-generation.service";
+import {
+  ReverificationService,
+  type ReverifyProgress
+} from "./reverification.service";
+import { statusForClaims, tallyClaims } from "./verification.service";
 
 interface ArtifactRow {
   id: string;
@@ -82,10 +89,13 @@ function mapVersion(r: VersionRow): LexArtifactVersion {
 
 @Injectable()
 export class ArtifactsService {
+  private readonly logger = new Logger(ArtifactsService.name);
+
   constructor(
     private pg: PgService,
     private workspaces: WorkspacesService,
-    private generation: ArtifactGenerationService
+    private generation: ArtifactGenerationService,
+    private reverification: ReverificationService
   ) {}
 
   async list(ownerEmail: string, workspaceId: string): Promise<LexArtifact[]> {
@@ -234,33 +244,60 @@ export class ArtifactsService {
 
   /**
    * Saves an edited body as a NEW version and re-sets verification to 'unverified' (edits
-   * must be re-verified before filing). Enforces the citation-drop invariant: a claim that
-   * carried a citation in the current version may not silently disappear.
+   * must be re-verified before filing — see reverify, which is how a corrected draft gets back to
+   * 'verified'; without it this method was a one-way door out of the filing path). Enforces the
+   * citation-drop invariant: a claim that carried a citation in the current version may not
+   * disappear unless the caller says so explicitly.
    */
   async saveVersion(
     ownerEmail: string,
     id: string,
-    body: LexArtifactBody
+    body: LexArtifactBody,
+    /** Cited claims the caller is deleting deliberately. See saveArtifactRequestSchema. */
+    dropCitedClaimIds: readonly string[] = []
   ): Promise<{ artifact: LexArtifact; version: LexArtifactVersion }> {
     const row = await this.getArtifactRow(ownerEmail, id);
     const current = await this.versionRow(row.id, row.current_version);
 
     const newClaimIds = new Set((body.claims ?? []).map((c) => c.claimId));
+    const acknowledged = new Set(dropCitedClaimIds);
     const dropped = (current.body_json?.claims ?? [])
-      .filter((c) => c.citation && !newClaimIds.has(c.claimId))
+      .filter(
+        (c) =>
+          c.citation &&
+          !newClaimIds.has(c.claimId) &&
+          !acknowledged.has(c.claimId)
+      )
       .map((c) => c.claimId);
     if (dropped.length > 0) {
       throw new BadRequestException(
-        `Refusing to drop cited claims: ${dropped.join(", ")}. Remove the citation explicitly instead.`
+        `Refusing to drop cited claims: ${dropped.join(", ")}. List them in dropCitedClaimIds to delete them deliberately.`
       );
     }
 
     const nextVersion = row.current_version + 1;
     const result = await this.pg.withTransaction(async (client) => {
       const verRes = await client.query<VersionRow>(
-        `INSERT INTO lex_artifact_versions (artifact_id, version, body_json, verification_status)
-         VALUES ($1, $2, $3, 'unverified') RETURNING *`,
-        [row.id, nextVersion, JSON.stringify(body)]
+        `INSERT INTO lex_artifact_versions
+           (artifact_id, version, body_json, verification_status, verification_report)
+         VALUES ($1, $2, $3, 'unverified', $4) RETURNING *`,
+        [
+          row.id,
+          nextVersion,
+          JSON.stringify(body),
+          // The PROVENANCE carries forward, the verdict does not. Which pièces the draft was
+          // written from is still true after the lawyer rewrites a sentence — and dropping it (as
+          // this used to) made the "Pièces lues" panel vanish the moment anyone edited anything,
+          // taking with it the only way to see a selected pièce that contributed nothing. The
+          // counts are recomputed but must not be read as a verdict: the version is 'unverified',
+          // and the UI says so instead of showing them.
+          JSON.stringify({
+            ...tallyClaims(body.claims ?? []),
+            sources: current.verification_report?.sources,
+            sourceMode: current.verification_report?.sourceMode,
+            truncated: current.verification_report?.truncated
+          })
+        ]
       );
       const version = verRes.rows[0];
       // Carry citations forward from the edited body (offsets/hash unknown on manual edits).
@@ -281,6 +318,125 @@ export class ArtifactsService {
     return {
       artifact: mapArtifact(result.artifact),
       version: mapVersion(result.version)
+    };
+  }
+
+  /**
+   * Re-checks the current version against the case file and rewrites its verdicts IN PLACE.
+   *
+   * The closing edge of the edit loop. saveVersion resets a version to 'unverified' and sign-off
+   * requires 'verified', so without this a lawyer who corrected an unsupported claim had produced a
+   * document that could never be filed — the state machine had no path back.
+   *
+   * In place rather than as a new version, deliberately: re-verification changes no text. A version
+   * is a state of the DOCUMENT, and minting one per re-check would fill the history with entries
+   * that differ only in what a judge said about identical words.
+   *
+   * Refuses a signed-off version. The signature attests to a body against a verdict, and this could
+   * replace that verdict — silently leaving a document marked as signed by a human who never saw
+   * the new one. Editing mints a fresh version, which is the honest way to revisit a signed draft.
+   */
+  async reverify(
+    ownerEmail: string,
+    id: string,
+    onProgress?: (p: ReverifyProgress) => Promise<void>
+  ): Promise<{
+    artifact: LexArtifact;
+    version: LexArtifactVersion;
+    judged: number;
+    carriedForward: number;
+  }> {
+    const row = await this.getArtifactRow(ownerEmail, id);
+    const current = await this.versionRow(row.id, row.current_version);
+    if (current.signed_off_at) {
+      throw new ConflictException(
+        "A signed-off version cannot be re-verified. Edit it to create a new version first."
+      );
+    }
+
+    const claims = current.body_json?.claims ?? [];
+    if (claims.length === 0) {
+      throw new BadRequestException("This version has no claims to verify");
+    }
+
+    // The version this one was edited from, for the carry-forward test: an untouched claim keeps
+    // its verdict instead of paying a frontier-model judge to reach the same conclusion again.
+    const previous =
+      row.current_version > 1
+        ? await this.versionRow(row.id, row.current_version - 1).catch(
+            () => null
+          )
+        : null;
+
+    const result = await this.reverification.reverify({
+      ownerEmail,
+      workspaceId: row.workspace_id,
+      claims,
+      previous: previous?.body_json?.claims,
+      onProgress
+    });
+
+    const body: LexArtifactBody = {
+      type: "lex-artifact",
+      claims: result.claims
+    };
+    const status = statusForClaims(result.claims);
+    const report: LexArtifactVerificationReport = {
+      ...tallyClaims(result.claims),
+      // Provenance survives a re-check untouched — it records what the DRAFTER read, which no
+      // verdict can change.
+      sources: current.verification_report?.sources,
+      sourceMode: current.verification_report?.sourceMode,
+      truncated: current.verification_report?.truncated
+    };
+
+    await this.pg.withTransaction(async (client) => {
+      await client.query(
+        `UPDATE lex_artifact_versions
+           SET body_json = $2, verification_status = $3, verification_report = $4
+         WHERE id = $1`,
+        [current.id, JSON.stringify(body), status, JSON.stringify(report)]
+      );
+      // Re-filed, not merged: a claim that lost its support must lose its citation row too, and
+      // the rows carry the anchors of the spans this run actually read.
+      await client.query(
+        `DELETE FROM lex_citations WHERE artifact_version_id = $1`,
+        [current.id]
+      );
+      await this.insertCitations(
+        client,
+        ownerEmail,
+        current.id,
+        body,
+        result.spans
+      );
+      await client.query(
+        `UPDATE lex_artifacts SET status = $2, updated_at = now() WHERE id = $1`,
+        [row.id, status === "verified" ? "verified" : "draft"]
+      );
+    });
+
+    this.logger.log(
+      JSON.stringify({
+        action: "lexArtifactReverified",
+        artifactId: row.id,
+        version: current.version,
+        total: report.total,
+        supported: report.supported,
+        unsupported: report.unsupported,
+        notChecked: report.notChecked,
+        judged: result.judged,
+        carriedForward: result.carriedForward,
+        verificationStatus: status
+      })
+    );
+
+    const { artifact, version } = await this.getWithVersion(ownerEmail, id);
+    return {
+      artifact,
+      version,
+      judged: result.judged,
+      carriedForward: result.carriedForward
     };
   }
 

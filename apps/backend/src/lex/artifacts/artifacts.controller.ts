@@ -58,8 +58,18 @@ export class ArtifactsController {
     if (!parsed.success) {
       throw new BadRequestException(formatZodError(parsed.error));
     }
-    return this.artifacts.saveVersion(user.email, id, parsed.data.bodyJson);
+    return this.artifacts.saveVersion(
+      user.email,
+      id,
+      parsed.data.bodyJson,
+      parsed.data.dropCitedClaimIds
+    );
   }
+
+  // NO synchronous `POST artifacts/:id/verify`, for the same reason there is no synchronous
+  // generate: re-verification is one frontier-model judge per claim it has to re-check, which
+  // outlives nginx's default 60s read timeout on this route. It is `POST tasks` with kind
+  // 'verify_artifact'; the runner calls ArtifactsService.reverify.
 
   @Post("artifacts/:id/signoff")
   async signOff(@CurrentUser() user: AuthUser, @Param("id") id: string) {

@@ -153,7 +153,7 @@ export class TasksService {
           "Conversation belongs to a different workspace"
         );
       }
-    } else {
+    } else if (dto.kind !== "verify_artifact") {
       const conv = await this.conversations.create(
         ownerEmail,
         dto.workspaceId,
@@ -163,6 +163,9 @@ export class TasksService {
       );
       conversationId = conv.id;
     }
+    // `verify_artifact` is the exception and stays without a conversation: it posts no result into
+    // one — the new verdicts appear on the document the lawyer is already looking at — and creating
+    // one per re-check would litter the case file with empty conversations named after a document.
 
     const res = await this.pg.query<TaskRow>(
       `INSERT INTO lex_tasks
