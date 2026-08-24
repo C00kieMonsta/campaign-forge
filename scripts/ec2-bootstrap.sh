@@ -187,6 +187,23 @@ certbot --nginx \
   --domains "$DOMAIN" \
   --redirect
 
+# Nothing renews the cert by default on AL2023, so it silently expires after 90
+# days and every client gets ERR_CERT_DATE_INVALID. Prefer the packaged timer if
+# it exists, otherwise install a cron entry.
+log "Enabling automatic certificate renewal..."
+if systemctl list-unit-files certbot-renew.timer &>/dev/null && \
+   systemctl enable --now certbot-renew.timer 2>/dev/null; then
+  log "certbot-renew.timer enabled"
+else
+  cat > /etc/cron.d/certbot-renew <<'CRON_EOF'
+SHELL=/bin/bash
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+17 3,15 * * * root certbot renew --nginx --non-interactive --quiet --deploy-hook "systemctl reload nginx"
+CRON_EOF
+  chmod 644 /etc/cron.d/certbot-renew
+  log "certbot renewal cron installed at /etc/cron.d/certbot-renew"
+fi
+
 systemctl reload nginx
 
 # ── CloudWatch agent ──────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import type { LexPin } from "@packages/types";
 import type OpenAI from "openai";
 import { PgService } from "../../shared/pg.service";
+import { estimateTokens } from "../../shared/tokens";
 import {
   RagService,
   sourceKey,
@@ -30,14 +31,37 @@ const MIN_SEARCH_SLOTS = 3;
 /**
  * Token ceiling for the verbatim-turn portion of the prompt.
  *
- * The count is estimated, not tokenised: at ~3.4 chars/token for FR/NL prose this is accurate
- * enough given the headroom below gpt-4o's 128k window, and a real tokeniser (tiktoken) would add
- * a dependency and per-turn CPU on a box that is already sharing with the Campaigns API. The
- * point is a HARD upper bound so a thread of pasted letters cannot push out the SOURCES block —
- * not exact accounting.
+ * The count is an estimate, not a tokenisation — see shared/tokens.ts for the constant and for why
+ * it stays an estimate. The point here is a HARD upper bound so a thread of pasted letters cannot
+ * push out the SOURCES block, not exact accounting.
  */
 const MAX_TURN_TOKENS = 12000;
-const CHARS_PER_TOKEN = 3.4;
+
+/**
+ * How many assessment ROWS survive falling out of the verbatim window.
+ *
+ * A background assessment reads the whole case file and its answer is what the rest of the thread
+ * refers back to — "the point the deep read made about the 2019 transfer". It is also long, so it
+ * was the FIRST thing the oldest-first eviction threw away, and the model then answered follow-ups
+ * about an assessment it could no longer see.
+ *
+ * Rows, not runs: the task runner writes each run as a PAIR (the synthetic question, then the
+ * answer), both tagged 'assessment'. Four is therefore two runs — the current one and the one
+ * before it, which is as far back as a thread usually argues from.
+ */
+const PROTECTED_ASSESSMENT_ROWS = 4;
+
+/**
+ * Ceiling on what those protected turns may spend, taken OUT of MAX_TURN_TOKENS rather than added
+ * on top. An exemption would let two long assessments push the assembled prompt past a budget the
+ * SOURCES block has no slack to absorb — the grounding would be crowded out by history, which is
+ * the opposite trade to the one worth making.
+ *
+ * Held back only when an assessment ACTUALLY fell out of the window, never merely because one
+ * exists — see selectTurns. Reserving against an assessment that is already in the window buys
+ * nothing and evicts several turns of real history to pay for it.
+ */
+const PROTECTED_ASSESSMENT_TOKENS = 5000;
 
 /**
  * Articles of law pulled in per turn, on top of the always-present digests. Smaller than the
@@ -48,13 +72,106 @@ const AUTHORITY_TOP_K = 4;
 /** Per-article cap. Belgian code articles are short; a long one is a consolidated section. */
 const MAX_AUTHORITY_CHARS = 3000;
 
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
-}
-
 interface MessageRow {
   role: string;
   content: string;
+  /** What produced the message; null for an ordinary chat turn. See the lex-message-origin migration. */
+  origin: string | null;
+}
+
+/**
+ * Removes inline source markers from recovered assessment text.
+ *
+ * An assessment cites [1] … [312] into the findings list assembled for that one run, and that list
+ * is gone. The current turn's SOURCES block starts numbering from [1] again over entirely
+ * different documents, so a marker copied out of the old text resolves against the new list and
+ * points at the wrong pièce. Dropping the numbers costs the reader nothing — the assessment's own
+ * citations are still on its original message, which the UI renders from lex_citations — and it
+ * removes the only way this block could put a wrong reference into a filed document.
+ *
+ * Deliberately narrow: `[` digits `]` only, so bracketed text in the prose survives untouched.
+ */
+export function stripMarkers(text: string): string {
+  return text.replace(/\[\d+\]/g, "");
+}
+
+/**
+ * Chooses which verbatim turns reach the prompt, and which earlier assessments are recovered
+ * beside them.
+ *
+ * Pure and exported so the budget arithmetic can be tested without a database: this is the code
+ * that decides what a lawyer's follow-up question is answered from, and "it looked right" is not a
+ * standard it should be held to.
+ *
+ * Two passes, not one flag check. The window pass keeps its original semantics — newest first,
+ * stop at the first turn that does not fit, so the kept history stays CONTIGUOUS. A protected
+ * message is not exempted inside that loop, because the loop breaks rather than skips: an
+ * assessment would still be lost the moment any larger turn sat newer than it. It is recovered
+ * afterwards instead, from a budget reserved before the window pass ran.
+ */
+export function selectTurns(turns: readonly MessageRow[]): {
+  /** The contiguous recent window, in chronological order. */
+  kept: MessageRow[];
+  /** Assessment turns the window could not hold, in chronological order. */
+  recovered: MessageRow[];
+  /** Assessments that did not fit the reserve even alone — the reserve is too small. */
+  oversized: number;
+} {
+  const windowOf = (budget: number): MessageRow[] => {
+    const out: MessageRow[] = [];
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const cost = estimateTokens(turns[i].content);
+      if (out.length > 0 && cost > budget) break;
+      budget -= cost;
+      out.push(turns[i]);
+    }
+    return out.reverse();
+  };
+
+  // The reserve is paid only if a full-budget window actually loses an assessment. Testing merely
+  // that one EXISTS is the common case and the wrong one: right after a background run finishes,
+  // its answer is the newest message and comfortably inside the window, so the 5000 tokens would
+  // be withheld for a recovery pass with nothing to recover — several turns of real history
+  // evicted to protect something that was never at risk.
+  //
+  // Re-running on the smaller budget cannot change the answer: shrinking a budget only removes
+  // turns from the window, so an assessment already outside it stays outside.
+  let kept = windowOf(MAX_TURN_TOKENS);
+  let inWindow = new Set(kept);
+  const needsReserve = turns.some(
+    (m) => m.origin === "assessment" && !inWindow.has(m)
+  );
+  if (needsReserve) {
+    kept = windowOf(MAX_TURN_TOKENS - PROTECTED_ASSESSMENT_TOKENS);
+    inWindow = new Set(kept);
+  }
+
+  const recovered: MessageRow[] = [];
+  let protectedBudget = PROTECTED_ASSESSMENT_TOKENS;
+  let oversized = 0;
+  for (let i = turns.length - 1; i >= 0 && needsReserve; i--) {
+    const m = turns[i];
+    if (m.origin !== "assessment" || inWindow.has(m)) continue;
+    if (recovered.length >= PROTECTED_ASSESSMENT_ROWS) break;
+    const cost = estimateTokens(m.content);
+    // Skipped, never truncated. A half-assessment reads exactly like a whole one, and this app
+    // does not hand a practitioner a legal conclusion with its reasoning silently cut off.
+    if (cost > protectedBudget) {
+      oversized += 1;
+      continue;
+    }
+    protectedBudget -= cost;
+    recovered.push(m);
+  }
+  recovered.reverse();
+
+  // A question with no answer under it is not an assessment. Walking newest-first visits the
+  // answer before the question it belongs to, so an answer too large for the reserve is skipped
+  // and its short question is then recovered alone — under a header promising findings that are
+  // not there. Drop the set; `oversized` is already carrying the diagnostic.
+  if (!recovered.some((m) => m.role === "assistant")) recovered.length = 0;
+
+  return { kept, recovered, oversized };
 }
 
 interface SummaryRow {
@@ -65,6 +182,13 @@ interface SummaryRow {
 export interface AssembledContext {
   messages: OpenAI.Chat.ChatCompletionMessageParam[];
   sources: RetrievedChunk[];
+  /**
+   * Which prompt blocks were included, in prompt order. Purely for the usage log: prompt-cache hit
+   * rate is only comparable between turns that had the same blocks, since a turn where no
+   * authority was enabled has a structurally different prefix from one where four articles were
+   * pulled in.
+   */
+  blocks: string[];
 }
 
 /**
@@ -136,8 +260,8 @@ export class ContextAssembler {
     // right now — whenever more than N messages sit past the watermark (which happens as soon
     // as one best-effort checkpoint fails).
     const msgRes = await this.pg.query<MessageRow>(
-      `SELECT role, content FROM (
-         SELECT seq, role, content FROM lex_messages
+      `SELECT role, content, origin FROM (
+         SELECT seq, role, content, origin FROM lex_messages
          WHERE conversation_id = $1 AND status = 'complete' AND seq > $2
          ORDER BY seq DESC
          LIMIT $3
@@ -203,6 +327,7 @@ export class ContextAssembler {
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: "system", content: system }
     ];
+    const blocks = ["system"];
 
     // Law goes in BEFORE the case file and before the conversation: it is the frame the facts are
     // read against, and it outranks both the documents and the model's own recollection of what
@@ -224,6 +349,7 @@ export class ContextAssembler {
             .join("\n\n")
         : "";
 
+      blocks.push("law");
       messages.push({
         role: "system",
         content:
@@ -239,37 +365,64 @@ export class ContextAssembler {
       });
     }
 
+    // Verbatim turns are the only evictable part of the prompt: the system instructions, the
+    // rolling summary and the SOURCES block all have to be there for the answer to be grounded
+    // and citable. Drop from the OLDEST until the turns fit their budget — the newest turns
+    // (including the question being asked) are never the ones sacrificed.
+    //
+    // Selected HERE, before the remaining system blocks are pushed, only because the recovered
+    // assessments have to go in beside the summary rather than after the language pin.
+    const turns = msgRes.rows.filter(
+      (m) => m.role === "user" || m.role === "assistant"
+    );
+    const { kept, recovered, oversized } = selectTurns(turns);
+
     if (summary) {
+      blocks.push("summary");
       messages.push({
         role: "system",
         content: `Summary of earlier conversation:\n${summary.summary}`
       });
     }
+
+    // Beside the rolling summary, and BEFORE the language pin: both are compressed earlier
+    // conversation, and the pin has to stay the last system message the model reads.
+    //
+    // The markers are stripped on the way in. A recovered assessment is full of [1], [2] … that
+    // number a findings list which no longer exists, and the current turn's SOURCES block numbers
+    // a different list from 1. Left in, the model copies a stale marker into its reply and the
+    // citation resolver anchors it to whichever document happens to hold that position today —
+    // a reference that opens the wrong pièce is worse than one that opens nothing.
+    if (recovered.length > 0) {
+      blocks.push("assessments");
+      messages.push({
+        role: "system",
+        content:
+          "EARLIER ASSESSMENTS IN THIS THREAD. These are background runs that read the case file " +
+          "in full, kept here because later turns refer back to what they concluded. They are " +
+          "older than the conversation shown below, not part of it. Their own source markers have " +
+          "been removed because the list they numbered is gone: do not cite from this block, cite " +
+          "only from SOURCES. Treat their findings as already established unless a later turn " +
+          "contradicts them.\n\n" +
+          recovered
+            .map(
+              (m) =>
+                `[${m.role === "user" ? "ASKED" : "ANSWERED"}]\n${stripMarkers(m.content)}`
+            )
+            .join("\n\n")
+      });
+    }
+
+    blocks.push("sources");
     messages.push({ role: "system", content: `SOURCES:\n${sourcesBlock}` });
     // Last system message, so the language pin is the most recent instruction the model reads.
     // Sources and prior turns are frequently in another language and would otherwise drag the
     // reply along with them.
+    blocks.push("language");
     messages.push({
       role: "system",
       content: outputLanguageInstruction(language)
     });
-
-    // Verbatim turns are the only evictable part of the prompt: the system instructions, the
-    // rolling summary and the SOURCES block all have to be there for the answer to be grounded
-    // and citable. Drop from the OLDEST until the turns fit their budget — the newest turns
-    // (including the question being asked) are never the ones sacrificed.
-    const turns = msgRes.rows.filter(
-      (m) => m.role === "user" || m.role === "assistant"
-    );
-    let turnBudget = MAX_TURN_TOKENS;
-    const kept: MessageRow[] = [];
-    for (let i = turns.length - 1; i >= 0; i--) {
-      const cost = estimateTokens(turns[i].content);
-      if (kept.length > 0 && cost > turnBudget) break;
-      turnBudget -= cost;
-      kept.push(turns[i]);
-    }
-    kept.reverse();
 
     for (const m of kept) {
       messages.push({
@@ -284,11 +437,17 @@ export class ContextAssembler {
           action: "lexContextTrimmed",
           conversationId,
           droppedTurns: turns.length - kept.length,
-          keptTurns: kept.length
+          keptTurns: kept.length,
+          recoveredAssessments: recovered.length,
+          // Non-zero means PROTECTED_ASSESSMENT_TOKENS is too small for this workspace's
+          // assessments and one was dropped entirely — the failure this reserve exists to prevent.
+          oversizedAssessments: oversized
         })
       );
     }
 
-    return { messages, sources };
+    if (kept.length > 0) blocks.push("turns");
+
+    return { messages, sources, blocks };
   }
 }

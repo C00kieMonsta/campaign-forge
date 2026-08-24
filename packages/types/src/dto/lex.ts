@@ -177,8 +177,8 @@ export const createTaskRequestSchema = z
      */
     depth: z.enum(["quick", "standard", "thorough"]).default("thorough"),
     /**
-     * Kind-specific inputs. Required by `generate_artifact` and `verify_artifact`, unused by the
-     * assessments.
+     * Kind-specific inputs. Required by `generate_artifact` and `verify_artifact`; the assessments
+     * read `documentIds` only, to narrow which pièces they read.
      *
      * Validated as its own object rather than folded into the top level so the assessment kinds
      * cannot be handed a `sourceMode` that nothing reads — a field accepted and ignored is the same

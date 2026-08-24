@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import {
   BULK_TIER,
   completionBudget,
@@ -35,8 +35,29 @@ export const ALLOWED_REQUEST_FIELDS: ReadonlySet<string> = new Set([
   "max_completion_tokens",
   "max_tokens",
   "response_format",
-  "stream"
+  "stream",
+  // Only meaningful with `stream: true`. It is what makes the final chunk carry `usage`, which is
+  // the only place the API reports prompt_tokens and cached_tokens for a streamed call — see the
+  // usage log in streamChat.
+  "stream_options"
 ]);
+
+/**
+ * Characters in the assembled prompt, which is what the estimate in shared/tokens.ts is computed
+ * from — so dividing this by the API's reported prompt_tokens gives the measured chars-per-token.
+ *
+ * Non-string content blocks count 0. This app never builds one, and a telemetry helper must not be
+ * able to throw on the path that produces a legal answer.
+ */
+function promptChars(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[]
+): number {
+  return messages.reduce(
+    (total, m) =>
+      total + (typeof m.content === "string" ? m.content.length : 0),
+    0
+  );
+}
 
 /**
  * A stream that ended without saying "stop": truncated, filtered, or empty.
@@ -101,6 +122,10 @@ export function requestFields(
 @Injectable()
 export class OpenAiService {
   private client?: OpenAI;
+  // A field, not a constructor injection: the spec builds this service as
+  // `new OpenAiService({} as never, {} as never)` and a third parameter would break every one of
+  // those cases for a logger.
+  private readonly logger = new Logger(OpenAiService.name);
 
   constructor(
     private config: ConfigService,
@@ -275,7 +300,21 @@ export class OpenAiService {
    */
   async *streamChat(
     messages: OpenAI.Chat.ChatCompletionMessageParam[],
-    opts: { depth?: ReasoningDepth } = {}
+    opts: {
+      depth?: ReasoningDepth;
+      /**
+       * Which feature made this call. Two very different callers stream — a chat turn and a
+       * background assessment synthesis — and mixing their numbers in one log makes the cache
+       * figures meaningless, since only the chat path repeats a prefix at all.
+       */
+      caller?: string;
+      /**
+       * Which prompt blocks the assembler put in, in order. Cache hit rate is uninterpretable
+       * without it: a turn with no APPLICABLE LAW block has a different prefix from one with it,
+       * and reads as a cache miss for a reason that has nothing to do with block ordering.
+       */
+      blocks?: string[];
+    } = {}
   ): AsyncGenerator<string> {
     const client = await this.getClient();
     // A caller may raise the depth for one turn — a filed assessment deserves more deliberation
@@ -284,21 +323,35 @@ export class OpenAiService {
     const stream = await client.chat.completions.create({
       ...requestFields(model, effort, undefined),
       messages,
-      stream: true
+      stream: true,
+      // Makes the final chunk carry `usage`. Without it a streamed call reports nothing at all,
+      // which is why this app had no measured token figure anywhere.
+      stream_options: { include_usage: true }
     });
     // The terminal reason arrives on the LAST chunk, after the content. Discarding it is how a
     // stream that stopped mid-sentence — the model's own ceiling, or a content filter tripping on
     // quoted material from a case file — got persisted as a finished legal answer.
     let finish: string | null = null;
     let produced = 0;
-    for await (const chunk of stream) {
-      const choice = chunk.choices[0];
-      if (choice?.finish_reason) finish = choice.finish_reason;
-      const delta = choice?.delta?.content;
-      if (delta) {
-        produced += delta.length;
-        yield delta;
+    let usage: OpenAI.CompletionUsage | undefined;
+    try {
+      for await (const chunk of stream) {
+        // The usage chunk arrives with `choices: []`, so it must not be read as content and must
+        // not clobber the finish_reason captured from the chunk before it.
+        if (chunk.usage) usage = chunk.usage;
+        const choice = chunk.choices[0];
+        if (choice?.finish_reason) finish = choice.finish_reason;
+        const delta = choice?.delta?.content;
+        if (delta) {
+          produced += delta.length;
+          yield delta;
+        }
       }
+    } finally {
+      // In a `finally` because the interesting turns are the ones that do not reach the end: the
+      // truncations below throw, and an SSE disconnect abandons the generator mid-iteration. Both
+      // would otherwise be exactly the turns with no usage data.
+      this.logUsage(model.id, promptChars(messages), produced, usage, opts);
     }
 
     // Thrown AFTER everything has been yielded, so a consumer that wants to keep what arrived
@@ -309,5 +362,47 @@ export class OpenAiService {
     if (produced === 0) {
       throw new StreamIncompleteError("empty", 0);
     }
+  }
+
+  /**
+   * Records what one streamed call actually cost, in the API's own numbers rather than this app's
+   * estimate of them.
+   *
+   * Two things are being measured, and neither had any figure before this.
+   *
+   * `charsPerToken` is the measured ratio for this app's own FR/NL legal prose on the model
+   * actually in use. It is the number to calibrate shared/tokens.ts CHARS_PER_TOKEN against: if
+   * this log says 3.0, every budget in the app is over-filling by 12% and MAX_TURN_TOKENS is not
+   * the ceiling it claims to be.
+   *
+   * `cachedTokens` is what OpenAI served from its automatic prompt cache. Caching only engages
+   * from 1024 prompt tokens and keys on an exact prefix, so a short turn reports 0 for reasons
+   * unrelated to how the blocks are ordered — read it together with `promptTokens` and `blocks`,
+   * never on its own.
+   */
+  private logUsage(
+    modelId: string,
+    promptChars: number,
+    producedChars: number,
+    usage: OpenAI.CompletionUsage | undefined,
+    opts: { caller?: string; blocks?: string[] }
+  ): void {
+    const promptTokens = usage?.prompt_tokens;
+    this.logger.log(
+      JSON.stringify({
+        action: "lexModelUsage",
+        caller: opts.caller ?? "unknown",
+        model: modelId,
+        blocks: opts.blocks?.join(",") ?? null,
+        promptTokens: promptTokens ?? null,
+        cachedTokens: usage?.prompt_tokens_details?.cached_tokens ?? null,
+        completionTokens: usage?.completion_tokens ?? null,
+        producedChars,
+        charsPerToken:
+          promptTokens && promptChars
+            ? Number((promptChars / promptTokens).toFixed(2))
+            : null
+      })
+    );
   }
 }

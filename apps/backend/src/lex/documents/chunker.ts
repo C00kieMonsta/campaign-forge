@@ -3,8 +3,10 @@
 // index into the reconstructed full text (see buildFullText), so
 // `fullText.slice(charStart, charEnd) === chunk.content` holds exactly (round-trippable).
 
+import { estimateTokens } from "../../shared/tokens";
+
 const PAGE_SEPARATOR = "\n\n";
-// ~1000 tokens target / ~150 token overlap, using a ~4 chars/token heuristic.
+// ~1200 tokens target / ~175 token overlap at the shared CHARS_PER_TOKEN estimate.
 const TARGET_CHARS = 4000;
 const OVERLAP_CHARS = 600;
 const MIN_SNAP_CHARS = 500;
@@ -45,10 +47,6 @@ function pageForOffset(offset: number, pageRanges: PageRange[]): number {
     if (offset < pageRanges[i].end) return i + 1; // 1-based; also catches separator gaps
   }
   return pageRanges.length || 1;
-}
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
 }
 
 /**

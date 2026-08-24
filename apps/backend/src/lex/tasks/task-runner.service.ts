@@ -8,6 +8,7 @@ import {
 import type {
   LexArtifactTaskParams,
   LexArtifactVerificationReport,
+  LexAssessmentTaskParams,
   LexLanguage,
   LexTaskEventKind,
   LexTaskKind,
@@ -20,6 +21,7 @@ import { z } from "zod";
 import { ConfigService } from "../../config/config.service";
 import { OpenAiService } from "../../shared/openai.service";
 import { PgService } from "../../shared/pg.service";
+import { estimateTokens } from "../../shared/tokens";
 import { ArtifactsService } from "../artifacts/artifacts.service";
 import { quoteMatchesChunk } from "../artifacts/verification.service";
 import { extractCitedIndexes } from "../conversations/citation-markers";
@@ -56,12 +58,23 @@ const MAX_ATTEMPTS = 3;
 const MAX_DOC_CHARS_PER_CALL = 40000;
 
 /**
- * How many of those windows a single document may consume. The cap bounds the worst case (a
- * 50-document run cannot silently become a 200-call run), and anything beyond it is reported as
- * partial coverage rather than quietly dropped — an assessment that omits half an exhibit without
- * saying so is worse than no assessment.
+ * How many of those windows a single document may consume: 480k characters, roughly a 190-page
+ * filing. Anything beyond it is reported as partial coverage rather than quietly dropped — an
+ * assessment that omits half an exhibit without saying so is worse than no assessment.
+ *
+ * This was 4 (160k chars, ~64 pages), which silently truncated the ordinary case this app exists
+ * for: an 80-page set of conclusions is ~200k characters and lost its last quarter. The worst case
+ * is now bounded by MAX_WINDOWS_PER_RUN instead, which is the bound that actually mattered.
  */
-const MAX_WINDOWS_PER_DOC = 4;
+const MAX_WINDOWS_PER_DOC = 12;
+
+/**
+ * Total windows one run may read across ALL documents. This is the real cost ceiling: a
+ * 50-document workspace at the per-document cap would otherwise be 600 model calls. Documents are
+ * read in order, so the budget is spent on the earliest ones and every document that got less than
+ * its full text is named in the answer's partial-coverage caveat.
+ */
+const MAX_WINDOWS_PER_RUN = 200;
 
 /**
  * Findings kept per model call. Per SECTION, not per document, on purpose: a 300-page exhibit read
@@ -522,8 +535,8 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
       );
       const base = Number(seqRes.rows[0].m);
       await client.query(
-        `INSERT INTO lex_messages (conversation_id, owner_email, seq, role, content, status)
-         VALUES ($1, $2, $3, 'user', $4, 'complete')`,
+        `INSERT INTO lex_messages (conversation_id, owner_email, seq, role, content, status, origin)
+         VALUES ($1, $2, $3, 'user', $4, 'complete', 'artifact')`,
         [
           task.conversation_id,
           task.owner_email,
@@ -531,17 +544,19 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
           `Rédiger : ${task.title}${task.instructions ? `\n\n${task.instructions}` : ""}`
         ]
       );
+      // 'artifact', not 'assessment': this row is a pointer to a document in another table, so
+      // there is nothing in it worth a reserved slice of the context budget.
       await client.query(
         `INSERT INTO lex_messages
-           (id, conversation_id, owner_email, seq, role, content, status, token_count)
-         VALUES ($1, $2, $3, $4, 'assistant', $5, 'complete', $6)`,
+           (id, conversation_id, owner_email, seq, role, content, status, token_count, origin)
+         VALUES ($1, $2, $3, $4, 'assistant', $5, 'complete', $6, 'artifact')`,
         [
           assistantId,
           task.conversation_id,
           task.owner_email,
           base + 2,
           body,
-          Math.ceil(body.length / 4)
+          estimateTokens(body)
         ]
       );
     });
@@ -564,17 +579,46 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     trace: TaskTrace
   ): Promise<void> {
     const language = await this.settings.languageOf(task.owner_email);
-    const docs = await this.readyDocuments(task.workspace_id, task.owner_email);
+    // A scoped run reads only the pièces the user selected. Reading all 47 documents to answer a
+    // question about two of them costs minutes and money for findings the synthesis then has to
+    // wade through, so the scope is the user's to set.
+    const selected = (task.params as LexAssessmentTaskParams | null)
+      ?.documentIds;
+    const docs = await this.readyDocuments(
+      task.workspace_id,
+      task.owner_email,
+      selected
+    );
 
     if (docs.length === 0) {
       // Failing out loud beats posting an empty assessment: "nothing relevant was found" and
-      // "nothing was read" are very different answers to a lawyer.
-      const msg =
-        "This workspace has no indexed documents to assess. Upload documents and wait for them to finish processing.";
+      // "nothing was read" are very different answers to a lawyer. A scoped run that matched
+      // nothing says so in its own terms — otherwise the user is told to upload documents they
+      // can see are already there.
+      const msg = selected?.length
+        ? `None of the ${selected.length} selected pièce(s) are indexed and active, so there is nothing to assess. Check they finished processing and were not superseded.`
+        : "This workspace has no indexed documents to assess. Upload documents and wait for them to finish processing.";
       await this.emit(task.id, trace, "error", msg);
       await this.flush(task.id, trace);
       await this.tasks.finish(task.id, { status: "failed", error: msg });
       return;
+    }
+
+    // A scoped run intersects the selection with ready + active. Only the ALL-dropped case failed
+    // loudly above; a partial drop was silent, and the user had no way to learn that the pièce they
+    // pinned while it was still processing was simply not in the assessment.
+    //
+    // A set difference rather than `selected.length - docs.length`, because the DTO permits the
+    // same id twice and that would invent a phantom.
+    const returned = new Set(docs.map((d) => d.id));
+    const dropped = (selected ?? []).filter((id) => !returned.has(id));
+    if (dropped.length > 0) {
+      await this.emit(
+        task.id,
+        trace,
+        "progress",
+        `${dropped.length} of the ${new Set(selected).size} selected pièce(s) are not indexed or no longer active and were NOT read`
+      );
     }
 
     await this.tasks.updateProgress(task.id, {
@@ -596,6 +640,10 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     let windowsRead = 0;
     let windowsFailed = 0;
     let firstFailure: string | null = null;
+    /** Documents the run budget never reached. Distinct from `partial`: these were not opened. */
+    const unread: string[] = [];
+    /** Windows handed out so far, whether or not the call succeeded — this spends the run budget. */
+    let windowsPlanned = 0;
 
     for (let i = 0; i < docs.length; i++) {
       if (await this.wasCancelled(task, trace, i, docs.length)) return;
@@ -621,8 +669,17 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      const windows = this.windowsOf(text);
-      if (windows.truncated) partial.push(doc.filename);
+      const windows = this.windowsOf(
+        text,
+        MAX_WINDOWS_PER_RUN - windowsPlanned
+      );
+      // Zero windows means the RUN budget ran out before this document, not that the document was
+      // too long — it can be a two-page letter that happened to sit at position thirty. Reporting
+      // it as "only the first sections were assessed" would put a false coverage claim in a filed
+      // answer, so the two states are carried separately all the way to the synthesis prompt.
+      if (windows.parts.length === 0) unread.push(doc.filename);
+      else if (windows.truncated) partial.push(doc.filename);
+      windowsPlanned += windows.parts.length;
 
       const before = findings.length;
       for (let w = 0; w < windows.parts.length; w++) {
@@ -688,7 +745,7 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
         "progress",
         `${i + 1}/${docs.length} — ${doc.filename}: ${findings.length - before} relevant finding(s)` +
           (windows.truncated
-            ? ` (only the first ${MAX_WINDOWS_PER_DOC} sections were read)`
+            ? ` (only the first ${windows.parts.length} section(s) were read)`
             : "")
       );
       await this.tasks.updateProgress(task.id, {
@@ -749,8 +806,12 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
       task,
       language,
       findings: kept,
-      documentCount: docs.length,
+      // The count of documents actually opened, not the count in scope — `unread` and `dropped`
+      // are named separately below so the answer cannot claim coverage it does not have.
+      documentCount: docs.length - unread.length,
       partial,
+      unread,
+      droppedFromScope: dropped.length,
       onDelta: (delta) => this.emit(task.id, trace, "reasoning", delta)
     });
 
@@ -811,14 +872,25 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
    */
   private async readyDocuments(
     workspaceId: string,
-    ownerEmail: string
+    ownerEmail: string,
+    /**
+     * Narrows the run to these documents. Undefined or empty means the whole case file, so an
+     * unscoped task keeps its existing behaviour. The ready/active filter still applies on top:
+     * a selection is a request to read LESS, never a way to force a superseded or unparsed copy
+     * into an assessment.
+     */
+    documentIds?: string[]
   ): Promise<DocRow[]> {
+    const scoped = documentIds && documentIds.length > 0;
     const res = await this.pg.query<DocRow>(
       `SELECT id, filename, page_count FROM lex_documents
        WHERE workspace_id = $1 AND owner_email = $2
          AND parse_status = 'ready' AND lifecycle_state = 'active'
+         ${scoped ? "AND id = ANY($3::uuid[])" : ""}
        ORDER BY timeline_date ASC NULLS LAST, created_at ASC`,
-      [workspaceId, ownerEmail]
+      scoped
+        ? [workspaceId, ownerEmail, documentIds]
+        : [workspaceId, ownerEmail]
     );
     return res.rows;
   }
@@ -859,19 +931,29 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     return { text, chunks };
   }
 
-  /** Splits a document into per-call windows, reporting whether anything had to be left out. */
-  private windowsOf(text: string): { parts: string[]; truncated: boolean } {
+  /**
+   * Splits a document into per-call windows, reporting whether anything had to be left out.
+   *
+   * `budget` is the run's remaining window allowance; a document is capped by whichever of that
+   * and MAX_WINDOWS_PER_DOC binds first. A budget of 0 yields no parts and truncated=true, so an
+   * unread document is still named in the caveat rather than passing as fully read.
+   */
+  private windowsOf(
+    text: string,
+    budget: number
+  ): { parts: string[]; truncated: boolean } {
+    const allowed = Math.max(0, Math.min(MAX_WINDOWS_PER_DOC, budget));
     const parts: string[] = [];
     for (
       let at = 0;
-      at < text.length && parts.length < MAX_WINDOWS_PER_DOC;
+      at < text.length && parts.length < allowed;
       at += MAX_DOC_CHARS_PER_CALL
     ) {
       parts.push(text.slice(at, at + MAX_DOC_CHARS_PER_CALL));
     }
     return {
       parts,
-      truncated: text.length > MAX_WINDOWS_PER_DOC * MAX_DOC_CHARS_PER_CALL
+      truncated: text.length > allowed * MAX_DOC_CHARS_PER_CALL
     };
   }
 
@@ -1016,9 +1098,21 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     findings: LocatedFinding[];
     documentCount: number;
     partial: string[];
+    /** Documents in scope the run budget never reached. Named in the answer as NOT read. */
+    unread: string[];
+    /** Selected pièces excluded because they are not indexed or no longer active. */
+    droppedFromScope: number;
     onDelta: (delta: string) => Promise<void>;
   }): Promise<string> {
-    const { task, language, findings, documentCount, partial } = params;
+    const {
+      task,
+      language,
+      findings,
+      documentCount,
+      partial,
+      unread,
+      droppedFromScope
+    } = params;
 
     const findingsBlock = findings.length
       ? findings
@@ -1088,6 +1182,18 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
           (partial.length
             ? ` These documents were too long to read entirely, and only their first sections ` +
               `were assessed — say so explicitly in your answer: ${partial.join(", ")}.`
+            : "") +
+          // A different caveat from the one above, and a graver one. "Only the first sections"
+          // still describes a document that was opened; these were not opened at all, so an
+          // answer that folds them into the same sentence overstates its own coverage.
+          (unread.length
+            ? ` These documents were NOT read at all — the run's reading budget was exhausted ` +
+              `before reaching them. State plainly that the assessment does not cover them: ` +
+              `${unread.join(", ")}.`
+            : "") +
+          (droppedFromScope
+            ? ` ${droppedFromScope} further pièce(s) the user selected were excluded because they ` +
+              `are not indexed or no longer active, and were not read either — say so.`
             : "")
       },
       {
@@ -1115,7 +1221,12 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     // against the stored document, so a rerun can say the same thing differently but cannot say
     // something the file does not support.
     for await (const delta of this.openai.streamChat(messages, {
-      depth: task.depth
+      depth: task.depth,
+      // Named apart from the chat turn on purpose: this prompt is a fresh findings dump every
+      // time and shares no prefix with anything, so its cache figures would drag the chat
+      // averages down for a reason that is not a problem.
+      caller: `task:${task.kind}`,
+      blocks: ["taskSystem", "findings"]
     })) {
       full += delta;
       await params.onDelta(delta);
@@ -1168,9 +1279,12 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
         [task.conversation_id]
       );
       const base = Number(seqRes.rows[0].m);
+      // Both rows carry origin 'assessment', so the pair is protected together when the context
+      // assembler decides what a later turn still gets to see. The answer without the question it
+      // answered is an unattributed wall of findings.
       await client.query(
-        `INSERT INTO lex_messages (conversation_id, owner_email, seq, role, content, status)
-         VALUES ($1, $2, $3, 'user', $4, 'complete')`,
+        `INSERT INTO lex_messages (conversation_id, owner_email, seq, role, content, status, origin)
+         VALUES ($1, $2, $3, 'user', $4, 'complete', 'assessment')`,
         [
           task.conversation_id,
           task.owner_email,
@@ -1180,15 +1294,15 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
       );
       await client.query(
         `INSERT INTO lex_messages
-           (id, conversation_id, owner_email, seq, role, content, status, token_count)
-         VALUES ($1, $2, $3, $4, 'assistant', $5, 'complete', $6)`,
+           (id, conversation_id, owner_email, seq, role, content, status, token_count, origin)
+         VALUES ($1, $2, $3, $4, 'assistant', $5, 'complete', $6, 'assessment')`,
         [
           assistantId,
           task.conversation_id,
           task.owner_email,
           base + 2,
           answer,
-          Math.ceil(answer.length / 4)
+          estimateTokens(answer)
         ]
       );
       for (const n of cited) {

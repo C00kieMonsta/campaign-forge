@@ -9,6 +9,7 @@ import type {
 } from "@packages/types";
 import { OpenAiService } from "../../shared/openai.service";
 import { PgService } from "../../shared/pg.service";
+import { estimateTokens } from "../../shared/tokens";
 import { sourceKey } from "../ai/rag.service";
 import { WorkspacesService } from "../workspaces/workspaces.service";
 import { extractCitedIndexes } from "./citation-markers";
@@ -303,7 +304,7 @@ export class ConversationsService {
       );
     });
 
-    const { messages, sources } = await this.assembler.assemble(
+    const { messages, sources, blocks } = await this.assembler.assemble(
       ownerEmail,
       conv.workspaceId,
       conversationId,
@@ -313,7 +314,11 @@ export class ConversationsService {
 
     let full = "";
     try {
-      for await (const delta of this.openai.streamChat(messages, { depth })) {
+      for await (const delta of this.openai.streamChat(messages, {
+        depth,
+        caller: "chat",
+        blocks
+      })) {
         full += delta;
         onToken(delta);
       }
@@ -356,7 +361,7 @@ export class ConversationsService {
         `UPDATE lex_messages
          SET content = $2, status = 'complete', token_count = $3
          WHERE id = $1 AND status = 'pending'`,
-        [assistantId, full, Math.ceil(full.length / 4)]
+        [assistantId, full, estimateTokens(full)]
       );
       // Only persist citations if the finalize actually applied (idempotent on retry).
       if ((upd.rowCount ?? 0) > 0) {

@@ -11,6 +11,7 @@
 // is a section.
 
 import { createHash } from "node:crypto";
+import { estimateTokens } from "../../shared/tokens";
 import { normalizeForFingerprint } from "./chunker";
 
 /** Where a row's boundaries came from, and therefore how much a citation may claim. */
@@ -46,12 +47,6 @@ const SECTION_TARGET_CHARS = 3000;
 /** Below this, text is too short to identify a duplicate by — a blank page would match a blank. */
 const MIN_FINGERPRINT_CHARS = 200;
 /** Mirrors the chunker's estimate; used only for reporting and budget arithmetic. */
-const CHARS_PER_TOKEN = 4;
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
-}
-
 /** sha256 of the normalised text, or null when the text is too short to be identifying. */
 export function fingerprintOf(text: string): string | null {
   const normalized = normalizeForFingerprint(text);

@@ -31,6 +31,7 @@ import {
   FolderUp,
   Loader2,
   Mic,
+  Paperclip,
   Pencil,
   Pin,
   Plus,
@@ -700,6 +701,17 @@ export default function LexWorkspaceChat() {
   const [pinnedDocs, setPinnedDocs] = useState<LexDocument[]>([]);
   const [activePinnedId, setActivePinnedId] = useState<string | null>(null);
 
+  /**
+   * Which pièces a background run reads. "all" is the historical behaviour and stays the default:
+   * a scope that silently narrowed itself would be the worst possible failure here, since an
+   * assessment that read two documents reads exactly like one that read forty-seven.
+   *
+   * "selected" means the pièces pinned open plus the ones referenced in this message — the two
+   * things already on screen when the question is being written. A full read is minutes and real
+   * money per document, so asking about two pièces should not read the whole file.
+   */
+  const [runScope, setRunScope] = useState<"all" | "selected">("all");
+
   // Generate-artifact dialog state.
   const [genOpen, setGenOpen] = useState(false);
   const [genType, setGenType] = useState<LexArtifactType>("memo");
@@ -771,6 +783,16 @@ export default function LexWorkspaceChat() {
    * failures are reported, and the folder path is folded into each filename so a flattened
    * document is still identifiable in the timeline and in citations.
    */
+  /** Distinct pièces a "selected" run would read: pinned tabs plus this message's references. */
+  const selectedScopeCount = useMemo(
+    () =>
+      new Set([
+        ...pinnedDocs.map((d) => d.id),
+        ...refs.map((r) => r.documentId)
+      ]).size,
+    [pinnedDocs, refs]
+  );
+
   const handleUpload = async (fileList: FileList) => {
     const files = Array.from(fileList);
     if (files.length === 0) return;
@@ -995,11 +1017,32 @@ export default function LexWorkspaceChat() {
     // reads every document in the case file, so it takes minutes — the TaskPanel above the thread
     // shows its progress and reasoning, and the answer is posted here when it lands.
     if (deepMode || adverseMode) {
+      // Pinned tabs plus this message's references, de-duplicated: both are "the pièce I am
+      // asking about", and which one the user reached for should not change what gets read.
+      const scopedIds =
+        runScope === "selected"
+          ? Array.from(
+              new Set([
+                ...pinnedDocs.map((d) => d.id),
+                ...refs.map((r) => r.documentId)
+              ])
+            )
+          : [];
+      // Launching a scoped run with an empty scope would read the whole file, which is the
+      // opposite of what the toggle says. Refuse instead, and keep the question in the box.
+      if (runScope === "selected" && scopedIds.length === 0) {
+        setInput(text);
+        toast({ title: t.lex.scopeEmpty, variant: "destructive" });
+        sendingRef.current = false;
+        return;
+      }
       try {
         await controllers.tasks.create({
           workspaceId: id,
           conversationId: convId,
           kind: adverseMode ? "adverse_case" : "assess_documents",
+          // Absent means the whole case file, so an unscoped run is unchanged.
+          params: scopedIds.length > 0 ? { documentIds: scopedIds } : undefined,
           // For an assessment the first line labels the task and the whole text is the brief. For
           // an adverse read the text IS the party being defended, which the runner reads from the
           // title — hence no truncation-by-line there.
@@ -1648,6 +1691,24 @@ export default function LexWorkspaceChat() {
                   disabled={streaming}
                   className="min-h-10 max-h-48 resize-y"
                 />
+                {/* Same hidden input and same handleUpload as the documents panel: one upload
+                    path, no exceptions. It is here as well because the file to be read is usually
+                    the thing being asked about, and crossing to the left panel mid-question is
+                    where people gave up and pasted the text instead. */}
+                <Button
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={streaming || uploading}
+                  title={t.lex.uploadDocument}
+                  aria-label={t.lex.uploadDocument}
+                  className="shrink-0"
+                >
+                  {uploading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Paperclip className="h-4 w-4" />
+                  )}
+                </Button>
                 {recorder.isSupported ? (
                   <Button
                     variant="outline"
@@ -1744,6 +1805,44 @@ export default function LexWorkspaceChat() {
                     </button>
                   ))}
                 </div>
+
+                {/* Scope, shown only for background runs: it is the dial that decides whether a
+                    question about two pièces reads two or forty-seven. Hidden in direct mode,
+                    where retrieval already picks its own passages. */}
+                {background ? (
+                  <div
+                    className="flex items-center rounded-full border p-0.5"
+                    role="group"
+                    aria-label={t.lex.scopeLabel}
+                  >
+                    {(["all", "selected"] as const).map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => setRunScope(option)}
+                        aria-pressed={runScope === option}
+                        title={t.lex.scopeHint[option]}
+                        className={
+                          runScope === option
+                            ? "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs bg-secondary text-secondary-foreground font-medium"
+                            : "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+                        }
+                      >
+                        {option === "all" ? (
+                          <Files className="h-3.5 w-3.5" />
+                        ) : (
+                          <Pin className="h-3.5 w-3.5" />
+                        )}
+                        {t.lex.scopeName[option]}
+                        {/* The count is the honest part: "Pinned" with nothing pinned is a run
+                            that cannot start, and the number says so before it is launched. */}
+                        {option === "selected"
+                          ? ` (${selectedScopeCount})`
+                          : ""}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
 
                 <span className="text-[11px] text-muted-foreground">
                   {background ? t.lex.runSummary[depth] : t.lex.modeHint.direct}

@@ -18,7 +18,10 @@ const runner = new TaskRunner(
   {} as never,
   {} as never
 ) as unknown as {
-  windowsOf(text: string): { parts: string[]; truncated: boolean };
+  windowsOf(
+    text: string,
+    budget: number
+  ): { parts: string[]; truncated: boolean };
   locate(
     quote: string,
     chunks: { chunkId: string; content: string }[]
@@ -35,18 +38,34 @@ const chunk = (chunkId: string, content: string) => ({
   pageTo: 1
 });
 
+/** The run budget, wide enough that these cases are bound by the per-document cap. */
+const FULL_BUDGET = 200;
+
 describe("TaskRunner document windowing", () => {
   it("reads a normal document in a single call", () => {
-    const { parts, truncated } = runner.windowsOf("a".repeat(10000));
+    const { parts, truncated } = runner.windowsOf(
+      "a".repeat(10000),
+      FULL_BUDGET
+    );
     expect(parts).toHaveLength(1);
     expect(truncated).toBe(false);
   });
 
   it("splits a long document into per-call windows without losing text", () => {
     const text = "b".repeat(100000);
-    const { parts, truncated } = runner.windowsOf(text);
+    const { parts, truncated } = runner.windowsOf(text, FULL_BUDGET);
 
     expect(parts.length).toBeGreaterThan(1);
+    expect(parts.join("")).toBe(text);
+    expect(truncated).toBe(false);
+  });
+
+  it("reads an 80-page filing whole", () => {
+    // ~200k characters, the ordinary case: a set of conclusions with its exhibits. The previous
+    // 4-window cap cut this at 160k and lost the last quarter.
+    const text = "e".repeat(200000);
+    const { parts, truncated } = runner.windowsOf(text, FULL_BUDGET);
+
     expect(parts.join("")).toBe(text);
     expect(truncated).toBe(false);
   });
@@ -54,16 +73,36 @@ describe("TaskRunner document windowing", () => {
   it("caps a 300-page exhibit and reports that it was truncated", () => {
     // 600k characters: without the cap this is either a blown context window or the whole budget
     // of the run. `truncated` is what turns a silent omission into a caveat in the answer.
-    const { parts, truncated } = runner.windowsOf("c".repeat(600000));
+    const { parts, truncated } = runner.windowsOf(
+      "c".repeat(600000),
+      FULL_BUDGET
+    );
 
-    expect(parts).toHaveLength(4);
+    expect(parts).toHaveLength(12);
     expect(truncated).toBe(true);
   });
 
   it("caps every window at the per-call input ceiling", () => {
-    for (const part of runner.windowsOf("d".repeat(600000)).parts) {
+    for (const part of runner.windowsOf("d".repeat(600000), FULL_BUDGET)
+      .parts) {
       expect(part.length).toBeLessThanOrEqual(40000);
     }
+  });
+
+  it("stops at the run budget when it binds before the per-document cap", () => {
+    const { parts, truncated } = runner.windowsOf("f".repeat(600000), 3);
+
+    expect(parts).toHaveLength(3);
+    expect(truncated).toBe(true);
+  });
+
+  it("reports a document read on an exhausted budget as truncated, not as read", () => {
+    // The caveat is the whole point: a document that got zero windows must still be named as
+    // partially covered rather than pass silently as fully read.
+    const { parts, truncated } = runner.windowsOf("g".repeat(10000), 0);
+
+    expect(parts).toHaveLength(0);
+    expect(truncated).toBe(true);
   });
 });
 

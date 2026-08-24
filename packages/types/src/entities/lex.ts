@@ -496,8 +496,20 @@ export interface LexVerifyArtifactTaskParams {
   artifactId: string;
 }
 
+/**
+ * What an `assess_documents` / `adverse_case` run may narrow itself to.
+ *
+ * Absent or empty means the whole case file, which is what an unscoped run has always done. The
+ * scope exists because a full read is minutes and real money per document: answering a question
+ * about two pièces should not read forty-seven.
+ */
+export interface LexAssessmentTaskParams {
+  documentIds?: string[];
+}
+
 export type LexTaskParams =
   | LexArtifactTaskParams
+  | LexAssessmentTaskParams
   | LexVerifyArtifactTaskParams
   | Record<string, never>;
 

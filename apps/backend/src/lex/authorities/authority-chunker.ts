@@ -11,6 +11,7 @@
 // name the article it came from, and what turns "what does article 374 say" into an exact
 // lookup instead of a similarity search.
 
+import { estimateTokens } from "../../shared/tokens";
 import { buildFullText } from "../documents/chunker";
 
 // The same window as documents/chunker.ts, and for the same reason (~1000 tokens with ~150
@@ -143,12 +144,6 @@ function pageForOffset(offset: number, pageRanges: PageRange[]): number {
     if (offset < pageRanges[i].end) return i + 1; // 1-based; also catches separator gaps
   }
   return pageRanges.length || 1;
-}
-
-function estimateTokens(text: string): number {
-  // The same ~4 chars/token heuristic as the document chunker, so token_count means the same
-  // thing in both chunk tables — they are spent against one prompt budget.
-  return Math.ceil(text.length / 4);
 }
 
 /**

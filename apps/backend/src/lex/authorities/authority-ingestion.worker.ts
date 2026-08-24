@@ -10,6 +10,7 @@ import { ConfigService } from "../../config/config.service";
 import { LexS3Service } from "../../shared/lex-s3.service";
 import { OpenAiService } from "../../shared/openai.service";
 import { PgService } from "../../shared/pg.service";
+import { estimateTokens } from "../../shared/tokens";
 import { buildFullText, sanitizeForStorage } from "../documents/chunker";
 import { parseDocument } from "../documents/document-parser";
 import { outputLanguageInstruction } from "../settings/language-instruction";
@@ -37,11 +38,9 @@ const POOL_SIZE = 1;
 // Arithmetic: 1500 tokens x 3.4 chars/token ≈ 5100 characters. At DIGEST_LINE_MAX_CHARS = 110
 // that is ~46 lines, so 45 total lines (the coverage line plus 40 map lines asked of the model,
 // with slack for a model that returns a few more) fits with room to spare. Tokens are ESTIMATED
-// at 3.4 chars/token — the same heuristic ContextAssembler budgets prompts with, which is what
-// this competes against. A real tokeniser would mean a new dependency and per-turn CPU for
-// accounting that only ever needs to be an upper bound.
+// at the shared CHARS_PER_TOKEN estimate — the same one ContextAssembler budgets prompts with,
+// which is what this competes against. See shared/tokens.ts for why it is an estimate.
 const DIGEST_MAX_TOKENS = 1500;
-const CHARS_PER_TOKEN = 3.4;
 const DIGEST_MAX_LINES = 45;
 const DIGEST_MAP_LINES = 40;
 const DIGEST_LINE_MAX_CHARS = 110;
@@ -82,9 +81,12 @@ export interface ArticleMapEntry {
   subject: string;
 }
 
-export function estimateDigestTokens(text: string): number {
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
-}
+/**
+ * Named alias for the shared estimate, kept because `digest_tokens` is the one token figure a user
+ * actually sees (LexAuthorities sums it into "tokens added to every question") and the call sites
+ * read better for saying which quantity they mean.
+ */
+export const estimateDigestTokens = estimateTokens;
 
 function collapse(text: string): string {
   return text.replace(/\s+/g, " ").trim();

@@ -406,6 +406,18 @@ export const translations = {
       sourcesTruncated:
         "Le plafond de passages a été atteint : la sélection était plus large que ce qui a été lu.",
       passagesCount: "{n} passage(s)",
+      scopeLabel: "Pièces à lire",
+      scopeName: {
+        all: "Tout le dossier",
+        selected: "Pièces épinglées"
+      },
+      scopeHint: {
+        all: "Lit chaque pièce indexée du dossier. Quelques minutes par pièce.",
+        selected:
+          "Ne lit que les pièces épinglées ou référencées dans ce message. Beaucoup plus rapide, mais ce qui n'est pas sélectionné n'est pas lu."
+      },
+      scopeEmpty:
+        "Aucune pièce épinglée ou référencée — épinglez-en une, ou repassez sur tout le dossier.",
       modeLabel: "Type de lecture",
       modeName: {
         direct: "Réponse directe",
@@ -1170,6 +1182,18 @@ export const translations = {
       sourcesTruncated:
         "De passagelimiet is bereikt: de selectie was ruimer dan wat gelezen is.",
       passagesCount: "{n} passage(s)",
+      scopeLabel: "Te lezen stukken",
+      scopeName: {
+        all: "Volledig dossier",
+        selected: "Vastgezette stukken"
+      },
+      scopeHint: {
+        all: "Leest elk geïndexeerd stuk in het dossier. Enkele minuten per stuk.",
+        selected:
+          "Leest alleen de stukken die zijn vastgezet of in dit bericht zijn aangehaald. Veel sneller, maar wat niet is geselecteerd wordt niet gelezen."
+      },
+      scopeEmpty:
+        "Geen stuk vastgezet of aangehaald — zet er een vast, of lees het volledige dossier.",
       modeLabel: "Leestype",
       modeName: {
         direct: "Rechtstreeks antwoord",
