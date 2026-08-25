@@ -1,4 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from "react";
 import type {
   LexArtifactType,
   LexCitationEvent,
@@ -17,6 +25,10 @@ import {
   DialogTitle,
   Input,
   Label,
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
   Textarea
 } from "@packages/ui";
 import {
@@ -28,6 +40,7 @@ import {
   Eye,
   Files,
   FileText,
+  FolderOpen,
   FolderUp,
   Loader2,
   Mic,
@@ -52,6 +65,7 @@ import PinnedDocumentsPanel from "@/components/lex/PinnedDocumentsPanel";
 import TaskPanel from "@/components/lex/TaskPanel";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useLocalStorage } from "@/hooks/use-local-storage";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { useThrottled } from "@/hooks/use-throttled";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -134,7 +148,7 @@ const UserMessage = memo(function UserMessage({
     isLong && !expanded ? `${content.slice(0, LONG_MESSAGE_CHARS)}…` : content;
 
   return (
-    <div className="max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap bg-sidebar-primary text-sidebar-primary-foreground">
+    <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap bg-sidebar-primary text-sidebar-primary-foreground">
       {shown}
       {isLong ? (
         <button
@@ -250,14 +264,15 @@ const DocumentRow = memo(function DocumentRow({
               REFERENCE — attach the WHOLE document to the next question, in one click, without
                           opening anything. Deleting is not here on purpose: it lives behind the
                           checkbox selection, where it takes a deliberate second step.
-            Icons only, on hover, so a resting row is just the document. */}
+            Icons only, on hover where hover exists — a touch screen has none, so below md the
+            actions are simply always visible. */}
         <span className="flex items-center gap-1 shrink-0">
           <span className="group-hover:hidden">
             {doc.parseStatus === "ready" ? null : (
               <StatusBadge status={doc.parseStatus} />
             )}
           </span>
-          <span className="hidden group-hover:flex items-center gap-1.5">
+          <span className="flex items-center gap-1.5 md:hidden md:group-hover:flex">
             {!neverUploaded ? (
               <button
                 onClick={() => onPin(doc)}
@@ -391,6 +406,46 @@ const SourceChips = memo(function SourceChips({
 });
 
 /**
+ * Where the documents panel renders: an inline column when the viewport affords three columns,
+ * or a left sheet behind the header's documents button when it does not. One child tree either
+ * way — search text, ticked rows and scroll state live in the parent — only the container moves.
+ */
+function DocumentsPanelContainer({
+  inline,
+  open,
+  onOpenChange,
+  title,
+  children
+}: {
+  inline: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  children: ReactNode;
+}) {
+  if (inline) {
+    return (
+      <aside className="w-72 shrink-0 flex flex-col border-r pr-3">
+        {children}
+      </aside>
+    );
+  }
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="left"
+        className="flex w-[85vw] max-w-sm flex-col gap-0 p-0"
+      >
+        <SheetHeader className="border-b px-4 py-3 text-left">
+          <SheetTitle className="text-sm">{title}</SheetTitle>
+        </SheetHeader>
+        <div className="flex min-h-0 flex-1 flex-col p-3">{children}</div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/**
  * The workspace, redesigned around a single lawyer-agent chat. The left panel accumulates the
  * case documents (upload, view, reference); the center is one long conversation with source
  * citations; documents can be pinned as focus references, and a chat action generates a
@@ -408,6 +463,18 @@ export default function LexWorkspaceChat() {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Synchronous in-flight flag for sending — see the note in handleSend.
   const sendingRef = useRef(false);
+
+  /**
+   * Three columns need real width. From lg up the documents panel is an inline column; below
+   * that it lives in a sheet behind a header button. The pinned panel is wider still, so it
+   * stays inline only from xl up. JS media queries rather than CSS `hidden lg:flex` so each
+   * panel is rendered exactly once — its state (search, selection, loaded PDF) lives in this
+   * component either way.
+   */
+  const docsInline = useMediaQuery("(min-width: 1024px)");
+  const pinsInline = useMediaQuery("(min-width: 1280px)");
+  const [docsSheetOpen, setDocsSheetOpen] = useState(false);
+  const [pinsSheetOpen, setPinsSheetOpen] = useState(false);
 
   const workspace = useEntity("lexWorkspaces", id);
 
@@ -885,17 +952,31 @@ export default function LexWorkspaceChat() {
    * Holds a document open as a tab in the right-hand panel, and focuses it. Pinning is about
    * keeping a document to hand; the pages sent to the chat come from that panel.
    */
-  const pinDocument = useCallback((doc: LexDocument) => {
-    setPinnedDocs((prev) =>
-      prev.some((d) => d.id === doc.id) ? prev : [...prev, doc]
-    );
-    setActivePinnedId(doc.id);
-  }, []);
+  const pinDocument = useCallback(
+    (doc: LexDocument) => {
+      setPinnedDocs((prev) =>
+        prev.some((d) => d.id === doc.id) ? prev : [...prev, doc]
+      );
+      setActivePinnedId(doc.id);
+      // When the pinned panel lives in a sheet, pinning is the intent to look at it — open it,
+      // and get the documents sheet out of the way if that is where the pin was tapped.
+      if (!pinsInline) {
+        setDocsSheetOpen(false);
+        setPinsSheetOpen(true);
+      }
+    },
+    [pinsInline]
+  );
 
   const unpinDocument = useCallback((documentId: string) => {
     setPinnedDocs((prev) => prev.filter((d) => d.id !== documentId));
     setActivePinnedId((prev) => (prev === documentId ? null : prev));
   }, []);
+
+  // Unpinning the last document (or deleting pinned ones) must not leave an empty sheet open.
+  useEffect(() => {
+    if (pinnedDocs.length === 0) setPinsSheetOpen(false);
+  }, [pinnedDocs.length]);
 
   /**
    * "Send to chat" from a pinned document (or from the modal viewer): the chosen pages become a
@@ -914,7 +995,11 @@ export default function LexWorkspaceChat() {
 
   /** One-click: attach the whole document to the next question, no viewer, no page picking. */
   const referenceWholeDocument = useCallback(
-    (doc: LexDocument) => referenceInChat(doc.id, doc.filename, []),
+    (doc: LexDocument) => {
+      referenceInChat(doc.id, doc.filename, []);
+      // The reference lands as a chip above the composer — close the sheet so it is visible.
+      setDocsSheetOpen(false);
+    },
     [referenceInChat]
   );
 
@@ -1237,10 +1322,12 @@ export default function LexWorkspaceChat() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)]">
+    // h-full, not calc(100vh-…): the shell's <main> owns the viewport math (padding varies by
+    // breakpoint, and mobile adds a top bar), so the page just fills whatever it is given.
+    <div className="flex flex-col h-full">
       {/* One header across the full width. The case name lives here rather than in the narrow
           documents column, where it was truncated to a couple of characters. */}
-      <header className="flex items-center gap-3 pb-3 mb-3 border-b">
+      <header className="flex items-center gap-2 md:gap-3 pb-3 mb-3 border-b">
         <button
           onClick={() => navigate("/lex")}
           title={t.lex.back}
@@ -1278,32 +1365,67 @@ export default function LexWorkspaceChat() {
               <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover/name:opacity-100 transition-opacity" />
             </button>
           )}
-          <p className="text-xs text-muted-foreground truncate">
+          <p className="hidden sm:block text-xs text-muted-foreground truncate">
             {t.lex.subtitle}
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Below md the labels drop and the buttons become icons — every one keeps its title and
+            aria-label, so nothing is lost, only ink. */}
+        <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+          {!docsInline ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDocsSheetOpen(true)}
+              title={t.lex.documents}
+              aria-label={t.lex.documents}
+            >
+              <FolderOpen className="h-4 w-4" />
+              <span className="ml-1 text-xs tabular-nums">
+                {docGroups.length}
+              </span>
+            </Button>
+          ) : null}
+          {!pinsInline && pinnedDocs.length > 0 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPinsSheetOpen(true)}
+              title={t.lex.pinned}
+              aria-label={t.lex.pinned}
+            >
+              <Pin className="h-4 w-4" />
+              <span className="ml-1 text-xs tabular-nums">
+                {pinnedDocs.length}
+              </span>
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"
             onClick={() => navigate(`/lex/workspaces/${id}/documents`)}
+            title={t.lex.allDocuments}
+            aria-label={t.lex.allDocuments}
           >
-            <Files className="h-4 w-4 mr-1.5" />
-            {t.lex.allDocuments}
+            <Files className="h-4 w-4 md:mr-1.5" />
+            <span className="hidden md:inline">{t.lex.allDocuments}</span>
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => navigate(`/lex/workspaces/${id}/story`)}
+            title={t.lex.story.tab}
+            aria-label={t.lex.story.tab}
           >
-            <CalendarClock className="h-4 w-4 mr-1.5" />
-            {t.lex.story.tab}
+            <CalendarClock className="h-4 w-4 md:mr-1.5" />
+            <span className="hidden md:inline">{t.lex.story.tab}</span>
           </Button>
           {messages.length > 0 ? (
             <Button
               variant="outline"
               size="sm"
+              className="hidden sm:inline-flex"
               onClick={() => void handleCopyConversation()}
               title={t.lex.copyConversation}
               aria-label={t.lex.copyConversation}
@@ -1315,16 +1437,52 @@ export default function LexWorkspaceChat() {
             size="sm"
             onClick={() => openGenerate()}
             className="gradient-terracotta text-white"
+            title={t.lex.newArtifact}
+            aria-label={t.lex.newArtifact}
           >
-            <Plus className="h-4 w-4 mr-1.5" />
-            {t.lex.newArtifact}
+            <Plus className="h-4 w-4 md:mr-1.5" />
+            <span className="hidden md:inline">{t.lex.newArtifact}</span>
           </Button>
         </div>
       </header>
 
-      <div className="flex flex-1 gap-4 min-h-0">
+      {/* The upload inputs live at the page root, not in the documents panel: the composer's
+          paperclip clicks them too, and below lg the panel is a sheet that may not be mounted. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".pdf,.docx,.xlsx,.md,.txt,.jpg,.jpeg,.png,.m4a,.mp3,.wav,.webm,.ogg"
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files) void handleUpload(e.target.files);
+          e.target.value = "";
+        }}
+      />
+      {/* webkitdirectory: the browser hands back every file in the folder tree, each carrying
+          its relative path — flattened into the filename by toUploadCandidates. */}
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        /* @ts-expect-error -- webkitdirectory is not in React's HTML types but is required. */
+        webkitdirectory=""
+        directory=""
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files) void handleUpload(e.target.files);
+          e.target.value = "";
+        }}
+      />
+
+      <div className="flex flex-1 gap-3 md:gap-4 min-h-0">
         {/* Documents panel */}
-        <aside className="w-72 shrink-0 flex flex-col border-r pr-3">
+        <DocumentsPanelContainer
+          inline={docsInline}
+          open={docsSheetOpen}
+          onOpenChange={setDocsSheetOpen}
+          title={t.lex.documents}
+        >
           <div className="mb-3 space-y-1.5">
             <div className="flex gap-1.5">
               <Button
@@ -1358,32 +1516,6 @@ export default function LexWorkspaceChat() {
               </p>
             ) : null}
           </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".pdf,.docx,.xlsx,.md,.txt,.jpg,.jpeg,.png,.m4a,.mp3,.wav,.webm,.ogg"
-            className="hidden"
-            onChange={(e) => {
-              if (e.target.files) void handleUpload(e.target.files);
-              e.target.value = "";
-            }}
-          />
-          {/* webkitdirectory: the browser hands back every file in the folder tree, each carrying
-            its relative path — flattened into the filename by toUploadCandidates. */}
-          <input
-            ref={folderInputRef}
-            type="file"
-            multiple
-            /* @ts-expect-error -- webkitdirectory is not in React's HTML types but is required. */
-            webkitdirectory=""
-            directory=""
-            className="hidden"
-            onChange={(e) => {
-              if (e.target.files) void handleUpload(e.target.files);
-              e.target.value = "";
-            }}
-          />
 
           {/* Search across filename, tags, key names and the timeline date. */}
           <div className="relative mb-2">
@@ -1504,7 +1636,7 @@ export default function LexWorkspaceChat() {
               ))
             )}
           </div>
-        </aside>
+        </DocumentsPanelContainer>
 
         {/* Chat panel */}
         <div className="flex-1 flex flex-col min-w-0">
@@ -1554,7 +1686,7 @@ export default function LexWorkspaceChat() {
                 </div>
               ) : (
                 <div key={m.id} className="group flex justify-start">
-                  <div className="max-w-[80%] rounded-2xl px-4 py-2.5 text-sm bg-card border">
+                  <div className="max-w-[92%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm bg-card border">
                     <MarkdownMessage
                       content={m.content}
                       citations={citationsByMessage[m.id] ?? []}
@@ -1564,7 +1696,8 @@ export default function LexWorkspaceChat() {
                       citations={citationsByMessage[m.id] ?? []}
                       onTrace={handleTrace}
                     />
-                    <div className="mt-1.5 flex justify-end opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                    {/* Hover-revealed where hover exists; on touch screens it is simply visible. */}
+                    <div className="mt-1.5 flex justify-end transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
                       <button
                         onClick={() => void handleCopyMessage(m.content)}
                         title={t.lex.copy}
@@ -1582,7 +1715,7 @@ export default function LexWorkspaceChat() {
 
             {pendingUser ? (
               <div className="flex justify-end">
-                <div className="max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap bg-sidebar-primary text-sidebar-primary-foreground">
+                <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap bg-sidebar-primary text-sidebar-primary-foreground">
                   {pendingUser}
                 </div>
               </div>
@@ -1590,7 +1723,7 @@ export default function LexWorkspaceChat() {
 
             {streaming ? (
               <div className="flex justify-start">
-                <div className="max-w-[80%] rounded-2xl px-4 py-2.5 text-sm bg-card border">
+                <div className="max-w-[92%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm bg-card border">
                   {throttledStreamText ? (
                     <MarkdownMessage
                       content={throttledStreamText}
@@ -1844,7 +1977,9 @@ export default function LexWorkspaceChat() {
                   </div>
                 ) : null}
 
-                <span className="text-[11px] text-muted-foreground">
+                {/* The running sentence is desktop-only: on a phone the pills already wrap onto
+                    two lines, and each carries the same text as its title. */}
+                <span className="hidden md:inline text-[11px] text-muted-foreground">
                   {background ? t.lex.runSummary[depth] : t.lex.modeHint.direct}
                 </span>
               </div>
@@ -1852,16 +1987,42 @@ export default function LexWorkspaceChat() {
           )}
         </div>
         {/* Pinned documents: held open as tabs beside the conversation. Pages ticked here are
-            sent to the chat as structured references. */}
-        <PinnedDocumentsPanel
-          docs={pinnedDocs}
-          activeId={activePinnedId}
-          onActivate={setActivePinnedId}
-          onClose={unpinDocument}
-          onSendToChat={(doc, pages) =>
-            referenceInChat(doc.id, doc.filename, pages)
-          }
-        />
+            sent to the chat as structured references. Inline only from xl up — below that it is
+            a right-hand sheet behind the header's pin button, and sending pages closes it so the
+            reference chip it just created is visible above the composer. */}
+        {pinsInline ? (
+          <PinnedDocumentsPanel
+            docs={pinnedDocs}
+            activeId={activePinnedId}
+            onActivate={setActivePinnedId}
+            onClose={unpinDocument}
+            onSendToChat={(doc, pages) =>
+              referenceInChat(doc.id, doc.filename, pages)
+            }
+          />
+        ) : (
+          <Sheet open={pinsSheetOpen} onOpenChange={setPinsSheetOpen}>
+            <SheetContent
+              side="right"
+              className="flex w-[92vw] flex-col gap-0 p-0 sm:max-w-md"
+            >
+              <SheetHeader className="border-b px-4 py-3 text-left">
+                <SheetTitle className="text-sm">{t.lex.pinned}</SheetTitle>
+              </SheetHeader>
+              <PinnedDocumentsPanel
+                className="min-h-0 w-full flex-1"
+                docs={pinnedDocs}
+                activeId={activePinnedId}
+                onActivate={setActivePinnedId}
+                onClose={unpinDocument}
+                onSendToChat={(doc, pages) => {
+                  referenceInChat(doc.id, doc.filename, pages);
+                  setPinsSheetOpen(false);
+                }}
+              />
+            </SheetContent>
+          </Sheet>
+        )}
       </div>
 
       {openVoiceNote ? (
@@ -1891,7 +2052,7 @@ export default function LexWorkspaceChat() {
             dialog, over the page behind it. `minmax(0,1fr)` on the body row is the fix, and it also
             makes that row the one that scrolls: with 72 pièces the dialog is taller than the
             viewport, and without it the middle of the form was simply clipped. */}
-        <DialogContent className="sm:max-w-2xl max-h-[85vh] grid-rows-[auto_minmax(0,1fr)_auto]">
+        <DialogContent className="sm:max-w-2xl max-h-[88dvh] grid-rows-[auto_minmax(0,1fr)_auto]">
           <DialogHeader>
             <DialogTitle>{t.lex.newArtifact}</DialogTitle>
           </DialogHeader>

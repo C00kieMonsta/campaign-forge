@@ -114,8 +114,12 @@ export default function DocumentViewerDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-5xl">
-        <DialogHeader>
+      {/* sm:max-w-5xl, not max-w-5xl: DialogContent's own `sm:max-w-lg` wins over an unprefixed
+          override at ≥sm (responsive utilities sort after base ones), which quietly capped this
+          viewer at 32rem. Flex column with a capped dvh height so on a phone the page list
+          scrolls inside the dialog instead of the dialog growing past the visible viewport. */}
+      <DialogContent className="flex max-h-[92dvh] flex-col p-4 sm:p-6 sm:max-w-5xl">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="truncate pr-8">{doc.filename}</DialogTitle>
         </DialogHeader>
 
@@ -123,7 +127,7 @@ export default function DocumentViewerDialog({
             is the thing being checked — showing it beside the page turns "is this the right pièce"
             into a comparison the reader can make without holding the sentence in their head. */}
         {highlight ? (
-          <div className="rounded-lg border bg-muted/40 px-3 py-2 text-xs">
+          <div className="shrink-0 rounded-lg border bg-muted/40 px-3 py-2 text-xs">
             <span className="text-muted-foreground">
               {t.lex.citedPassage}
               {target ? ` · ${t.lex.page} ${target}` : ""}
@@ -132,7 +136,7 @@ export default function DocumentViewerDialog({
           </div>
         ) : null}
 
-        <div className="flex items-center gap-3 pb-2 border-b text-xs text-muted-foreground">
+        <div className="flex shrink-0 items-center gap-3 pb-2 border-b text-xs text-muted-foreground">
           <span>
             {doc.timelineDate ?? t.lex.noDate}
             {isPdf && pageCount > 0
@@ -153,7 +157,7 @@ export default function DocumentViewerDialog({
           ) : null}
         </div>
 
-        <div className="max-h-[75vh] overflow-auto">
+        <div className="min-h-0 flex-1 overflow-auto">
           {loading ? (
             <div className="py-16 flex justify-center text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />

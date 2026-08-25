@@ -53,10 +53,13 @@ function LanguageSwitcher() {
  */
 export default function AdminSidebar({
   collapsed,
-  onToggle
+  onToggle,
+  hideToggle = false
 }: {
   collapsed: boolean;
   onToggle: () => void;
+  /** Inside the mobile sheet the sheet's own close button replaces the collapse toggle. */
+  hideToggle?: boolean;
 }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -70,7 +73,7 @@ export default function AdminSidebar({
   };
 
   return (
-    // h-full (of AdminLayout's h-screen row), not min-h-screen: the sidebar is chrome and belongs to
+    // h-full (of AdminLayout's h-dvh row), not min-h-screen: the sidebar is chrome and belongs to
     // the viewport, not to the length of the page beside it. overflow-y-auto so its own nav scrolls
     // independently if it ever outgrows the screen, instead of pushing the layout taller.
     <aside
@@ -88,18 +91,22 @@ export default function AdminSidebar({
               <AppSwitcher />
             </div>
           )}
-          <button
-            onClick={onToggle}
-            title={collapsed ? t.nav.expandSidebar : t.nav.collapseSidebar}
-            aria-label={collapsed ? t.nav.expandSidebar : t.nav.collapseSidebar}
-            className={`shrink-0 rounded-lg p-2 text-sidebar-foreground/50 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground ${collapsed ? "mx-auto" : ""}`}
-          >
-            {collapsed ? (
-              <PanelLeftOpen className="h-5 w-5" />
-            ) : (
-              <PanelLeftClose className="h-5 w-5" />
-            )}
-          </button>
+          {hideToggle ? null : (
+            <button
+              onClick={onToggle}
+              title={collapsed ? t.nav.expandSidebar : t.nav.collapseSidebar}
+              aria-label={
+                collapsed ? t.nav.expandSidebar : t.nav.collapseSidebar
+              }
+              className={`shrink-0 rounded-lg p-2 text-sidebar-foreground/50 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground ${collapsed ? "mx-auto" : ""}`}
+            >
+              {collapsed ? (
+                <PanelLeftOpen className="h-5 w-5" />
+              ) : (
+                <PanelLeftClose className="h-5 w-5" />
+              )}
+            </button>
+          )}
         </div>
       </div>
 

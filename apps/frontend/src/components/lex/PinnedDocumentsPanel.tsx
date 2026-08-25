@@ -30,13 +30,19 @@ export default function PinnedDocumentsPanel({
   activeId,
   onActivate,
   onClose,
-  onSendToChat
+  onSendToChat,
+  className = "w-[25rem] shrink-0 border-l"
 }: {
   docs: LexDocument[];
   activeId: string | null;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onSendToChat: (doc: LexDocument, pages: number[]) => void;
+  /**
+   * Sizing of the panel, decided by its container: the default is the inline column beside the
+   * conversation; inside the small-screen sheet the parent passes a fill-the-sheet variant.
+   */
+  className?: string;
 }) {
   const { t } = useLanguage();
   const { toast } = useToast();
@@ -134,7 +140,7 @@ export default function PinnedDocumentsPanel({
   return (
     <aside
       aria-label={t.lex.pinned}
-      className="w-[25rem] shrink-0 flex flex-col border-l bg-muted/20"
+      className={`flex flex-col bg-muted/20 ${className}`}
     >
       {/* Tab bar — one tab per pinned document, closable. */}
       <div className="flex items-stretch gap-px overflow-x-auto border-b bg-muted/40">
