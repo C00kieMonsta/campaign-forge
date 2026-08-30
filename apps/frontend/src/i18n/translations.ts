@@ -307,6 +307,7 @@ export const translations = {
       discardProblems: "Tout supprimer",
       discarded: "Supprimés",
       loadEarlier: "Afficher les messages précédents",
+      jumpToLatest: "Aller au dernier message",
       authorities: "Sources de droit",
       authoritiesHint:
         "Les textes de loi que vous téléversez ici sont traités comme une vérité non négociable : l'assistant les consulte à chaque question et ne peut pas les contredire.",
@@ -1085,6 +1086,7 @@ export const translations = {
       discardProblems: "Alles verwijderen",
       discarded: "Verwijderd",
       loadEarlier: "Eerdere berichten weergeven",
+      jumpToLatest: "Naar het laatste bericht",
       authorities: "Rechtsbronnen",
       authoritiesHint:
         "Wetteksten die u hier uploadt gelden als niet-onderhandelbare waarheid: de assistent raadpleegt ze bij elke vraag en mag ze niet tegenspreken.",

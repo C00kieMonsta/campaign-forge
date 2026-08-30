@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,6 +37,8 @@ import {
   AudioLines,
   Brain,
   CalendarClock,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Eye,
   Files,
@@ -135,6 +138,11 @@ function isVoiceNote(doc: LexDocument): boolean {
  * an excerpt of a filing is normal here, and an uncollapsed one buries the assistant's answer.
  */
 const LONG_MESSAGE_CHARS = 900;
+
+/** How far from the end of the thread still counts as "at the end". One short message's worth. */
+const BOTTOM_SLACK = 120;
+/** How close to the top pulls the next page in without waiting for the button. */
+const TOP_TRIGGER = 240;
 
 const UserMessage = memo(function UserMessage({
   content
@@ -465,6 +473,26 @@ export default function LexWorkspaceChat() {
   const sendingRef = useRef(false);
 
   /**
+   * Whether the thread is parked at its end.
+   *
+   * Two consumers, hence both a ref and a state: the stick-to-bottom layout effect reads it during
+   * a commit (a ref, so it is never a render behind), the jump-to-latest button renders off it
+   * (state). The thread used to scroll itself to the bottom on every store write, so reading a
+   * passage half-way up lasted until the next token arrived.
+   */
+  const atBottomRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true);
+  /**
+   * Distance from the bottom to hold across a prepend, set by "load earlier".
+   *
+   * Measured from the BOTTOM rather than the top so the correction is the same whenever it is
+   * applied and applying it twice changes nothing. Prepending a page of forty messages above the
+   * reading position pushes it down by their entire height — which is what made loading earlier
+   * messages read as jumping somewhere else in the case.
+   */
+  const holdFromBottomRef = useRef<number | null>(null);
+
+  /**
    * Three columns need real width. From lg up the documents panel is an inline column; below
    * that it lives in a sheet behind a header button. The pinned panel is wider still, so it
    * stays inline only from xl up. JS media queries rather than CSS `hidden lg:flex` so each
@@ -730,12 +758,40 @@ export default function LexWorkspaceChat() {
     setLoadingOlder(true);
     try {
       const { hasMore } = await loadMessages(activeConvId, messages[0].seq);
+      // Measured after the fetch and before React commits the prepend: this microtask runs before
+      // the scheduler task that renders the store write, so scrollHeight here is still the old one.
+      const el = scrollRef.current;
+      if (el) holdFromBottomRef.current = el.scrollHeight - el.scrollTop;
       setHasOlder(hasMore);
     } catch (err) {
+      holdFromBottomRef.current = null;
       toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       setLoadingOlder(false);
     }
+  };
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const el = scrollRef.current;
+    if (!el) return;
+    holdFromBottomRef.current = null;
+    atBottomRef.current = true;
+    setAtBottom(true);
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
+  const handleThreadScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const near =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK;
+    atBottomRef.current = near;
+    setAtBottom((prev) => (prev === near ? prev : near));
+    // Lazy load upwards. The button below says the same thing out loud, for anyone who does not
+    // discover it by scrolling; either way the reading position is held by holdFromBottomRef.
+    if (near) return;
+    if (el.scrollTop <= TOP_TRIGGER && hasOlder && !loadingOlder)
+      void handleLoadOlder();
   };
 
   // Inline rename of the case. null = not editing.
@@ -841,9 +897,28 @@ export default function LexWorkspaceChat() {
     return () => clearInterval(timer);
   }, [anyInProgress, controllers, id]);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, streamText, pendingUser]);
+  /**
+   * Keeps the thread where the reader left it.
+   *
+   * Three cases, in order: an older page just landed (put the held distance from the bottom back),
+   * the reader is parked at the end (follow the new content down), or the reader is somewhere above
+   * (leave it alone — the jump-to-latest button is how they come back).
+   *
+   * A layout effect, not an effect: the correction is applied in the same commit as the messages
+   * that caused it, so nothing is painted at the wrong offset first.
+   */
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const hold = holdFromBottomRef.current;
+    if (hold !== null) {
+      holdFromBottomRef.current = null;
+      el.scrollTop = el.scrollHeight - hold;
+      return;
+    }
+    if (!atBottomRef.current) return;
+    el.scrollTo({ top: el.scrollHeight });
+  }, [messages, streamText, pendingUser, loadingOlder]);
 
   /**
    * Files (or a whole folder) go straight to S3. Nothing is silently dropped: rejects and
@@ -1078,6 +1153,10 @@ export default function LexWorkspaceChat() {
     if (!text || sendingRef.current) return;
     sendingRef.current = true;
     setInput("");
+    // Sending is an implicit "take me to the end": the reply belongs at the bottom and the user
+    // just asked for it. Without this, a question typed while scrolled up streams off-screen.
+    atBottomRef.current = true;
+    setAtBottom(true);
 
     let convId = activeConvId;
     if (!convId) {
@@ -1657,91 +1736,119 @@ export default function LexWorkspaceChat() {
             </div>
           ) : null}
 
-          <div ref={scrollRef} className="flex-1 overflow-auto space-y-4 pr-2">
-            {messages.length === 0 && !streaming && !pendingUser ? (
-              <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-                {t.lex.askPlaceholder}
-              </div>
-            ) : null}
-
-            {hasOlder ? (
-              <div className="flex justify-center">
-                <button
-                  onClick={() => void handleLoadOlder()}
-                  disabled={loadingOlder}
-                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground underline"
-                >
-                  {loadingOlder ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : null}
-                  {t.lex.loadEarlier}
-                </button>
-              </div>
-            ) : null}
-
-            {messages.map((m) =>
-              m.role === "user" ? (
-                <div key={m.id} className="flex justify-end">
-                  <UserMessage content={m.content} />
+          {/* Positioning context for the jump-to-latest button: it has to float over the thread,
+              not over the composer below it. */}
+          <div className="relative flex flex-1 flex-col min-h-0">
+            <div
+              ref={scrollRef}
+              onScroll={handleThreadScroll}
+              className="flex-1 overflow-auto space-y-4 pr-2"
+            >
+              {messages.length === 0 && !streaming && !pendingUser ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+                  {t.lex.askPlaceholder}
                 </div>
-              ) : (
-                <div key={m.id} className="group flex justify-start">
-                  <div className="max-w-[92%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm bg-card border">
-                    <MarkdownMessage
-                      content={m.content}
-                      citations={citationsByMessage[m.id] ?? []}
-                      onTrace={handleTrace}
-                    />
-                    <SourceChips
-                      citations={citationsByMessage[m.id] ?? []}
-                      onTrace={handleTrace}
-                    />
-                    {/* Hover-revealed where hover exists; on touch screens it is simply visible. */}
-                    <div className="mt-1.5 flex justify-end transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
-                      <button
-                        onClick={() => void handleCopyMessage(m.content)}
-                        title={t.lex.copy}
-                        aria-label={t.lex.copy}
-                        className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-                      >
-                        <Copy className="h-3 w-3" />
-                        {t.lex.copy}
-                      </button>
+              ) : null}
+
+              {/* Sticky, so a years-long thread never has to be dragged to its very top to reach
+                it — it sits at the top of the viewport wherever the reader is. */}
+              {hasOlder ? (
+                <div className="sticky top-0 z-10 -mx-1 flex justify-center px-1 py-1">
+                  <button
+                    type="button"
+                    onClick={() => void handleLoadOlder()}
+                    disabled={loadingOlder}
+                    className="inline-flex items-center gap-1.5 rounded-full border bg-card/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur transition hover:text-foreground disabled:opacity-60"
+                  >
+                    {loadingOlder ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <ChevronUp className="h-3 w-3" />
+                    )}
+                    {t.lex.loadEarlier}
+                  </button>
+                </div>
+              ) : null}
+
+              {messages.map((m) =>
+                m.role === "user" ? (
+                  <div key={m.id} className="flex justify-end">
+                    <UserMessage content={m.content} />
+                  </div>
+                ) : (
+                  <div key={m.id} className="group flex justify-start">
+                    <div className="max-w-[92%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm bg-card border">
+                      <MarkdownMessage
+                        content={m.content}
+                        citations={citationsByMessage[m.id] ?? []}
+                        onTrace={handleTrace}
+                      />
+                      <SourceChips
+                        citations={citationsByMessage[m.id] ?? []}
+                        onTrace={handleTrace}
+                      />
+                      {/* Hover-revealed where hover exists; on touch screens it is simply visible. */}
+                      <div className="mt-1.5 flex justify-end transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
+                        <button
+                          onClick={() => void handleCopyMessage(m.content)}
+                          title={t.lex.copy}
+                          aria-label={t.lex.copy}
+                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                        >
+                          <Copy className="h-3 w-3" />
+                          {t.lex.copy}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )
-            )}
+                )
+              )}
 
-            {pendingUser ? (
-              <div className="flex justify-end">
-                <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap bg-sidebar-primary text-sidebar-primary-foreground">
-                  {pendingUser}
+              {pendingUser ? (
+                <div className="flex justify-end">
+                  <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap bg-sidebar-primary text-sidebar-primary-foreground">
+                    {pendingUser}
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
 
-            {streaming ? (
-              <div className="flex justify-start">
-                <div className="max-w-[92%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm bg-card border">
-                  {throttledStreamText ? (
-                    <MarkdownMessage
-                      content={throttledStreamText}
+              {streaming ? (
+                <div className="flex justify-start">
+                  <div className="max-w-[92%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm bg-card border">
+                    {throttledStreamText ? (
+                      <MarkdownMessage
+                        content={throttledStreamText}
+                        citations={streamCitations}
+                        onTrace={handleTrace}
+                      />
+                    ) : (
+                      <span className="inline-flex items-center gap-2 text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        {t.lex.thinking}
+                      </span>
+                    )}
+                    <SourceChips
                       citations={streamCitations}
                       onTrace={handleTrace}
                     />
-                  ) : (
-                    <span className="inline-flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      {t.lex.thinking}
-                    </span>
-                  )}
-                  <SourceChips
-                    citations={streamCitations}
-                    onTrace={handleTrace}
-                  />
+                  </div>
                 </div>
-              </div>
+              ) : null}
+            </div>
+
+            {/* Jump to the latest message. Appears only when the thread is scrolled away from its
+              end, where the alternative is a flick-scroll through a whole case conversation —
+              which is most of the time on a phone. */}
+            {!atBottom && (messages.length > 0 || streaming || pendingUser) ? (
+              <button
+                type="button"
+                onClick={() => scrollToBottom()}
+                title={t.lex.jumpToLatest}
+                aria-label={t.lex.jumpToLatest}
+                className="absolute bottom-3 right-3 z-20 inline-flex h-11 w-11 items-center justify-center rounded-full border bg-card/95 text-foreground shadow-lg backdrop-blur transition hover:bg-accent md:h-10 md:w-10"
+              >
+                <ChevronDown className="h-5 w-5" />
+              </button>
             ) : null}
           </div>
 
