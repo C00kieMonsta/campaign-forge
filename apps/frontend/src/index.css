@@ -41,6 +41,10 @@
   * {
     @apply border-border;
   }
+  html {
+    /* Every button and the whole document row flashed grey on tap without this. */
+    -webkit-tap-highlight-color: transparent;
+  }
   body {
     @apply bg-background text-foreground font-sans antialiased;
   }
@@ -179,6 +183,14 @@
 }
 .lex-markdown > *:last-child {
   margin-bottom: 0;
+}
+/* Model output and pasted filings carry URLs and folder-flattened filenames with no spaces in them.
+   Without this they push the bubble past its max-width, and because the thread scroller is
+   overflow-auto on both axes the whole conversation then scrolls sideways. */
+.lex-markdown,
+.lex-markdown a,
+.lex-markdown code {
+  overflow-wrap: anywhere;
 }
 .lex-markdown p {
   margin: 0.5em 0;
@@ -323,4 +335,11 @@
   outline: 2px solid hsl(var(--primary));
   outline-offset: 1px;
   border-radius: 999px;
+}
+
+/* Set by PanelResizer while a panel is being dragged. Pointer capture keeps the events on the rule,
+   but the cursor and text selection are still the document's. */
+[data-lex-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }

@@ -25,6 +25,8 @@ import { estimateTokens } from "../../shared/tokens";
 import { ArtifactsService } from "../artifacts/artifacts.service";
 import { quoteMatchesChunk } from "../artifacts/verification.service";
 import { extractCitedIndexes } from "../conversations/citation-markers";
+import { dateOnly } from "../documents/calendar-date";
+import { CaseFileService } from "../documents/case-file.service";
 import { sanitizeForStorage, stitchChunks } from "../documents/chunker";
 import {
   languageName,
@@ -124,6 +126,10 @@ interface DocRow {
   id: string;
   filename: string;
   page_count: number | null;
+  /** The three below feed documentHeader. Already stored, so they cost a wider SELECT and nothing else. */
+  timeline_date: Date | string | null;
+  language: string | null;
+  summary: string | null;
 }
 
 interface ChunkRow {
@@ -196,7 +202,8 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     private tasks: TasksService,
     private settings: SettingsService,
     private config: ConfigService,
-    private artifacts: ArtifactsService
+    private artifacts: ArtifactsService,
+    private caseFile: CaseFileService
   ) {}
 
   onModuleInit(): void {
@@ -579,6 +586,13 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     trace: TaskTrace
   ): Promise<void> {
     const language = await this.settings.languageOf(task.owner_email);
+    // The WHOLE case file, not only the pièces this run reads. A scoped run must still be able to
+    // say "the answer is probably in the 2003 letter, which was not in your selection", and an
+    // unscoped run must be able to name what the reading budget never reached.
+    const manifest = await this.caseFile.manifest(
+      task.owner_email,
+      task.workspace_id
+    );
     // A scoped run reads only the pièces the user selected. Reading all 47 documents to answer a
     // question about two of them costs minutes and money for findings the synthesis then has to
     // wade through, so the scope is the user's to set.
@@ -805,6 +819,7 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     const answer = await this.synthesise({
       task,
       language,
+      manifest: manifest?.text ?? null,
       findings: kept,
       // The count of documents actually opened, not the count in scope — `unread` and `dropped`
       // are named separately below so the answer cannot claim coverage it does not have.
@@ -883,7 +898,7 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
   ): Promise<DocRow[]> {
     const scoped = documentIds && documentIds.length > 0;
     const res = await this.pg.query<DocRow>(
-      `SELECT id, filename, page_count FROM lex_documents
+      `SELECT id, filename, page_count, timeline_date, language, summary FROM lex_documents
        WHERE workspace_id = $1 AND owner_email = $2
          AND parse_status = 'ready' AND lifecycle_state = 'active'
          ${scoped ? "AND id = ANY($3::uuid[])" : ""}
@@ -957,6 +972,41 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * What the model is told about a document before it reads a window of it.
+   *
+   * The filename, page count and section marker were all it had, so a 2003 letter answering a 1998
+   * convention was read as a letter about nothing. The document's own date, language and summary
+   * are already stored by the ingestion worker, so this costs a wider SELECT and nothing else.
+   *
+   * Deliberately ONE document's metadata and never the whole case file: this prompt runs once per
+   * window, up to MAX_WINDOWS_PER_RUN times in a single run, so a 3000-token inventory here would
+   * cost hundreds of thousands of prompt tokens for a call that cannot cite across documents
+   * anyway. The full manifest goes into the synthesis instead, which runs once.
+   */
+  private documentHeader(
+    doc: DocRow,
+    partIndex: number,
+    partCount: number
+  ): string {
+    const facts = [
+      dateOnly(doc.timeline_date),
+      doc.language,
+      doc.page_count ? `${doc.page_count} pages` : null,
+      partCount > 1 ? `section ${partIndex + 1} of ${partCount}` : null
+    ].filter(Boolean);
+    const summary = doc.summary
+      ? sanitizeForStorage(doc.summary)
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 400)
+      : "";
+    return (
+      `DOCUMENT: ${doc.filename}${facts.length ? ` (${facts.join(", ")})` : ""}\n` +
+      (summary ? `WHAT IT IS: ${summary}\n` : "")
+    );
+  }
+
   /** Extracts task-relevant findings from one window of one document. */
   private async extractFindings(params: {
     task: ClaimedTaskRow;
@@ -972,11 +1022,9 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     error?: string;
   }> {
     const { task, language, doc, part, partIndex, partCount } = params;
-    // The page count and the section marker tell the model what it is holding: "section 2 of 4 of
-    // a 300-page exhibit" is read very differently from "a one-page letter".
-    const where =
-      (doc.page_count ? `, ${doc.page_count} pages` : "") +
-      (partCount > 1 ? ` (section ${partIndex + 1} of ${partCount})` : "");
+    // What the model is holding: "section 2 of 4 of a 300-page exhibit dated 1998" is read very
+    // differently from "a one-page letter".
+    const header = this.documentHeader(doc, partIndex, partCount);
 
     let raw: string;
     try {
@@ -1020,7 +1068,7 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
             ? `PARTY BEING DEFENDED: ${task.title}\n`
             : `ASSESSMENT: ${task.title}\n`) +
           `${task.instructions ? `INSTRUCTIONS: ${task.instructions}\n` : ""}` +
-          `DOCUMENT: ${doc.filename}${where}\n` +
+          header +
           `---\n${part}\n---\n\n` +
           `Respond as JSON: {"note":"one sentence, what this document is and whether it bears ` +
           `on the assessment","findings":[{"text":"a self-contained finding relevant to the ` +
@@ -1095,6 +1143,8 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
   private async synthesise(params: {
     task: ClaimedTaskRow;
     language: LexLanguage;
+    /** The CASE FILE block, or null when the workspace has no documents or the read failed. */
+    manifest: string | null;
     findings: LocatedFinding[];
     documentCount: number;
     partial: string[];
@@ -1107,6 +1157,7 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
     const {
       task,
       language,
+      manifest,
       findings,
       documentCount,
       partial,
@@ -1196,6 +1247,23 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
               `are not indexed or no longer active, and were not read either — say so.`
             : "")
       },
+      // Between COVERAGE and FINDINGS on purpose. COVERAGE says what this run actually read and
+      // must win any conflict with the inventory; the inventory says what exists, which is what
+      // turns "no counter-argument was found" into "nothing answering it was found in the 47
+      // documents read, and 6 more were never opened".
+      ...(manifest
+        ? [
+            {
+              role: "system" as const,
+              content:
+                manifest +
+                "\n\nTHE COVERAGE BLOCK ABOVE OVERRIDES THIS ONE for what was actually read. A " +
+                "document listed here as INDEXED but named above as unread, or as only partly " +
+                "read, was not assessed. Do not cite from this block: every [n] in your answer " +
+                "is a FINDING."
+            }
+          ]
+        : []),
       {
         role: "system",
         content:
@@ -1226,7 +1294,7 @@ export class TaskRunner implements OnModuleInit, OnModuleDestroy {
       // time and shares no prefix with anything, so its cache figures would drag the chat
       // averages down for a reason that is not a problem.
       caller: `task:${task.kind}`,
-      blocks: ["taskSystem", "findings"]
+      blocks: ["taskSystem", ...(manifest ? ["caseFile"] : []), "findings"]
     })) {
       full += delta;
       await params.onDelta(delta);

@@ -287,6 +287,20 @@ export class ArtifactGenerationService {
     };
   }
 
+  /**
+   * NO CASE FILE MANIFEST HERE, deliberately.
+   *
+   * Every other prompt path carries the workspace's document inventory so the model can never claim
+   * a file is absent. This one must not. The drafter's contract is the frozen evidence pack: each
+   * assertion cites exactly one pack index with a quote VerificationService matches character for
+   * character, or it declares itself unsupported. A manifest supplies prose the drafter can neither
+   * cite nor be judged on, and the predictable result is an assertion carrying a manifest fact with
+   * sourceIndex null — which lands as unsupported, and one unsupported sentence takes the whole
+   * document out of the filing path.
+   *
+   * VerificationService.verifyClaim is excluded for the adjacent reason: it is an independent judge,
+   * and a judge with more context is a less independent one.
+   */
   private async draftClaims(
     type: LexArtifactType,
     title: string,

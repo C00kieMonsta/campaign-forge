@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Voice notes are dictated in the chat, then stored as documents and transcribed. Recording is
-// capped so a forgotten open mic can't produce an untranscribable file (the transcription API
-// rejects payloads over 25 MB; opus at this bitrate leaves ample headroom for 30 minutes).
+// Recording is capped so a forgotten open mic can't produce an untranscribable file (the
+// transcription API rejects payloads over 25 MB; opus at this bitrate leaves ample headroom for
+// 30 minutes).
 export const MAX_RECORDING_SECONDS = 30 * 60;
+
+/** Below this a recording is a mis-tap, not a message: too short for speech-to-text to hear. */
+export const MIN_VOICE_SECONDS = 1;
 
 /** Preferred container, in order — Safari has no webm/opus encoder, so it falls back to mp4. */
 const MIME_CANDIDATES = [
@@ -36,13 +39,33 @@ export interface VoiceRecorder {
   cancel: () => void;
 }
 
+export interface VoiceRecorderOptions {
+  /**
+   * Called when the 30-minute cap stops the recorder by itself, with what was captured.
+   *
+   * Without a handler here the audio was silently thrown away: the cap called stop() on the
+   * MediaRecorder, onstop found no pending settle, and returned. A forgotten open mic lost thirty
+   * minutes of dictation and the UI just went back to the composer.
+   */
+  onAutoStop?: (file: File | null) => void;
+}
+
 /**
  * MediaRecorder wrapper for dictating a voice note. Owns the mic stream and guarantees it is
  * released on stop/cancel/unmount, so the browser's recording indicator never lingers.
  */
-export function useVoiceRecorder(): VoiceRecorder {
+export function useVoiceRecorder(
+  options: VoiceRecorderOptions = {}
+): VoiceRecorder {
   const [isRecording, setIsRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+
+  // Read through a ref so the recorder's onstop closure never holds a stale callback: it is
+  // created once per recording and may fire minutes later.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  /** Set when the cap stopped the recorder, so onstop can tell that from a cancel. */
+  const cappedRef = useRef(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -84,7 +107,18 @@ export function useVoiceRecorder(): VoiceRecorder {
       const blob = new Blob(chunksRef.current, { type });
       chunksRef.current = [];
       teardown();
-      if (!settle) return; // cancelled — discard
+      if (!settle) {
+        // No pending stop(). Either the user cancelled, or the cap fired — and only the second has
+        // audio worth handing back.
+        if (cappedRef.current) {
+          optionsRef.current.onAutoStop?.(
+            blob.size === 0
+              ? null
+              : new File([blob], `voice-note.${extensionFor(type)}`, { type })
+          );
+        }
+        return;
+      }
       settle(
         blob.size === 0
           ? null
@@ -94,9 +128,17 @@ export function useVoiceRecorder(): VoiceRecorder {
 
     recorderRef.current = recorder;
     streamRef.current = stream;
+    cappedRef.current = false;
     setElapsed(0);
     setIsRecording(true);
-    recorder.start();
+    // Timesliced, so ondataavailable fires every five seconds instead of only at stop().
+    //
+    // On iOS the page is frozen when the screen locks or the user switches apps, and the recorder
+    // then yields nothing after resume: the whole dictation was lost while the UI carried on showing
+    // a running timer. With a timeslice, everything captured before the freeze is already in
+    // chunksRef. Five seconds rather than one: it is the same trade as a smaller buffer, and one
+    // second of loss is not worth four times the events.
+    recorder.start(5000);
 
     timerRef.current = setInterval(() => {
       setElapsed((prev) => {
@@ -106,6 +148,8 @@ export function useVoiceRecorder(): VoiceRecorder {
           next >= MAX_RECORDING_SECONDS &&
           recorderRef.current?.state === "recording"
         ) {
+          // Marked BEFORE stop(), so onstop can tell a cap from a cancel.
+          cappedRef.current = true;
           recorderRef.current.stop();
         }
         return next;
@@ -128,6 +172,7 @@ export function useVoiceRecorder(): VoiceRecorder {
   const cancel = useCallback(() => {
     const recorder = recorderRef.current;
     settleRef.current = null; // onstop discards when there is nothing to settle
+    cappedRef.current = false; // an explicit cancel is never an auto-stop
     if (recorder && recorder.state !== "inactive") recorder.stop();
     else teardown();
   }, [teardown]);

@@ -13,6 +13,7 @@ import {
   AuthoritiesService,
   type RetrievedArticle
 } from "../authorities/authorities.service";
+import { CaseFileService } from "../documents/case-file.service";
 import { outputLanguageInstruction } from "../settings/language-instruction";
 import { SettingsService } from "../settings/settings.service";
 
@@ -205,7 +206,8 @@ export class ContextAssembler {
     private pg: PgService,
     private rag: RagService,
     private settings: SettingsService,
-    private authorities: AuthoritiesService
+    private authorities: AuthoritiesService,
+    private caseFile: CaseFileService
   ) {}
 
   async assemble(
@@ -302,6 +304,11 @@ export class ContextAssembler {
     //  2. retrieved article text, when the question touches something in it.
     // Both are best-effort: a missing digest degrades the answer, but must never fail the turn.
     const digests = await this.authorities.enabledDigests(ownerEmail);
+
+    // The case file: WHAT documents exist, as against SOURCES, which is the TEXT of the few
+    // retrieved for this question. Best-effort like the digests, and for the same reason — an
+    // inventory that cannot be read costs the turn its inventory, not the turn.
+    const manifest = await this.caseFile.manifest(ownerEmail, workspaceId);
     const articles = await this.authorities
       .retrieve(ownerEmail, query, AUTHORITY_TOP_K)
       .catch(() => [] as RetrievedArticle[]);
@@ -314,8 +321,10 @@ export class ContextAssembler {
       "The SOURCES below are the EXTRACTED TEXT of the user's own documents — they are already " +
       "in front of you. You are therefore ALWAYS able to read the pages and documents the user " +
       "refers to: read them from the SOURCES. Never reply that you cannot access a file, open a " +
-      "PDF, or see a document; if a specific page or document is not among the SOURCES, name " +
-      "what is missing instead. " +
+      "PDF, or see a document. The CASE FILE block lists every document in this workspace: if the " +
+      "user names one, look for it there first, and say whether it is indexed, still being " +
+      "processed, or not in the file at all. If a document exists but its text is not among the " +
+      "SOURCES, name what is missing instead of denying it. " +
       "Answer using the numbered SOURCES (the case file) and the APPLICABLE LAW section. " +
       "Cite every factual claim inline with its source marker, e.g. [1] or [2]. If the SOURCES " +
       "do not contain the answer, say so plainly and do not speculate. Format your answer as " +
@@ -363,6 +372,23 @@ export class ContextAssembler {
             "(no article map available for the uploaded authorities)") +
           articleBlock
       });
+    }
+
+    // The case file goes AFTER the law and BEFORE the sources.
+    //
+    // After the law because the law is the frame the facts are read against and already outranks
+    // the documents by an explicit instruction; above it, the inventory would read as though the
+    // case file constrains the law. Before SOURCES because the model has to read "these documents
+    // exist" before "here are the passages retrieved this turn", so the natural reading is "of
+    // those, these were retrieved" — and because the block's no-cite rule has to arrive with the
+    // block rather than after the evidence it constrains.
+    //
+    // Non-evictable by construction: eviction in this file touches only the verbatim turns, and
+    // every system message is pushed unconditionally. The block's own ceiling is enforced inside
+    // buildManifest by reducing detail, never by dropping documents.
+    if (manifest) {
+      blocks.push("manifest");
+      messages.push({ role: "system", content: manifest.text });
     }
 
     // Verbatim turns are the only evictable part of the prompt: the system instructions, the
@@ -447,6 +473,22 @@ export class ContextAssembler {
     }
 
     if (kept.length > 0) blocks.push("turns");
+
+    // Logged every turn because "the chat said it did not have my file" is otherwise
+    // indistinguishable from three different faults: the document was archived, ingestion never
+    // finished, or the workspace outgrew the block. tier === 'counts' is the one to alert on — it
+    // means no document is listed individually and the model is working from a total.
+    this.logger.log(
+      JSON.stringify({
+        action: "lexCaseFileManifest",
+        conversationId,
+        total: manifest?.total ?? 0,
+        listed: manifest?.listed ?? 0,
+        archived: manifest?.archived ?? 0,
+        tier: manifest?.tier ?? "none",
+        chars: manifest?.text.length ?? 0
+      })
+    );
 
     return { messages, sources, blocks };
   }

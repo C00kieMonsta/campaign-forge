@@ -156,6 +156,22 @@ server {
         chunked_transfer_encoding on;
     }
 
+    # Voice messages: the recording is transcribed SYNCHRONOUSLY, because the transcript is the chat
+    # message. Speech-to-text on a long clip takes longer than nginx's default 60s read timeout, so
+    # without this block a recording over roughly four minutes 504s in production while succeeding
+    # in local dev, which has no nginx. The body is a tiny JSON POST — the audio went straight to S3.
+    location ~ ^/api/admin/lex/voice/[^/]+/transcribe$ {
+        proxy_pass           http://localhost:3001;
+        proxy_http_version   1.1;
+        proxy_set_header     Host $host;
+        proxy_set_header     X-Real-IP $remote_addr;
+        proxy_set_header     X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header     X-Forwarded-Proto $scheme;
+        proxy_read_timeout   600s;
+        proxy_send_timeout   600s;
+        client_max_body_size 1m;
+    }
+
     location / {
         proxy_pass         http://localhost:3001;
         proxy_http_version 1.1;

@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode
 } from "react";
 import type {
@@ -13,10 +14,15 @@ import type {
   LexCitationEvent,
   LexDocument,
   LexMessage,
+  LexMessageAudio,
   LexTask,
   ReasoningDepth
 } from "@packages/types";
-import { ARTIFACT_PACK_SIZE, DEFAULT_DEPTH } from "@packages/types";
+import {
+  ARTIFACT_PACK_SIZE,
+  DEFAULT_DEPTH,
+  MAX_VOICE_MESSAGE_BYTES
+} from "@packages/types";
 import {
   Button,
   Dialog,
@@ -24,6 +30,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Input,
   Label,
   Sheet,
@@ -48,6 +58,7 @@ import {
   FolderUp,
   Loader2,
   Mic,
+  MoreVertical,
   Paperclip,
   Pencil,
   Pin,
@@ -65,21 +76,35 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 import DocumentViewerDialog from "@/components/lex/DocumentViewerDialog";
 import { MarkdownMessage } from "@/components/lex/MarkdownMessage";
+import { PanelResizer } from "@/components/lex/PanelResizer";
 import PinnedDocumentsPanel from "@/components/lex/PinnedDocumentsPanel";
 import TaskPanel from "@/components/lex/TaskPanel";
+import VoiceMessagePlayer from "@/components/lex/VoiceMessagePlayer";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { usePanelWidth } from "@/hooks/use-panel-width";
 import { useThrottled } from "@/hooks/use-throttled";
 import { useToast } from "@/hooks/use-toast";
 import {
   formatDuration,
   MAX_RECORDING_SECONDS,
+  MIN_VOICE_SECONDS,
   useVoiceRecorder
 } from "@/hooks/use-voice-recorder";
+import { api } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
+import { matchesDocumentQuery } from "@/lib/documentInsights";
 import { errorMessage } from "@/lib/errorMessage";
-import { streamLexMessage } from "@/lib/lexStream";
+import { LexStreamRejected, streamLexMessage } from "@/lib/lexStream";
+import {
+  applyMention,
+  findMention,
+  stripMentions,
+  textNamesDocument,
+  type MentionQuery
+} from "@/lib/mentions";
+import { uploadVoiceMessage } from "@/lib/uploadVoiceMessage";
 import { useCollection, useEntity } from "@/store/hooks";
 import { useLexControllers } from "@/store/LexStoreProvider";
 import VoiceNoteDialog from "./VoiceNoteDialog";
@@ -118,6 +143,23 @@ const PROBLEM_STATUS: ReadonlySet<LexDocument["parseStatus"]> = new Set([
 
 // Mirrors isAudio() in the backend's document-parser: some browsers/OSes upload audio as
 // application/octet-stream, so the extension is checked too.
+/**
+ * Inline panel widths, in px.
+ *
+ * The defaults are the fixed widths these panels had before they were draggable, so nothing moves
+ * for anyone who never touches a rule. The maxima are what still leaves a workable conversation on
+ * a 1280px screen with both panels open; the minima are the narrowest a filename row and a
+ * rasterised PDF page stay readable at.
+ */
+const DOCS_WIDTH = { default: 288, min: 208, max: 560 };
+const PINS_WIDTH = { default: 400, min: 288, max: 720 };
+/** The conversation never gets narrower than this, whatever a rule is dragged to. */
+const CHAT_MIN_WIDTH = 340;
+/** The row's md:gap-4, per gap. Below md neither panel is inline, so 16 is the only value in play. */
+const ROW_GAP = 16;
+/** A resize rule's own width, w-px. */
+const RULE_WIDTH = 1;
+
 const AUDIO_EXT_RE =
   /\.(webm|m4a|mp3|mp4|mpga|mpeg|wav|ogg|oga|opus|flac|aac)$/i;
 
@@ -131,6 +173,16 @@ const AUDIO_EXT_RE =
 function addedDayOf(doc: LexDocument | undefined): string | null {
   return doc ? formatAddedAt(doc.createdAt) : null;
 }
+
+/**
+ * How many files the '@' menu shows at once. More than a screenful is a list you scroll, not one
+ * you pick from; the footer says how many more the query still matches.
+ */
+const MENTION_LIMIT = 8;
+const MENTION_LIST_ID = "lex-mention-list";
+
+/** Ceiling on the auto-grown composer, in px. Matches the max-h-48 it used to rely on. */
+const COMPOSER_MAX_HEIGHT = 192;
 
 /** A voice note: an audio document, whose text came from transcription. */
 function isVoiceNote(doc: LexDocument): boolean {
@@ -167,9 +219,19 @@ const BOTTOM_SLACK = 120;
 const TOP_TRIGGER = 240;
 
 const UserMessage = memo(function UserMessage({
-  content
+  content,
+  audio,
+  onFileAsDocument
 }: {
   content: string;
+  /** Set when this turn was spoken. The text below it is the transcript. */
+  audio?: LexMessageAudio | null;
+  /**
+   * Files the recording as a pièce. Must be useCallback-wrapped by the parent: this component is
+   * memoized and the parent re-renders on every throttled token of a streaming reply, so an
+   * unstable prop would re-render every bubble in the thread on every tick.
+   */
+  onFileAsDocument?: (audioId: string) => void;
 }) {
   const { t } = useLanguage();
   const [expanded, setExpanded] = useState(false);
@@ -178,7 +240,15 @@ const UserMessage = memo(function UserMessage({
     isLong && !expanded ? `${content.slice(0, LONG_MESSAGE_CHARS)}…` : content;
 
   return (
-    <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap bg-sidebar-primary text-sidebar-primary-foreground">
+    <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words bg-sidebar-primary text-sidebar-primary-foreground">
+      {/* Above the text, because the recording is the message and the text is what was heard. */}
+      {audio ? (
+        <VoiceMessagePlayer
+          audioId={audio.id}
+          durationSeconds={audio.durationSeconds ?? null}
+          className="mb-2"
+        />
+      ) : null}
       {shown}
       {isLong ? (
         <button
@@ -187,6 +257,22 @@ const UserMessage = memo(function UserMessage({
         >
           {expanded ? t.lex.showLess : t.lex.showMore}
         </button>
+      ) : null}
+      {/* A spoken turn is a question, so it is not indexed or citable. When it dictated a FACT
+          instead, this files it as a pièce and the case file can cite it. */}
+      {audio ? (
+        audio.documentId ? (
+          <span className="mt-1.5 block text-[11px] opacity-70">
+            {t.lex.filedAsDocument}
+          </span>
+        ) : onFileAsDocument ? (
+          <button
+            onClick={() => onFileAsDocument(audio.id)}
+            className="mt-1.5 block text-xs underline opacity-80 hover:opacity-100"
+          >
+            {t.lex.fileAsDocument}
+          </button>
+        ) : null
       ) : null}
     </div>
   );
@@ -238,10 +324,13 @@ const StatusBadge = memo(function StatusBadge({
 /**
  * One document in the panel. Shared by primaries and their nested duplicates.
  *
- * `roomy` is the touch layout, used wherever the panel is a sheet rather than an inline column.
- * There, "add to chat" gets its own line as a full-width labelled button instead of being a 14px
- * icon wedged between two other 14px icons — that icon was the most-wanted action on a phone and
- * the hardest thing on the screen to hit.
+ * `roomy` is the touch layout: "add to chat" gets its own line as a full-width labelled button
+ * instead of being a 14px icon wedged between two other 14px icons. That icon was the most-wanted
+ * action on a phone and the hardest thing on the screen to hit.
+ *
+ * Chosen by `!docsInline || !canHover`, so it covers two cases: the panel is a sheet (narrow), OR
+ * the device cannot hover however wide it is. The second matters because the row's other actions
+ * are revealed on hover, and an iPad in landscape is 1024px with no hover at all.
  */
 const DocumentRow = memo(function DocumentRow({
   doc,
@@ -420,7 +509,10 @@ const DocumentRow = memo(function DocumentRow({
           <span className="group-hover:hidden">
             {ready ? null : <StatusBadge status={doc.parseStatus} />}
           </span>
-          <span className="hidden items-center gap-1.5 group-hover:flex group-focus-within:flex">
+          {/* can-hover, not a width breakpoint: an iPad in landscape is 1024px and cannot hover, so
+              these were unreachable there. On a touch screen the row shows them outright — the
+              roomy layout is what handles the narrow case. */}
+          <span className="flex items-center gap-1.5 can-hover:hidden can-hover:group-hover:flex can-hover:group-focus-within:flex">
             {!neverUploaded ? (
               <button
                 onClick={() => onPin(doc)}
@@ -583,7 +675,10 @@ function DocumentsPanelContainer({
 }) {
   if (inline) {
     return (
-      <aside className="w-72 shrink-0 flex flex-col border-r pr-3">
+      // Width comes from the row's variable, dragged by the rule that follows this column. The
+      // fallback is the old fixed 18rem, used on the first paint. The border stays: the rule is a
+      // hover affordance inside the existing gutter, not a replacement separator.
+      <aside className="w-[var(--lex-docs-w,18rem)] shrink-0 flex flex-col border-r pr-3">
         {children}
       </aside>
     );
@@ -611,6 +706,155 @@ function DocumentsPanelContainer({
  * citation-anchored artifact from the case. Reads come from the normalized store via
  * useCollection/useEntity; writes go through controllers.
  */
+/**
+ * The three reasoning dials: WHAT KIND of read (exclusive), HOW HARD (applies to all three), and
+ * for a background run WHICH pièces. Rendered inline in the composer from sm up, and inside a
+ * bottom sheet below that, where three groups of pills do not fit one row: the FR labels alone
+ * ("Réponse directe", "Analyse approfondie", "Thèse adverse") wrap inside their own pills and the
+ * row grows to three lines, on the screen with the least vertical room.
+ *
+ * MODULE LEVEL, like DocumentsPanelContainer and for the same reason. Declared inside
+ * LexWorkspaceChat it would be a new function identity on every render, so React would unmount and
+ * remount the whole dial subtree on every keystroke and restart the sheet's animation.
+ */
+const ReasoningDials = memo(function ReasoningDials({
+  mode,
+  setMode,
+  depth,
+  setDepth,
+  background,
+  runScope,
+  setRunScope,
+  selectedScopeCount,
+  hint,
+  stacked
+}: {
+  mode: ChatMode;
+  setMode: (mode: ChatMode) => void;
+  depth: ReasoningDepth;
+  setDepth: (depth: ReasoningDepth) => void;
+  background: boolean;
+  runScope: "all" | "selected";
+  setRunScope: (scope: "all" | "selected") => void;
+  selectedScopeCount: number;
+  /** The running sentence. Shown here in the sheet, where there is room and no tooltips. */
+  hint: string;
+  /** One group per row with room to tap, for the sheet. */
+  stacked?: boolean;
+}) {
+  const { t } = useLanguage();
+  return (
+    <div
+      className={stacked ? "space-y-3" : "flex flex-wrap items-center gap-2"}
+    >
+      <div
+        className={`flex items-center rounded-full border p-0.5 ${stacked ? "w-full" : ""}`}
+        role="group"
+        aria-label={t.lex.modeLabel}
+      >
+        {CHAT_MODES.map((option) => {
+          const active = mode === option;
+          // Adverse is the only one that carries a warning colour: it is the one whose
+          // input means something different, and mistaking it for a question wastes
+          // minutes and money on a run that answers the wrong thing.
+          const tone = active
+            ? option === "adverse"
+              ? "bg-destructive/10 text-destructive"
+              : "bg-secondary text-secondary-foreground"
+            : "text-muted-foreground hover:text-foreground";
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setMode(option)}
+              aria-pressed={active}
+              title={t.lex.modeHint[option]}
+              className={`inline-flex items-center justify-center gap-1.5 rounded-full px-2.5 text-xs transition-colors ${stacked ? "h-10 flex-1" : "py-1"} ${tone} ${
+                active ? "font-medium" : ""
+              }`}
+            >
+              {option === "direct" ? (
+                <Send className="h-3.5 w-3.5" />
+              ) : option === "deep" ? (
+                <Brain className="h-3.5 w-3.5" />
+              ) : (
+                <ShieldAlert className="h-3.5 w-3.5" />
+              )}
+              {t.lex.modeName[option]}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Depth now applies to background runs too, and means considerably more there: it
+                picks the tier for the per-document pass, which is 200+ calls on a full file. */}
+      <div
+        className={`flex items-center rounded-full border p-0.5 ${stacked ? "w-full" : ""}`}
+        role="group"
+        aria-label={t.lex.depthLabel}
+      >
+        {DEPTH_ORDER.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => setDepth(option)}
+            aria-pressed={depth === option}
+            title={
+              background ? t.lex.runDepthHint[option] : t.lex.depthHint[option]
+            }
+            className={`rounded-full px-2.5 text-xs ${stacked ? "h-10 flex-1" : "py-1"} ${
+              depth === option
+                ? "bg-secondary text-secondary-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t.lex.depthName[option]}
+          </button>
+        ))}
+      </div>
+
+      {/* Scope, shown only for background runs: it is the dial that decides whether a
+                question about two pièces reads two or forty-seven. Hidden in direct mode,
+                where retrieval already picks its own passages. */}
+      {background ? (
+        <div
+          className={`flex items-center rounded-full border p-0.5 ${stacked ? "w-full" : ""}`}
+          role="group"
+          aria-label={t.lex.scopeLabel}
+        >
+          {(["all", "selected"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setRunScope(option)}
+              aria-pressed={runScope === option}
+              title={t.lex.scopeHint[option]}
+              className={
+                runScope === option
+                  ? "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs bg-secondary text-secondary-foreground font-medium"
+                  : "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+              }
+            >
+              {option === "all" ? (
+                <Files className="h-3.5 w-3.5" />
+              ) : (
+                <Pin className="h-3.5 w-3.5" />
+              )}
+              {t.lex.scopeName[option]}
+              {/* The count is the honest part: "Pinned" with nothing pinned is a run
+                        that cannot start, and the number says so before it is launched. */}
+              {option === "selected" ? ` (${selectedScopeCount})` : ""}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {stacked ? (
+        <p className="pt-1 text-[11px] text-muted-foreground">{hint}</p>
+      ) : null}
+    </div>
+  );
+});
+
 export default function LexWorkspaceChat() {
   const { id = "" } = useParams();
   const { t } = useLanguage();
@@ -652,8 +896,64 @@ export default function LexWorkspaceChat() {
    */
   const docsInline = useMediaQuery("(min-width: 1024px)");
   const pinsInline = useMediaQuery("(min-width: 1280px)");
+  /**
+   * Whether this device can hover, as against how wide it is.
+   *
+   * The two were conflated: row actions are revealed on hover and the touch layout was chosen by
+   * viewport width, so an iPad in landscape (1024px, no hover) got the desktop rows and their Pin,
+   * Open and Retry buttons were unreachable.
+   */
+  const canHover = useMediaQuery("(hover: hover) and (pointer: fine)");
+  /** Mirrored, because the scroll handler is not memoised and reads this during a scroll event. */
+  const canHoverRef = useRef(canHover);
+  canHoverRef.current = canHover;
+  /** Below sm the three reasoning dials do not fit one row; they move into a bottom sheet. */
+  const compactDials = !useMediaQuery("(min-width: 640px)");
+  const [dialsOpen, setDialsOpen] = useState(false);
+  /** Below md the header sheds its secondary actions into an overflow menu. */
+  const compactHeader = !useMediaQuery("(min-width: 768px)");
   const [docsSheetOpen, setDocsSheetOpen] = useState(false);
   const [pinsSheetOpen, setPinsSheetOpen] = useState(false);
+
+  // Both panels are draggable when they are inline columns. In a sheet there is nothing to size.
+  const docs = usePanelWidth(
+    "lex_docs_panel_width",
+    DOCS_WIDTH.default,
+    DOCS_WIDTH.min,
+    DOCS_WIDTH.max
+  );
+  const pins = usePanelWidth(
+    "lex_pins_panel_width",
+    PINS_WIDTH.default,
+    PINS_WIDTH.min,
+    PINS_WIDTH.max
+  );
+
+  const rowRef = useRef<HTMLDivElement>(null);
+  /**
+   * Width of the three-column row, rounded to 16px.
+   *
+   * Read only to cap a drag so the conversation cannot be squeezed to nothing. Rounded because it
+   * lands in state: an exact ResizeObserver value would re-render this component on every frame of
+   * a window resize.
+   */
+  // Seeded from the window rather than 0. At 0 the caps returned each panel's static maximum, so
+  // for the first frame two stored-wide panels could squeeze the conversation to nothing before the
+  // observer fired.
+  const [rowWidth, setRowWidth] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerWidth
+  );
+  useEffect(() => {
+    const node = rowRef.current;
+    // Absent in jsdom, so a test that mounts this component does not need a stub to get this far.
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const next = Math.round(entry.contentRect.width / 16) * 16;
+      setRowWidth((prev) => (prev === next ? prev : next));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   const workspace = useEntity("lexWorkspaces", id);
 
@@ -687,13 +987,9 @@ export default function LexWorkspaceChat() {
    * story and documents pages are for; it is not what this panel is for.
    */
   const docGroups = useMemo(() => {
-    const needle = docQuery.trim().toLowerCase();
-    const matches = (d: LexDocument) =>
-      needle.length === 0 ||
-      d.filename.toLowerCase().includes(needle) ||
-      (d.timelineDate ?? "").includes(needle) ||
-      d.tags.some((tag) => tag.toLowerCase().includes(needle)) ||
-      d.keyNames.some((name) => name.toLowerCase().includes(needle));
+    // The shared matcher, not a fourth copy of the same five lines. What "@avenant" offers in the
+    // composer has to be what this search box shows for "avenant".
+    const matches = (d: LexDocument) => matchesDocumentQuery(d, docQuery);
 
     const dupesByPrimary = new Map<string, LexDocument[]>();
     for (const d of documents) {
@@ -713,6 +1009,73 @@ export default function LexWorkspaceChat() {
         duplicates: dupesByPrimary.get(primary.id) ?? []
       }));
   }, [documents, showProblems, docQuery]);
+
+  /**
+   * The '@' mention being typed in the composer.
+   *
+   * State rather than something derived in render, because it depends on the CARET, which is not
+   * part of `input`. Arrow keys and a click move it without changing a character.
+   */
+  const [mention, setMention] = useState<MentionQuery | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  /**
+   * What the '@' menu offers: ready documents, newest added first, same search rule as the panel.
+   *
+   * Only `ready`. A pin on a document that is still parsing resolves to no pages and no chunks in
+   * the backend's retrievePinned, so mentioning one would attach nothing without saying so. The
+   * document rows hide their "add to chat" button on non-ready rows for the same reason. Duplicates
+   * are excluded because retrieval skips them.
+   */
+  const mentionCandidates = useMemo(() => {
+    if (!mention) return [];
+    const needle = mention.query.trim().toLowerCase();
+    // A SINGLE word gets the full search (filename, date, tags, key names), the same rule as the
+    // panel's search box. A query with whitespace matches the filename alone.
+    //
+    // This breaks that symmetry on purpose. matchesDocumentQuery also matches timelineDate, so an
+    // abandoned '@' mid-sentence ("… voir @voir 2019 …") matched every 2019 document, opened the
+    // menu over a finished question, and turned the next Enter into a file pick instead of a send.
+    // A multi-word prose fragment can no longer collide with a tag or a date.
+    const multiWord = /\s/.test(needle);
+    return documents
+      .filter((d) => d.parseStatus === "ready" && !d.duplicateOf)
+      .filter((d) =>
+        multiWord
+          ? d.filename.toLowerCase().includes(needle)
+          : matchesDocumentQuery(d, needle)
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }, [documents, mention]);
+
+  const mentionMatches = useMemo(
+    () => mentionCandidates.slice(0, MENTION_LIMIT),
+    [mentionCandidates]
+  );
+
+  /**
+   * Matching files still being ingested. Counted so their absence from the list is explained: a
+   * user who uploads and immediately types '@' would otherwise read an empty menu as a lost file.
+   */
+  const mentionPending = useMemo(() => {
+    if (!mention) return 0;
+    // needs_ocr is in neither IN_PROGRESS nor ready, so a document waiting on OCR shows up in
+    // neither the list nor this counter. It is a PROBLEM_STATUS row and the panel hides it too.
+    return documents.filter(
+      (d) =>
+        IN_PROGRESS.has(d.parseStatus) &&
+        !d.duplicateOf &&
+        matchesDocumentQuery(d, mention.query)
+    ).length;
+  }, [documents, mention]);
+
+  const mentionOpen =
+    mention !== null && (mentionMatches.length > 0 || mentionPending > 0);
+  /** Clamped, because an upload finishing mid-typing can shorten the list under the cursor. */
+  const mentionActive = Math.min(
+    mentionIndex,
+    Math.max(0, mentionMatches.length - 1)
+  );
 
   /**
    * The pièces that can actually feed a draft, oldest first.
@@ -736,6 +1099,11 @@ export default function LexWorkspaceChat() {
   );
 
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  /**
+   * The same value as activeConvId, readable synchronously. ensureConversation writes both, and the
+   * ref is what makes three concurrent callers agree on one conversation instead of creating three.
+   */
+  const convIdRef = useRef<string | null>(null);
   const msgFilter = useCallback(
     (m: LexMessage) =>
       m.conversationId === activeConvId && m.status !== "pending",
@@ -749,12 +1117,28 @@ export default function LexWorkspaceChat() {
 
   const [refs, setRefs] = useState<DocRef[]>([]);
   const [input, setInput] = useState("");
+  /** The composer's DOM node. The '@' menu reads its caret and writes it back after an insertion. */
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  /**
+   * Set when the '@' menu was closed on purpose, by a pick or by Escape.
+   *
+   * After a pick the caret sits just after the inserted "@filename ", which the mention pattern
+   * still reads as an open mention (the query allows spaces), so without this the menu reopened on
+   * the very next keyup and could not be dismissed. Cleared by the next real keystroke.
+   */
+  const mentionClosedRef = useRef(false);
+  /** Caret to restore after an inserted mention. The composer is controlled, so it lands on commit. */
+  const mentionCaretRef = useRef<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{
     done: number;
     total: number;
   } | null>(null);
-  const [pendingUser, setPendingUser] = useState<string | null>(null);
+  const [pendingUser, setPendingUser] = useState<{
+    content: string;
+    /** Set when the turn being sent was spoken, so the echo matches the persisted bubble. */
+    audio: LexMessageAudio | null;
+  } | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState("");
   const [streamCitations, setStreamCitations] = useState<LexCitationEvent[]>(
@@ -939,7 +1323,16 @@ export default function LexWorkspaceChat() {
     // Lazy load upwards. The button below says the same thing out loud, for anyone who does not
     // discover it by scrolling; either way the reading position is held by holdFromBottomRef.
     if (near) return;
-    if (el.scrollTop <= TOP_TRIGGER && hasOlder && !loadingOlder)
+    // Auto-load on approach only with a mouse. On a touch screen iOS is still animating the flick
+    // when the correction writes scrollTop, so the write either loses or kills the momentum, and
+    // the reader lands somewhere unrelated in the case. The sticky "load earlier" button above the
+    // thread does the same job on a deliberate tap.
+    if (
+      canHoverRef.current &&
+      el.scrollTop <= TOP_TRIGGER &&
+      hasOlder &&
+      !loadingOlder
+    )
       void handleLoadOlder();
   };
 
@@ -956,8 +1349,40 @@ export default function LexWorkspaceChat() {
     }
   };
 
+  /**
+   * A recording that has been transcribed but not sent. Its transcript is in the composer where it
+   * can be corrected; this is the audio it came from, which travels with the message so the bubble
+   * can be played back.
+   */
+  const [voiceDraft, setVoiceDraft] = useState<{
+    audioId: string;
+    durationSeconds: number;
+  } | null>(null);
+  /** The recorded file, held so a failed upload or transcription is a retry, not a lost dictation. */
+  const [heldRecording, setHeldRecording] = useState<{
+    file: File;
+    durationSeconds: number;
+    /** Send as soon as the transcript arrives, rather than putting it in the composer. */
+    autoSend: boolean;
+  } | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  /** Set while a recording is being uploaded and transcribed, so the retry cannot double-fire. */
+  const transcribingRef = useRef(false);
+
   // Voice notes: dictate into the chat, then open one to re-listen / correct its transcript.
-  const recorder = useVoiceRecorder();
+  const recorder = useVoiceRecorder({
+    // The 30-minute cap used to stop the recorder and silently throw the audio away. Now the
+    // capped recording flows into the same transcribe path as a manual stop.
+    onAutoStop: (file) => {
+      if (file) {
+        setHeldRecording({
+          file,
+          durationSeconds: MAX_RECORDING_SECONDS,
+          autoSend: false
+        });
+      }
+    }
+  });
   const [openVoiceNote, setOpenVoiceNote] = useState<LexDocument | null>(null);
   // The document open in the modal viewer — a one-off look.
   const [openDoc, setOpenDoc] = useState<LexDocument | null>(null);
@@ -972,6 +1397,36 @@ export default function LexWorkspaceChat() {
   // Documents held open as tabs in the right-hand panel, and which tab is showing.
   const [pinnedDocs, setPinnedDocs] = useState<LexDocument[]>([]);
   const [activePinnedId, setActivePinnedId] = useState<string | null>(null);
+
+  /**
+   * How wide a panel may be dragged right now: its own maximum, minus what the other inline panel
+   * and the conversation's floor already claim.
+   *
+   * Each cap reads the other panel's STORED width rather than its capped one, so the two are not
+   * defined in terms of each other. When both stored widths exceed what a narrow window allows the
+   * caps are slightly generous, and the Math.max floor means the conversation absorbs the
+   * difference rather than a panel dropping below its minimum.
+   */
+  const pinsMounted = pinsInline && pinnedDocs.length > 0;
+  /**
+   * What the flex row spends on gaps and rules, computed from what is actually mounted rather than
+   * assumed. A constant was wrong in both directions: each rule is a fifth flex child, so mounting
+   * two of them takes the row from two gaps to four.
+   */
+  const rowGutter =
+    ROW_GAP * ((docsInline ? 1 : 0) + (pinsMounted ? 1 : 0)) * 2 +
+    RULE_WIDTH * ((docsInline ? 1 : 0) + (pinsMounted ? 1 : 0));
+
+  const capWidth = (bounds: { min: number; max: number }, otherWidth: number) =>
+    Math.max(
+      bounds.min,
+      Math.min(bounds.max, rowWidth - CHAT_MIN_WIDTH - otherWidth - rowGutter)
+    );
+
+  const docsMax = capWidth(DOCS_WIDTH, pinsMounted ? pins.width : 0);
+  const pinsMax = capWidth(PINS_WIDTH, docsInline ? docs.width : 0);
+  const docsWidth = Math.min(docs.width, docsMax);
+  const pinsWidth = Math.min(pins.width, pinsMax);
 
   /**
    * Which pièces a background run reads. "all" is the historical behaviour and stays the default:
@@ -1067,7 +1522,51 @@ export default function LexWorkspaceChat() {
     }
     if (!atBottomRef.current) return;
     el.scrollTo({ top: el.scrollHeight });
-  }, [messages, streamText, pendingUser, loadingOlder]);
+    // throttledStreamText, not streamText. streamText changes per TOKEN while the DOM being
+    // measured only repaints on the throttled value, so this forced a layout dozens of times a
+    // second for nothing. It was the main source of jank during a reply on a phone.
+  }, [messages, throttledStreamText, pendingUser, loadingOlder]);
+
+  /**
+   * Grows the composer with what is typed.
+   *
+   * The shared Textarea asks for this with `field-sizing-content`, which is a Tailwind v4 utility
+   * that this app's v3 build never emits, so the box stayed a fixed 40px: typing a four-line legal
+   * question happened inside a one-line scrolling slot, and iOS Safari draws no resize handle to
+   * drag. `resize-y` was a desktop-only escape hatch.
+   *
+   * Keyed on `recorder.isRecording` as well as on the text, because the Textarea only mounts in the
+   * composing branch: after a recording it remounts with no inline height, and `input` alone has not
+   * changed, so the effect would not re-run and the box would be one line again.
+   */
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    // Writing height:auto forces a reflow, so skip it when the box is already the right size. This
+    // runs on every keystroke.
+    const target = Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT);
+    if (el.clientHeight === target && el.scrollHeight <= COMPOSER_MAX_HEIGHT) {
+      return;
+    }
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  }, [input, recorder.isRecording]);
+
+  /**
+   * Re-sticks the thread when the shell shrinks.
+   *
+   * The keyboard opening changes the shell's height (see use-app-height), which moves the thread's
+   * bottom. If that is where the reader was, follow it; otherwise leave them where they are.
+   */
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onResize = () => {
+      if (atBottomRef.current) scrollToBottom("auto");
+    };
+    vv.addEventListener("resize", onResize);
+    return () => vv.removeEventListener("resize", onResize);
+  }, [scrollToBottom]);
 
   /**
    * Files (or a whole folder) go straight to S3. Nothing is silently dropped: rejects and
@@ -1139,36 +1638,13 @@ export default function LexWorkspaceChat() {
   };
 
   const handleStartRecording = async () => {
+    // The composer is replaced by the recording bar, so an open '@' menu would hang above nothing.
+    closeMention();
     try {
       await recorder.start();
     } catch {
       // Almost always a denied/absent microphone.
       toast({ title: t.lex.micDenied, variant: "destructive" });
-    }
-  };
-
-  /** Stops the recording and files it as a document (ingestion transcribes it). */
-  const handleStopRecording = async () => {
-    const file = await recorder.stop();
-    if (!file) return;
-    setUploading(true);
-    try {
-      // Timestamped so the panel doesn't fill up with identically-named notes.
-      const ext = file.name.split(".").pop() ?? "webm";
-      const stamp = new Date()
-        .toISOString()
-        .slice(0, 16)
-        .replace("T", " ")
-        .replace(":", "h");
-      const named = new File([file], `${t.lex.voiceNote} ${stamp}.${ext}`, {
-        type: file.type
-      });
-      // Same direct-to-S3 path as any other document — one upload path, no exceptions.
-      await controllers.documents.upload(id, [named]);
-    } catch (err) {
-      toast({ title: errorMessage(err), variant: "destructive" });
-    } finally {
-      setUploading(false);
     }
   };
 
@@ -1236,6 +1712,80 @@ export default function LexWorkspaceChat() {
     );
   }, []);
 
+  // ── '@' file mention ──────────────────────────────────────────────────────────────────
+
+  /** Re-reads the caret and opens or closes the '@' menu. Called from anything that can move it. */
+  const syncMention = useCallback((el: HTMLTextAreaElement) => {
+    if (mentionClosedRef.current) {
+      setMention(null);
+      return;
+    }
+    setMention(findMention(el.value, el.selectionStart ?? el.value.length));
+  }, []);
+
+  const closeMention = useCallback(() => {
+    mentionClosedRef.current = true;
+    setMention(null);
+  }, []);
+
+  /**
+   * Inserts the picked file as an "@filename" token and attaches it as a reference.
+   *
+   * The token stays in the sentence, because that is how the question reads ("compare @A with @B")
+   * and removing it would leave "compare  with ". The reference is what the server actually
+   * receives. A document that already carries pinned pages keeps them: the mention says which
+   * pièce, the viewer said which pages, and widening it back to the whole file would throw the page
+   * choice away.
+   */
+  const pickMention = useCallback(
+    (doc: LexDocument) => {
+      // The caret is read from the DOM, not from the `mention` state.
+      //
+      // Splicing state-captured indices into whatever the value is at commit time corrupts the text
+      // if anything changed between that render and the pick, and writing the caret ref inside a
+      // state updater runs during the render phase, which StrictMode double-invokes. The menu's
+      // pointerdown prevents its default, so the composer keeps focus and its selection: reading
+      // the live node is valid for a mouse pick as well as a keyboard one.
+      const el = composerRef.current;
+      if (!el) return;
+      const current = findMention(
+        el.value,
+        el.selectionStart ?? el.value.length
+      );
+      if (!current) return;
+      const next = applyMention(el.value, current, doc.filename);
+      mentionCaretRef.current = next.caret;
+      setInput(next.text);
+      setRefs((prev) =>
+        prev.some((r) => r.documentId === doc.id)
+          ? prev
+          : [...prev, { documentId: doc.id, filename: doc.filename, pages: [] }]
+      );
+      setMentionIndex(0);
+      closeMention();
+    },
+    [closeMention]
+  );
+
+  // A new query starts at the top of the list.
+  useEffect(() => setMentionIndex(0), [mention?.query]);
+
+  /**
+   * Restores the caret after an inserted mention.
+   *
+   * A layout effect because the composer is controlled: the caret can only be placed once React has
+   * committed the new value, and doing it in a plain effect would let the browser paint with the
+   * caret at the end of the box first.
+   */
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    const caret = mentionCaretRef.current;
+    if (!el || caret === null) return;
+    mentionCaretRef.current = null;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+  }, [input]);
+
   const handleRetryDoc = useCallback(
     async (docId: string) => {
       try {
@@ -1290,10 +1840,17 @@ export default function LexWorkspaceChat() {
    * The pins are also named in the message text. Not for the model's benefit — it receives them
    * structurally — but so the persisted conversation still shows what was being looked at when
    * the question was asked, months later.
+   *
+   * A pin the sentence already names with an "@filename" token is left out of the prefix: it is
+   * already in the text, and repeating it made a two-file question read the same names twice. A pin
+   * carrying PAGES stays, because the token says which file and not which pages.
    */
   const buildContent = (text: string): string => {
-    if (refs.length === 0) return text;
-    const labels = refs
+    const unnamed = refs.filter(
+      (r) => r.pages.length > 0 || !textNamesDocument(text, r.filename)
+    );
+    if (unnamed.length === 0) return text;
+    const labels = unnamed
       .map(
         (r) =>
           `${r.filename}${r.pages.length ? ` (p.${r.pages.join(", ")})` : ""}`
@@ -1302,8 +1859,44 @@ export default function LexWorkspaceChat() {
     return `[${t.lex.referencesLabel}: ${labels}]\n\n${text}`;
   };
 
-  const handleSend = async () => {
-    const text = input.trim();
+  /**
+   * The conversation this workspace's chat belongs to, created on first use.
+   *
+   * Read through a ref rather than the state, because three paths reach it — sending, recording and
+   * generating a document — and setState has not committed by the time a second one runs. That race
+   * created two conversations and filed the question in the empty one.
+   *
+   * The title is optional: a recording arrives before there is any text to derive one from, and
+   * streamReply's COALESCE names the thread on the first reply.
+   */
+  // Kept in step with every other writer of activeConvId (switching threads, loading the newest).
+  useEffect(() => {
+    convIdRef.current = activeConvId;
+  }, [activeConvId]);
+
+  const ensureConversation = useCallback(
+    async (title?: string): Promise<string> => {
+      if (convIdRef.current) return convIdRef.current;
+      const conversation = await controllers.conversations.create(id, title);
+      convIdRef.current = conversation.id;
+      setActiveConvId(conversation.id);
+      return conversation.id;
+    },
+    [controllers, id]
+  );
+
+  /**
+   * Sends the composer's question, or an override when the caller already has the text.
+   *
+   * The override exists for the spoken path: `setInput` then `handleSend()` would read the old
+   * state, because React has not committed by the time the next line runs.
+   */
+  const handleSend = async (override?: {
+    text: string;
+    audioId: string;
+    durationSeconds: number;
+  }) => {
+    const text = override ? override.text.trim() : input.trim();
     // The guard MUST be a ref, not the `streaming` state. React state updates are batched, so a
     // held-down or double-tapped Enter fires several keydowns within one tick, every one of them
     // seeing streaming===false and the pre-cleared `input` — which sent the same message three
@@ -1311,26 +1904,21 @@ export default function LexWorkspaceChat() {
     if (!text || sendingRef.current) return;
     sendingRef.current = true;
     setInput("");
+    // Or a stale query stays parsed against a box that is now empty.
+    closeMention();
     // Sending is an implicit "take me to the end": the reply belongs at the bottom and the user
     // just asked for it. Without this, a question typed while scrolled up streams off-screen.
     atBottomRef.current = true;
     setAtBottom(true);
 
-    let convId = activeConvId;
-    if (!convId) {
-      try {
-        const conversation = await controllers.conversations.create(
-          id,
-          text.slice(0, 60)
-        );
-        convId = conversation.id;
-        setActiveConvId(convId);
-      } catch (err) {
-        // Release the guard, or the composer stays locked for the rest of the session.
-        sendingRef.current = false;
-        toast({ title: errorMessage(err), variant: "destructive" });
-        return;
-      }
+    let convId: string;
+    try {
+      convId = await ensureConversation(text.slice(0, 60));
+    } catch (err) {
+      // Release the guard, or the composer stays locked for the rest of the session.
+      sendingRef.current = false;
+      toast({ title: errorMessage(err), variant: "destructive" });
+      return;
     }
 
     const content = buildContent(text);
@@ -1358,6 +1946,14 @@ export default function LexWorkspaceChat() {
         sendingRef.current = false;
         return;
       }
+      // A background run writes its own synthetic user turn, so there is no bubble here for a
+      // recording to hang off. The transcript is already the brief; release the audio and its
+      // object rather than leaving a draft nothing can reach.
+      const strandedAudioId = override?.audioId ?? voiceDraft?.audioId;
+      if (strandedAudioId) {
+        setVoiceDraft(null);
+        void api.lex.voice.discard(strandedAudioId).catch(() => undefined);
+      }
       try {
         await controllers.tasks.create({
           workspaceId: id,
@@ -1368,9 +1964,19 @@ export default function LexWorkspaceChat() {
           // For an assessment the first line labels the task and the whole text is the brief. For
           // an adverse read the text IS the party being defended, which the runner reads from the
           // title — hence no truncation-by-line there.
+          // The @ tokens come OUT of the title. The backend consumes it verbatim, and in adverse
+          // mode the title IS the party being defended ("PARTY BEING DEFENDED: ${title}"), so a
+          // leading filename token would have the model build a case against a PDF. In assessment
+          // mode the same string labels the task in the panel.
           title: adverseMode
-            ? text.trim().slice(0, 200)
-            : text.split("\n")[0].slice(0, 200),
+            ? stripMentions(
+                text,
+                refs.map((r) => r.filename)
+              ).slice(0, 200)
+            : stripMentions(
+                text.split("\n")[0],
+                refs.map((r) => r.filename)
+              ).slice(0, 200),
           instructions: adverseMode ? undefined : content,
           // Applies to BOTH passes of the run — the per-document read and the synthesis.
           depth: runDepth
@@ -1391,7 +1997,21 @@ export default function LexWorkspaceChat() {
       documentId: r.documentId,
       pages: r.pages
     }));
-    setPendingUser(content);
+    // Snapshotted with the pins and for the same reason: an in-flight send must be unaffected by
+    // what the composer does next.
+    const audioId = override?.audioId ?? voiceDraft?.audioId;
+    const audioDuration =
+      override?.durationSeconds ?? voiceDraft?.durationSeconds;
+    const audio: LexMessageAudio | null = audioId
+      ? {
+          id: audioId,
+          contentType: "",
+          durationSeconds: audioDuration ?? null,
+          createdAt: new Date().toISOString()
+        }
+      : null;
+    setPendingUser({ content, audio });
+    setVoiceDraft(null);
     // Pins deliberately SURVIVE the send: they live in a rail the user can see, and the whole
     // point of pinning pages is to ask several questions about them. They are cleared explicitly.
     setStreaming(true);
@@ -1422,12 +2042,20 @@ export default function LexWorkspaceChat() {
           onError: (message) =>
             toast({ title: message, variant: "destructive" })
         },
-        pins,
-        depth
+        { pins, depth, audioId }
       );
       // Pull the persisted user + assistant messages into the store, then drop the local echo.
       await loadMessages(convId);
     } catch (err) {
+      // Only a PRE-STREAM rejection means nothing was persisted. A failure inside the stream
+      // happens after the user turn has committed and its audio has been bound, so putting either
+      // back would duplicate the question and re-offer a recording that can no longer be attached.
+      if (err instanceof LexStreamRejected) {
+        setInput((prev) => (prev.trim() ? prev : text));
+        if (audioId && audioDuration !== undefined) {
+          setVoiceDraft({ audioId, durationSeconds: audioDuration });
+        }
+      }
       toast({ title: errorMessage(err), variant: "destructive" });
     } finally {
       sendingRef.current = false;
@@ -1437,6 +2065,139 @@ export default function LexWorkspaceChat() {
       setPendingUser(null);
     }
   };
+
+  /**
+   * Uploads a held recording, transcribes it, and either sends it or puts the text in the composer.
+   *
+   * An explicit callback rather than an effect keyed on `heldRecording`: as an effect it had to set
+   * a "transcribing" flag that was itself a dependency, so the commit re-ran the effect, the
+   * cleanup cancelled the in-flight request, and the upload plus the transcription were paid for
+   * and thrown away. The retry button calls this same function, so the two paths cannot diverge.
+   */
+  const transcribeRecording = useCallback(
+    async (rec: { file: File; durationSeconds: number; autoSend: boolean }) => {
+      if (transcribingRef.current) return;
+      transcribingRef.current = true;
+      setTranscribing(true);
+      try {
+        const convId = await ensureConversation();
+        const result = await uploadVoiceMessage(
+          convId,
+          rec.file,
+          rec.durationSeconds
+        );
+        const transcript = result.transcript.trim();
+        const durationSeconds = result.durationSeconds ?? rec.durationSeconds;
+        setHeldRecording(null);
+
+        // An empty transcript is not an error. Silence and a muted mic both land here, and the
+        // recording is still worth keeping: attach it and let the message be typed.
+        if (!transcript) {
+          setVoiceDraft({ audioId: result.audioId, durationSeconds });
+          toast({ title: t.lex.voiceNoSpeech });
+          return;
+        }
+        if (rec.autoSend) {
+          await handleSend({
+            text: transcript,
+            audioId: result.audioId,
+            durationSeconds
+          });
+          return;
+        }
+        setVoiceDraft({ audioId: result.audioId, durationSeconds });
+        // Appended, not replaced: whatever was already typed is part of the same question.
+        setInput((prev) =>
+          prev.trim() ? `${prev.trim()}\n\n${transcript}` : transcript
+        );
+      } catch (err) {
+        // The file stays held, so the bar offers a retry rather than losing the dictation.
+        toast({ title: errorMessage(err), variant: "destructive" });
+      } finally {
+        transcribingRef.current = false;
+        setTranscribing(false);
+      }
+    },
+    // handleSend is deliberately absent: it is a plain function redefined each render, it reads
+    // everything it needs from state at call time, and listing it would rebuild this callback on
+    // every keystroke.
+    [ensureConversation, toast, t]
+  );
+
+  /**
+   * Stops the recording and hands it to the transcribe path.
+   *
+   * `autoSend` is the asked-for flow: press the mic, speak, press send, and the agent answers.
+   * `Review` is the same up to the transcript, which then lands in the composer instead. It exists
+   * because speech-to-text mishears proper names and, on a silent clip, invents a whole sentence —
+   * and in a case file one extra tap costs less than a message naming the wrong party.
+   */
+  const handleStopRecording = async (autoSend: boolean) => {
+    const durationSeconds = recorder.elapsed;
+    const file = await recorder.stop();
+    if (!file) {
+      // Nothing captured, unless the 30-minute cap already settled it — onAutoStop has that file
+      // and is transcribing it, so a "nothing was recorded" toast here would be a lie.
+      if (!heldRecording) {
+        toast({ title: t.lex.voiceEmpty, variant: "destructive" });
+      }
+      return;
+    }
+    if (durationSeconds < MIN_VOICE_SECONDS) {
+      toast({ title: t.lex.voiceTooShort, variant: "destructive" });
+      return;
+    }
+    // Checked here as well as server-side, so a long dictation is not uploaded before being told
+    // it cannot be transcribed.
+    if (file.size > MAX_VOICE_MESSAGE_BYTES) {
+      toast({ title: t.lex.voiceTooLarge, variant: "destructive" });
+      return;
+    }
+    const rec = { file, durationSeconds, autoSend };
+    // Held for the retry bar, and transcribed straight away. Not via an effect — see
+    // transcribeRecording for why that shape lost recordings.
+    setHeldRecording(rec);
+    void transcribeRecording(rec);
+  };
+
+  /**
+   * Detaches the recording from the turn being composed.
+   *
+   * The transcript stays in the composer: it is text the user may still want to send. The object is
+   * deleted server-side, because this path is fully under our control and leaving the bytes behind
+   * would be a guaranteed leak per use.
+   */
+  const discardVoiceDraft = useCallback(() => {
+    setVoiceDraft((draft) => {
+      if (draft)
+        void api.lex.voice.discard(draft.audioId).catch(() => undefined);
+      return null;
+    });
+  }, []);
+
+  /**
+   * Files a spoken turn as a pièce, so a dictated fact becomes retrievable and citable.
+   *
+   * useCallback because UserMessage is memoized and this component re-renders on every throttled
+   * token of a streaming reply.
+   */
+  const handleFileVoiceAsDocument = useCallback(
+    async (audioId: string) => {
+      try {
+        await api.lex.voice.fileAsDocument(audioId);
+        // Both: the panel needs the new row, and the bubble needs its documentId to stop offering
+        // the action.
+        await Promise.all([
+          controllers.documents.loadForWorkspace(id),
+          activeConvId ? loadMessages(activeConvId) : Promise.resolve()
+        ]);
+        toast({ title: t.lex.filedAsDocument });
+      } catch (err) {
+        toast({ title: errorMessage(err), variant: "destructive" });
+      }
+    },
+    [controllers, id, activeConvId, loadMessages, toast, t]
+  );
 
   /**
    * Follows a reference to the passage behind it.
@@ -1524,15 +2285,7 @@ export default function LexWorkspaceChat() {
     if (!genTitle.trim() || generating) return;
     setGenerating(true);
     try {
-      let convId = activeConvId;
-      if (!convId) {
-        const conv = await controllers.conversations.create(
-          id,
-          genTitle.trim()
-        );
-        convId = conv.id;
-        setActiveConvId(conv.id);
-      }
+      const convId = await ensureConversation(genTitle.trim());
       await controllers.tasks.create({
         workspaceId: id,
         conversationId: convId,
@@ -1564,7 +2317,7 @@ export default function LexWorkspaceChat() {
     <div className="flex flex-col h-full">
       {/* One header across the full width. The case name lives here rather than in the narrow
           documents column, where it was truncated to a couple of characters. */}
-      <header className="flex items-center gap-2 md:gap-3 pb-3 mb-3 border-b">
+      <header className="flex items-center gap-2 md:gap-3 pb-2 mb-2 md:pb-3 md:mb-3 border-b">
         <button
           onClick={() => navigate("/lex")}
           title={t.lex.back}
@@ -1599,7 +2352,8 @@ export default function LexWorkspaceChat() {
               <h1 className="text-lg font-serif font-bold truncate">
                 {workspace?.name ?? t.lex.title}
               </h1>
-              <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover/name:opacity-100 transition-opacity" />
+              {/* Visible on touch: nothing else hinted that the case name is editable. */}
+              <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-60 transition-opacity can-hover:opacity-0 can-hover:group-hover/name:opacity-100" />
             </button>
           )}
           <p className="hidden sm:block text-xs text-muted-foreground truncate">
@@ -1638,38 +2392,89 @@ export default function LexWorkspaceChat() {
               </span>
             </Button>
           ) : null}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate(`/lex/workspaces/${id}/documents`)}
-            title={t.lex.allDocuments}
-            aria-label={t.lex.allDocuments}
-          >
-            <Files className="h-4 w-4 md:mr-1.5" />
-            <span className="hidden md:inline">{t.lex.allDocuments}</span>
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate(`/lex/workspaces/${id}/story`)}
-            title={t.lex.story.tab}
-            aria-label={t.lex.story.tab}
-          >
-            <CalendarClock className="h-4 w-4 md:mr-1.5" />
-            <span className="hidden md:inline">{t.lex.story.tab}</span>
-          </Button>
-          {messages.length > 0 ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="hidden sm:inline-flex"
-              onClick={() => void handleCopyConversation()}
-              title={t.lex.copyConversation}
-              aria-label={t.lex.copyConversation}
-            >
-              <Copy className="h-4 w-4" />
-            </Button>
-          ) : null}
+          {/* Below md these fold into one overflow menu. They are the leave-the-chat actions, and
+              on a phone they were unlabelled icons competing for the same row as the two buttons
+              that reach the panels. From md up the labels render and fit, so nothing changes. */}
+          {compactHeader ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  title={t.lex.moreActions}
+                  aria-label={t.lex.moreActions}
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  className="h-11"
+                  onSelect={() => fileInputRef.current?.click()}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {t.lex.uploadDocument}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="h-11"
+                  onSelect={() => navigate(`/lex/workspaces/${id}/documents`)}
+                >
+                  <Files className="mr-2 h-4 w-4" />
+                  {t.lex.allDocuments}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="h-11"
+                  onSelect={() => navigate(`/lex/workspaces/${id}/story`)}
+                >
+                  <CalendarClock className="mr-2 h-4 w-4" />
+                  {t.lex.story.tab}
+                </DropdownMenuItem>
+                {messages.length > 0 ? (
+                  <DropdownMenuItem
+                    className="h-11"
+                    onSelect={() => void handleCopyConversation()}
+                  >
+                    <Copy className="mr-2 h-4 w-4" />
+                    {t.lex.copyConversation}
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate(`/lex/workspaces/${id}/documents`)}
+                title={t.lex.allDocuments}
+                aria-label={t.lex.allDocuments}
+              >
+                <Files className="h-4 w-4 md:mr-1.5" />
+                <span className="hidden md:inline">{t.lex.allDocuments}</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate(`/lex/workspaces/${id}/story`)}
+                title={t.lex.story.tab}
+                aria-label={t.lex.story.tab}
+              >
+                <CalendarClock className="h-4 w-4 md:mr-1.5" />
+                <span className="hidden md:inline">{t.lex.story.tab}</span>
+              </Button>
+              {messages.length > 0 ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleCopyConversation()}
+                  title={t.lex.copyConversation}
+                  aria-label={t.lex.copyConversation}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </>
+          )}
           <Button
             size="sm"
             onClick={() => openGenerate()}
@@ -1712,7 +2517,19 @@ export default function LexWorkspaceChat() {
         }}
       />
 
-      <div className="flex flex-1 gap-3 md:gap-4 min-h-0">
+      <div
+        ref={rowRef}
+        // The panel widths are CSS variables so a resize rule can drag them without re-rendering
+        // this component. React only writes style properties whose value changed between renders,
+        // so an unrelated render mid-drag leaves the dragged value in place.
+        style={
+          {
+            "--lex-docs-w": `${docsWidth}px`,
+            "--lex-pins-w": `${pinsWidth}px`
+          } as CSSProperties
+        }
+        className="flex flex-1 gap-3 md:gap-4 min-h-0"
+      >
         {/* Documents panel */}
         <DocumentsPanelContainer
           inline={docsInline}
@@ -1771,7 +2588,8 @@ export default function LexWorkspaceChat() {
               value={docQuery}
               onChange={(e) => setDocQuery(e.target.value)}
               placeholder={t.lex.searchDocuments}
-              className="h-8 pl-8 text-xs"
+              // text-base below md: under 16px iOS zooms the page on focus and never zooms back.
+              className="h-10 pl-8 text-base md:h-8 md:text-xs"
             />
             {docQuery ? (
               <button
@@ -1828,7 +2646,7 @@ export default function LexWorkspaceChat() {
             ) : null}
           </div>
 
-          <div className="flex-1 overflow-auto space-y-1.5">
+          <div className="flex-1 space-y-1.5 overflow-auto overscroll-contain">
             {docGroups.length === 0 ? (
               <p className="text-sm text-muted-foreground px-1">
                 {t.lex.noDocuments}
@@ -1847,7 +2665,7 @@ export default function LexWorkspaceChat() {
                   ) : null}
                   <DocumentRow
                     doc={primary}
-                    roomy={!docsInline}
+                    roomy={!docsInline || !canHover}
                     selected={selectedDocs.includes(primary.id)}
                     onSelect={toggleDocSelected}
                     onOpen={(d) =>
@@ -1869,7 +2687,7 @@ export default function LexWorkspaceChat() {
                       <DocumentRow
                         doc={dupe}
                         isDuplicate
-                        roomy={!docsInline}
+                        roomy={!docsInline || !canHover}
                         selected={selectedDocs.includes(dupe.id)}
                         onSelect={toggleDocSelected}
                         onOpen={(d) =>
@@ -1892,6 +2710,22 @@ export default function LexWorkspaceChat() {
             )}
           </div>
         </DocumentsPanelContainer>
+
+        {/* Only when the panel is an inline column. In a sheet there is nothing to size. */}
+        {docsInline ? (
+          <PanelResizer
+            side="right"
+            cssVar="--lex-docs-w"
+            target={rowRef}
+            value={docsWidth}
+            min={DOCS_WIDTH.min}
+            max={docsMax}
+            onCommit={docs.commit}
+            onReset={docs.reset}
+            label={t.lex.resizeDocuments}
+            title={t.lex.resizeHint}
+          />
+        ) : null}
 
         {/* Chat panel */}
         <div className="flex-1 flex flex-col min-w-0">
@@ -1918,7 +2752,10 @@ export default function LexWorkspaceChat() {
             <div
               ref={scrollRef}
               onScroll={handleThreadScroll}
-              className="flex-1 overflow-auto space-y-4 pr-2"
+              // overflow-x-hidden, not auto: a bubble that overflows must wrap, never turn the
+              // whole conversation into a sideways scroll. overscroll-contain stops the thread
+              // bouncing the page when a flick reaches either end.
+              className="flex-1 space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain pr-1 md:pr-2"
             >
               {messages.length === 0 && !streaming && !pendingUser ? (
                 <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
@@ -1949,7 +2786,11 @@ export default function LexWorkspaceChat() {
               {messages.map((m) =>
                 m.role === "user" ? (
                   <div key={m.id} className="flex justify-end">
-                    <UserMessage content={m.content} />
+                    <UserMessage
+                      content={m.content}
+                      audio={m.audio}
+                      onFileAsDocument={handleFileVoiceAsDocument}
+                    />
                   </div>
                 ) : (
                   <div key={m.id} className="group flex justify-start">
@@ -1964,7 +2805,9 @@ export default function LexWorkspaceChat() {
                         onTrace={handleTrace}
                       />
                       {/* Hover-revealed where hover exists; on touch screens it is simply visible. */}
-                      <div className="mt-1.5 flex justify-end transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
+                      {/* Same: iPad portrait is >= md, so md:opacity-0 hid the copy action with
+                          nothing able to reveal it. */}
+                      <div className="mt-1.5 flex justify-end transition-opacity can-hover:opacity-0 can-hover:group-hover:opacity-100 can-hover:focus-within:opacity-100">
                         <button
                           onClick={() => void handleCopyMessage(m.content)}
                           title={t.lex.copy}
@@ -1982,8 +2825,17 @@ export default function LexWorkspaceChat() {
 
               {pendingUser ? (
                 <div className="flex justify-end">
-                  <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap bg-sidebar-primary text-sidebar-primary-foreground">
-                    {pendingUser}
+                  <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words bg-sidebar-primary text-sidebar-primary-foreground">
+                    {pendingUser.audio ? (
+                      <VoiceMessagePlayer
+                        audioId={pendingUser.audio.id}
+                        durationSeconds={
+                          pendingUser.audio.durationSeconds ?? null
+                        }
+                        className="mb-2"
+                      />
+                    ) : null}
+                    {pendingUser.content}
                   </div>
                 </div>
               ) : null}
@@ -2036,7 +2888,7 @@ export default function LexWorkspaceChat() {
               {refs.map((r) => (
                 <span
                   key={r.documentId}
-                  className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-0.5 rounded-full bg-muted"
+                  className="inline-flex items-center gap-1 rounded-full bg-muted py-1 pl-2.5 pr-1 text-[11px]"
                 >
                   <span className="max-w-[10rem] truncate">{r.filename}</span>
                   <span className="text-muted-foreground">
@@ -2047,19 +2899,87 @@ export default function LexWorkspaceChat() {
                   <button
                     onClick={() => removeRef(r.documentId)}
                     aria-label={t.lex.removeReference}
-                    className="text-muted-foreground hover:text-destructive"
+                    // 28px on touch: detaching a wrongly attached pièce is a routine correction and
+                    // this was the smallest control on the screen.
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-destructive md:h-5 md:w-5"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-3.5 w-3.5 md:h-3 md:w-3" />
                   </button>
                 </span>
               ))}
             </div>
           ) : null}
 
+          {/* A recording that is being uploaded and transcribed, or one whose transcription
+              failed. A SIBLING above the composer, never in its place: the composer has to stay
+              usable while this runs, and a failed transcription must not leave the user with no
+              Textarea and no Send button. */}
+          {heldRecording ? (
+            <div className="mt-2 flex items-center gap-3 rounded-xl border bg-card px-3 py-2">
+              {transcribing ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  <span className="text-sm">{t.lex.transcribing}</span>
+                  <span className="text-sm font-mono text-muted-foreground">
+                    {formatDuration(heldRecording.durationSeconds)}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="text-sm text-destructive">
+                    {t.lex.transcribeFailed}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="ml-auto"
+                    onClick={() => setHeldRecording(null)}
+                  >
+                    {t.lex.discardRecording}
+                  </Button>
+                  {/* Retries against the object already in S3 — no second upload, no second
+                      transcription bill for the attempt that failed. */}
+                  <Button
+                    size="sm"
+                    onClick={() => void transcribeRecording(heldRecording)}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                    {t.lex.retry}
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {/* A transcribed recording waiting on the send. Its transcript is in the composer. */}
+          {voiceDraft ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[11px] pl-2 pr-1 py-0.5 rounded-full bg-muted">
+                <Mic className="h-3 w-3" />
+                {t.lex.voiceMessage} ·{" "}
+                {formatDuration(voiceDraft.durationSeconds)}
+                <button
+                  onClick={discardVoiceDraft}
+                  aria-label={t.lex.removeVoiceMessage}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                {t.lex.voiceDraftHint}
+              </span>
+            </div>
+          ) : null}
+
           {recorder.isRecording ? (
-            <div className="mt-3 flex items-center gap-3 rounded-xl border bg-card px-3 py-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border bg-card px-3 py-2">
               <span className="h-2 w-2 rounded-full bg-destructive animate-pulse shrink-0" />
-              <span className="text-sm">{t.lex.recording}</span>
+              {/* The word is dropped on the narrowest phones: the pulsing dot and the timer already
+                  say it, and Cancel plus Review plus Send have to fit the same row. */}
+              <span className="hidden text-sm sm:inline">
+                {t.lex.recording}
+              </span>
               <span className="text-sm font-mono text-muted-foreground">
                 {formatDuration(recorder.elapsed)} /{" "}
                 {formatDuration(MAX_RECORDING_SECONDS)}
@@ -2072,200 +2992,289 @@ export default function LexWorkspaceChat() {
               >
                 {t.lex.cancel}
               </Button>
+              {/* The safety valve. Speech-to-text mishears proper names and invents sentences on
+                  silence, and in a case file that is worth one extra tap when the user wants it. */}
               <Button
                 size="sm"
-                onClick={() => void handleStopRecording()}
-                className="gradient-terracotta text-white"
+                variant="outline"
+                onClick={() => void handleStopRecording(false)}
               >
                 <Square className="h-3.5 w-3.5 mr-1.5" />
-                {t.lex.stopRecording}
+                {t.lex.reviewTranscript}
+              </Button>
+              {/* The asked-for flow: speak, press send, the agent answers. */}
+              <Button
+                size="sm"
+                onClick={() => void handleStopRecording(true)}
+                className="gradient-terracotta text-white"
+              >
+                <Send className="h-3.5 w-3.5 mr-1.5" />
+                {t.lex.sendRecording}
               </Button>
             </div>
           ) : (
             <div className="mt-3 space-y-1.5">
-              <div className="flex items-end gap-2">
-                {/* Multi-line: pasting a draft letter or a passage of a filing is a normal action
-                    here, and a single-line input made that unreadable. Enter sends, Shift+Enter
-                    inserts a newline. */}
-                <Textarea
-                  value={input}
-                  rows={1}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void handleSend();
-                    }
-                  }}
-                  placeholder={
-                    adverseMode
-                      ? t.lex.adversePlaceholder
-                      : deepMode
-                        ? t.lex.deepPlaceholder
-                        : t.lex.askPlaceholder
-                  }
-                  disabled={streaming}
-                  className="min-h-10 max-h-48 resize-y"
-                />
-                {/* Same hidden input and same handleUpload as the documents panel: one upload
-                    path, no exceptions. It is here as well because the file to be read is usually
-                    the thing being asked about, and crossing to the left panel mid-question is
-                    where people gave up and pasted the text instead. */}
-                <Button
-                  variant="outline"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={streaming || uploading}
-                  title={t.lex.uploadDocument}
-                  aria-label={t.lex.uploadDocument}
-                  className="shrink-0"
-                >
-                  {uploading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Paperclip className="h-4 w-4" />
-                  )}
-                </Button>
-                {recorder.isSupported ? (
-                  <Button
-                    variant="outline"
-                    onClick={() => void handleStartRecording()}
-                    disabled={streaming || uploading}
-                    title={t.lex.recordVoiceNote}
-                    aria-label={t.lex.recordVoiceNote}
-                    className="shrink-0"
-                  >
-                    <Mic className="h-4 w-4" />
-                  </Button>
-                ) : null}
-                <Button
-                  onClick={() => void handleSend()}
-                  disabled={streaming || !input.trim()}
-                  className="gradient-terracotta text-white shrink-0"
-                >
-                  {streaming ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-
-              {/* Two dials, in the composer where the question is written rather than behind a
-                  dialog elsewhere: WHAT KIND of read (exclusive), and HOW HARD (applies to all
-                  three). They used to be three toggles that could contradict each other. */}
-              <div className="flex flex-wrap items-center gap-2">
-                <div
-                  className="flex items-center rounded-full border p-0.5"
-                  role="group"
-                  aria-label={t.lex.modeLabel}
-                >
-                  {CHAT_MODES.map((option) => {
-                    const active = mode === option;
-                    // Adverse is the only one that carries a warning colour: it is the one whose
-                    // input means something different, and mistaking it for a question wastes
-                    // minutes and money on a run that answers the wrong thing.
-                    const tone = active
-                      ? option === "adverse"
-                        ? "bg-destructive/10 text-destructive"
-                        : "bg-secondary text-secondary-foreground"
-                      : "text-muted-foreground hover:text-foreground";
-                    return (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => setMode(option)}
-                        aria-pressed={active}
-                        title={t.lex.modeHint[option]}
-                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors ${tone} ${
-                          active ? "font-medium" : ""
-                        }`}
-                      >
-                        {option === "direct" ? (
-                          <Send className="h-3.5 w-3.5" />
-                        ) : option === "deep" ? (
-                          <Brain className="h-3.5 w-3.5" />
-                        ) : (
-                          <ShieldAlert className="h-3.5 w-3.5" />
-                        )}
-                        {t.lex.modeName[option]}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Depth now applies to background runs too, and means considerably more there: it
-                    picks the tier for the per-document pass, which is 200+ calls on a full file. */}
-                <div
-                  className="flex items-center rounded-full border p-0.5"
-                  role="group"
-                  aria-label={t.lex.depthLabel}
-                >
-                  {DEPTH_ORDER.map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => setDepth(option)}
-                      aria-pressed={depth === option}
-                      title={
-                        background
-                          ? t.lex.runDepthHint[option]
-                          : t.lex.depthHint[option]
-                      }
-                      className={
-                        depth === option
-                          ? "rounded-full px-2.5 py-1 text-xs bg-secondary text-secondary-foreground font-medium"
-                          : "rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
-                      }
+              {/* One wrapper around the input row, so space-y-1.5 still sees exactly the same
+                  children whether the menu is open or not. As a sibling of the input row the menu
+                  made the row stop being the first child, which under Tailwind 3's
+                  `> :not([hidden]) ~ :not([hidden])` selector gave it a 6px margin-top on open and
+                  took it away on close: the composer jumped every time the menu appeared. */}
+              <div className="relative">
+                {/* The '@' menu, anchored above the input row at full column width rather than to the
+                  caret. A textarea exposes no caret coordinates, and the mirror-div trick that
+                  fakes them needs the exact font metrics and scroll offset of a box that grows with
+                  its content and is user-resizable, which this one is. Above the composer is also
+                  where the reference chips already appear, so the list lands where the eye is.
+                  z-30 beats the jump-to-latest button's z-20. */}
+                {mentionOpen ? (
+                  <div className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border bg-popover shadow-lg">
+                    <ul
+                      id={MENTION_LIST_ID}
+                      role="listbox"
+                      aria-label={t.lex.mentionMenuLabel}
+                      className="max-h-64 overflow-auto overscroll-contain py-1"
                     >
-                      {t.lex.depthName[option]}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Scope, shown only for background runs: it is the dial that decides whether a
-                    question about two pièces reads two or forty-seven. Hidden in direct mode,
-                    where retrieval already picks its own passages. */}
-                {background ? (
-                  <div
-                    className="flex items-center rounded-full border p-0.5"
-                    role="group"
-                    aria-label={t.lex.scopeLabel}
-                  >
-                    {(["all", "selected"] as const).map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => setRunScope(option)}
-                        aria-pressed={runScope === option}
-                        title={t.lex.scopeHint[option]}
-                        className={
-                          runScope === option
-                            ? "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs bg-secondary text-secondary-foreground font-medium"
-                            : "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
-                        }
-                      >
-                        {option === "all" ? (
-                          <Files className="h-3.5 w-3.5" />
-                        ) : (
-                          <Pin className="h-3.5 w-3.5" />
-                        )}
-                        {t.lex.scopeName[option]}
-                        {/* The count is the honest part: "Pinned" with nothing pinned is a run
-                            that cannot start, and the number says so before it is launched. */}
-                        {option === "selected"
-                          ? ` (${selectedScopeCount})`
-                          : ""}
-                      </button>
-                    ))}
+                      {mentionMatches.map((doc, i) => (
+                        <li
+                          key={doc.id}
+                          id={`${MENTION_LIST_ID}-${i}`}
+                          role="option"
+                          aria-selected={i === mentionActive}
+                          // pointerdown with the default prevented, not click: a tap would blur the
+                          // composer first, and the insertion is measured from the caret it holds.
+                          onPointerDown={(e) => {
+                            e.preventDefault();
+                            pickMention(doc);
+                          }}
+                          onPointerEnter={() => setMentionIndex(i)}
+                          className={`flex min-h-11 cursor-pointer items-center gap-2 px-3 py-1.5 text-sm md:min-h-9 ${
+                            i === mentionActive ? "bg-accent" : ""
+                          }`}
+                        >
+                          {isVoiceNote(doc) ? (
+                            <AudioLines className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="min-w-0 flex-1 truncate">
+                            {doc.filename}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {doc.timelineDate ?? formatAddedAt(doc.createdAt)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    {mentionCandidates.length > mentionMatches.length ||
+                    mentionPending > 0 ? (
+                      <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
+                        {mentionCandidates.length > mentionMatches.length
+                          ? `+${mentionCandidates.length - mentionMatches.length} ${t.lex.mentionMore}`
+                          : `${mentionPending} ${t.lex.mentionProcessing}`}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 
-                {/* The running sentence is desktop-only: on a phone the pills already wrap onto
-                    two lines, and each carries the same text as its title. */}
-                <span className="hidden md:inline text-[11px] text-muted-foreground">
-                  {background ? t.lex.runSummary[depth] : t.lex.modeHint.direct}
-                </span>
+                <div className="flex items-end gap-2">
+                  {/* Multi-line: pasting a draft letter or a passage of a filing is a normal action
+                    here, and a single-line input made that unreadable. Enter sends, Shift+Enter
+                    inserts a newline. */}
+                  <Textarea
+                    ref={composerRef}
+                    value={input}
+                    rows={1}
+                    onChange={(e) => {
+                      setInput(e.target.value);
+                      // A real keystroke revives the menu after a pick or an Escape.
+                      mentionClosedRef.current = false;
+                      syncMention(e.currentTarget);
+                    }}
+                    // The caret also moves without the text changing: arrows, a click, a drag.
+                    onKeyUp={(e) => syncMention(e.currentTarget)}
+                    onClick={(e) => syncMention(e.currentTarget)}
+                    onKeyDown={(e) => {
+                      // An IME candidate window uses these keys too, and Enter there commits a
+                      // character rather than sending anything.
+                      if (e.nativeEvent.isComposing) return;
+                      // While the menu is open it owns the arrows, Enter, Tab and Escape. Enter must
+                      // not send: the user is picking a file, not asking the question yet.
+                      if (mentionOpen) {
+                        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                          e.preventDefault();
+                          const count = mentionMatches.length;
+                          if (count > 0) {
+                            setMentionIndex(
+                              e.key === "ArrowDown"
+                                ? (mentionActive + 1) % count
+                                : (mentionActive - 1 + count) % count
+                            );
+                          }
+                          return;
+                        }
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          closeMention();
+                          return;
+                        }
+                        if (e.key === "Enter" || e.key === "Tab") {
+                          const picked = mentionMatches[mentionActive];
+                          if (picked) {
+                            e.preventDefault();
+                            pickMention(picked);
+                            return;
+                          }
+                          // Nothing to pick — the menu is only saying that matching files are still
+                          // being ingested — so fall through and let Enter send.
+                        }
+                      }
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void handleSend();
+                      }
+                    }}
+                    placeholder={
+                      adverseMode
+                        ? t.lex.adversePlaceholder
+                        : deepMode
+                          ? t.lex.deepPlaceholder
+                          : t.lex.askPlaceholder
+                    }
+                    disabled={streaming}
+                    // Only while the menu is open, so the composer is not permanently announced as a
+                    // combo box in every other state.
+                    role={mentionOpen ? "combobox" : undefined}
+                    aria-expanded={mentionOpen || undefined}
+                    aria-autocomplete={mentionOpen ? "list" : undefined}
+                    aria-controls={mentionOpen ? MENTION_LIST_ID : undefined}
+                    aria-activedescendant={
+                      mentionOpen && mentionMatches.length > 0
+                        ? `${MENTION_LIST_ID}-${mentionActive}`
+                        : undefined
+                    }
+                    // resize-none below md: the handle is meaningless on touch and it fights the
+                    // auto-grow. The height is set by the layout effect, see COMPOSER_MAX_HEIGHT.
+                    className="min-h-10 max-h-48 resize-none overflow-y-auto md:resize-y"
+                  />
+                  {/* Same hidden input and same handleUpload as the documents panel: one upload
+                    path, no exceptions. It is here as well because the file to be read is usually
+                    the thing being asked about, and crossing to the left panel mid-question is
+                    where people gave up and pasted the text instead. */}
+                  <Button
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={streaming || uploading}
+                    title={t.lex.uploadDocument}
+                    aria-label={t.lex.uploadDocument}
+                    // 44px on touch. Kept below sm rather than dropped: the comment above says why
+                    // it is here at all, and the header's overflow menu is a second entry point,
+                    // not a replacement for the one beside the question.
+                    className="h-11 w-11 shrink-0 md:h-9 md:w-auto"
+                  >
+                    {uploading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Paperclip className="h-4 w-4" />
+                    )}
+                  </Button>
+                  {/* Below lg the documents panel is a sheet behind a header icon, so attaching a
+                      pièce meant leaving the composer, finding one of several unlabelled buttons,
+                      scrolling, and coming back. Attaching pièces is the core gesture here, so it
+                      gets a control beside the question. */}
+                  {!docsInline ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => setDocsSheetOpen(true)}
+                      title={t.lex.addToChat}
+                      aria-label={t.lex.addToChat}
+                      className="relative h-11 w-11 shrink-0 md:h-9 md:w-auto"
+                    >
+                      <Quote className="h-4 w-4" />
+                      {refs.length > 0 ? (
+                        <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-sidebar-primary px-1 text-[10px] tabular-nums text-sidebar-primary-foreground">
+                          {refs.length}
+                        </span>
+                      ) : null}
+                    </Button>
+                  ) : null}
+                  {recorder.isSupported ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleStartRecording()}
+                      disabled={streaming || uploading || transcribing}
+                      title={t.lex.recordVoiceMessage}
+                      aria-label={t.lex.recordVoiceMessage}
+                      className="h-11 w-11 shrink-0 md:h-9 md:w-auto"
+                    >
+                      <Mic className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+                  <Button
+                    onClick={() => void handleSend()}
+                    disabled={streaming || !input.trim()}
+                    className="h-11 w-11 shrink-0 gradient-terracotta text-white md:h-9 md:w-auto"
+                  >
+                    {streaming ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
               </div>
+
+              {/* From sm up the dials sit in the composer where the question is written. Below
+                  that they move into a bottom sheet: three groups of pills do not fit a 366px row,
+                  and they were taking three lines out of the little height a phone has. */}
+              {compactDials ? (
+                <button
+                  type="button"
+                  onClick={() => setDialsOpen(true)}
+                  className="inline-flex h-9 w-full items-center justify-between rounded-full border px-3 text-xs"
+                >
+                  <span className="inline-flex min-w-0 items-center gap-1.5 truncate">
+                    {mode === "direct" ? (
+                      <Send className="h-3.5 w-3.5 shrink-0" />
+                    ) : mode === "deep" ? (
+                      <Brain className="h-3.5 w-3.5 shrink-0" />
+                    ) : (
+                      <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                    )}
+                    <span className="truncate">
+                      {t.lex.modeName[mode]} · {t.lex.depthName[depth]}
+                      {background ? ` · ${t.lex.scopeName[runScope]}` : ""}
+                    </span>
+                  </span>
+                  <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                </button>
+              ) : (
+                <ReasoningDials
+                  mode={mode}
+                  setMode={setMode}
+                  depth={depth}
+                  setDepth={setDepth}
+                  background={background}
+                  runScope={runScope}
+                  setRunScope={setRunScope}
+                  selectedScopeCount={selectedScopeCount}
+                  hint={
+                    background ? t.lex.runSummary[depth] : t.lex.modeHint.direct
+                  }
+                />
+              )}
+
+              {/* Desktop-only: below md the summary button above already says the same thing, and
+                  the sheet repeats it with room to spare.
+                  On an empty composer it gives way to the '@' hint: nothing about '@' is
+                  guessable, and on a phone the documents panel is a sheet, so this is the cheap
+                  path to a reference. Same slot either way, so nothing moves. */}
+              <span className="hidden md:inline text-[11px] text-muted-foreground">
+                {input.length === 0 && refs.length === 0
+                  ? t.lex.mentionHint
+                  : background
+                    ? t.lex.runSummary[depth]
+                    : t.lex.modeHint.direct}
+              </span>
             </div>
           )}
         </div>
@@ -2274,15 +3283,37 @@ export default function LexWorkspaceChat() {
             a right-hand sheet behind the header's pin button, and sending pages closes it so the
             reference chip it just created is visible above the composer. */}
         {pinsInline ? (
-          <PinnedDocumentsPanel
-            docs={pinnedDocs}
-            activeId={activePinnedId}
-            onActivate={setActivePinnedId}
-            onClose={unpinDocument}
-            onSendToChat={(doc, pages) =>
-              referenceInChat(doc.id, doc.filename, pages)
-            }
-          />
+          <>
+            {/* No rule when nothing is pinned: PinnedDocumentsPanel renders null there, and a rule
+                with no panel behind it is a line floating beside the conversation. */}
+            {pinnedDocs.length > 0 ? (
+              <PanelResizer
+                side="left"
+                cssVar="--lex-pins-w"
+                target={rowRef}
+                value={pinsWidth}
+                min={PINS_WIDTH.min}
+                max={pinsMax}
+                onCommit={pins.commit}
+                onReset={pins.reset}
+                label={t.lex.resizePinned}
+                title={t.lex.resizeHint}
+              />
+            ) : null}
+            <PinnedDocumentsPanel
+              className="w-[var(--lex-pins-w,25rem)] shrink-0 border-l"
+              // The COMMITTED width, so a scan re-rasterises on release rather than per frame.
+              // Minus the scroll container's p-2 (16px) and PdfPage's border-2 (4px).
+              pageWidth={pinsWidth - 20}
+              docs={pinnedDocs}
+              activeId={activePinnedId}
+              onActivate={setActivePinnedId}
+              onClose={unpinDocument}
+              onSendToChat={(doc, pages) =>
+                referenceInChat(doc.id, doc.filename, pages)
+              }
+            />
+          </>
         ) : (
           <Sheet open={pinsSheetOpen} onOpenChange={setPinsSheetOpen}>
             <SheetContent
@@ -2307,6 +3338,38 @@ export default function LexWorkspaceChat() {
           </Sheet>
         )}
       </div>
+
+      {/* The reasoning dials on a phone. side="bottom" supplies neither a height cap nor padding,
+          so both are given here: three stacked groups plus the running sentence in FR will outgrow
+          a landscape phone with nothing to scroll. */}
+      <Sheet open={dialsOpen} onOpenChange={setDialsOpen}>
+        <SheetContent
+          side="bottom"
+          className="max-h-[85dvh] overflow-y-auto overscroll-contain p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+        >
+          <SheetHeader className="px-0 pb-3 pr-10 text-left">
+            <SheetTitle className="text-sm">{t.lex.readingOptions}</SheetTitle>
+          </SheetHeader>
+          <ReasoningDials
+            stacked
+            mode={mode}
+            setMode={setMode}
+            depth={depth}
+            setDepth={setDepth}
+            background={background}
+            runScope={runScope}
+            setRunScope={setRunScope}
+            selectedScopeCount={selectedScopeCount}
+            hint={background ? t.lex.runSummary[depth] : t.lex.modeHint.direct}
+          />
+          <Button
+            className="mt-4 h-11 w-full gradient-terracotta text-white"
+            onClick={() => setDialsOpen(false)}
+          >
+            {t.lex.done}
+          </Button>
+        </SheetContent>
+      </Sheet>
 
       {openVoiceNote ? (
         <VoiceNoteDialog
@@ -2339,13 +3402,13 @@ export default function LexWorkspaceChat() {
           <DialogHeader>
             <DialogTitle>{t.lex.newArtifact}</DialogTitle>
           </DialogHeader>
-          <div className="min-w-0 space-y-4 overflow-y-auto py-2 pr-1">
+          <div className="min-w-0 space-y-4 overflow-y-auto overscroll-contain py-2 pr-1">
             <div className="space-y-2">
               <Label>{t.lex.artifactType}</Label>
               <select
                 value={genType}
                 onChange={(e) => setGenType(e.target.value as LexArtifactType)}
-                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-base md:text-sm"
               >
                 <option value="memo">{t.lex.typeMemo}</option>
                 <option value="chronology">{t.lex.typeChronology}</option>
@@ -2405,11 +3468,12 @@ export default function LexWorkspaceChat() {
                   value={genDocQuery}
                   onChange={(e) => setGenDocQuery(e.target.value)}
                   placeholder={t.lex.searchDocuments}
-                  className="h-8 text-xs"
+                  // See the documents search: under 16px iOS zooms in on focus and stays there.
+                  className="h-10 text-base md:h-8 md:text-xs"
                 />
               ) : null}
 
-              <div className="max-h-56 min-w-0 divide-y overflow-y-auto overflow-x-hidden rounded-md border">
+              <div className="max-h-56 min-w-0 divide-y overflow-y-auto overflow-x-hidden overscroll-contain rounded-md border">
                 {genVisibleDocs.length === 0 ? (
                   <p className="px-2 py-3 text-xs text-muted-foreground">
                     {t.lex.noDocumentsReady}

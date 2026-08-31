@@ -26,9 +26,11 @@ import type {
   LexTranscript,
   LexUploadSlot,
   LexUserSettings,
+  LexVoiceUploadSlot,
   LexWorkspace,
   PresignAuthorityRequest,
   PresignUploadRequest,
+  PresignVoiceRequest,
   SaveArtifactRequest,
   UpdateAuthorityRequest,
   UpdateWorkspaceRequest
@@ -587,6 +589,42 @@ export const api = {
         });
       }
       // Sending a message + streaming the reply: see streamLexMessage() in ./lexStream.ts.
+    },
+    /**
+     * Recordings made in the chat composer. A spoken turn's transcript IS the message; these
+     * endpoints handle the audio behind it. Bytes go browser to S3 — see lib/uploadVoiceMessage.ts.
+     */
+    voice: {
+      presign(conversationId: string, body: PresignVoiceRequest) {
+        return request<LexVoiceUploadSlot>(
+          `/admin/lex/conversations/${conversationId}/voice/presign`,
+          { method: "POST", body: JSON.stringify(body) }
+        );
+      },
+      /** Synchronous: the caller is waiting to turn this into a message. */
+      transcribe(audioId: string) {
+        return request<{
+          transcript: string;
+          durationSeconds: number | null;
+        }>(`/admin/lex/voice/${audioId}/transcribe`, { method: "POST" });
+      },
+      url(audioId: string) {
+        return request<{ url: string; expiresIn: number }>(
+          `/admin/lex/voice/${audioId}/url`
+        );
+      },
+      /** Copies a sent recording into a pièce, so a dictated fact becomes citable. */
+      fileAsDocument(audioId: string) {
+        return request<{ document: LexDocument }>(
+          `/admin/lex/voice/${audioId}/document`,
+          { method: "POST" }
+        );
+      },
+      discard(audioId: string) {
+        return request<{ ok: true }>(`/admin/lex/voice/${audioId}`, {
+          method: "DELETE"
+        });
+      }
     },
     artifacts: {
       list(workspaceId: string) {

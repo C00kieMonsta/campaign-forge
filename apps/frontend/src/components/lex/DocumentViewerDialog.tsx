@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LexDocument } from "@packages/types";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@packages/ui";
-import { Download, Loader2 } from "lucide-react";
+import { Download, Loader2, Minus, Plus } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
@@ -43,6 +43,13 @@ export default function DocumentViewerDialog({
   const [pdf, setPdf] = useState<PdfDocument | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  /**
+   * Reading zoom for the page column.
+   *
+   * Inside the dialog's max-w-[calc(100%-2rem)] an A4 page is squeezed to roughly 326px on a phone.
+   * The resolution is fine (PdfPage rasterises at device density), the type is not.
+   */
+  const [zoom, setZoom] = useState(1);
   const pageRefs = useRef(new Map<number, HTMLDivElement>());
 
   const isPdf =
@@ -144,12 +151,39 @@ export default function DocumentViewerDialog({
               : ""}
             {doc.language ? ` · ${doc.language.toUpperCase()}` : ""}
           </span>
+          {isPdf ? (
+            <span className="ml-auto inline-flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.max(1, z - 0.25))}
+                disabled={zoom <= 1}
+                title={t.lex.zoomOut}
+                aria-label={t.lex.zoomOut}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent disabled:opacity-40"
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </button>
+              <span className="w-9 text-center tabular-nums">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.min(3, z + 0.25))}
+                disabled={zoom >= 3}
+                title={t.lex.zoomIn}
+                aria-label={t.lex.zoomIn}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent disabled:opacity-40"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </span>
+          ) : null}
           {url ? (
             <a
               href={url}
               target="_blank"
               rel="noopener noreferrer"
-              className="ml-auto inline-flex items-center gap-1 hover:text-foreground"
+              className={`inline-flex items-center gap-1 hover:text-foreground ${isPdf ? "" : "ml-auto"}`}
             >
               <Download className="h-3.5 w-3.5" />
               {t.lex.openOriginal}
@@ -157,19 +191,23 @@ export default function DocumentViewerDialog({
           ) : null}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
           {loading ? (
             <div className="py-16 flex justify-center text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />
             </div>
           ) : isPdf && pdf ? (
-            <div className="flex flex-col items-center gap-3 pt-3">
+            <div className="flex flex-col gap-3 pt-3">
               {Array.from({ length: pageCount }, (_, i) => i + 1).map(
                 (pageNumber) => (
                   <div
                     key={pageNumber}
                     ref={registerPage(pageNumber)}
-                    className="w-full max-w-[720px]"
+                    className="mx-auto w-full"
+                    // Grows past the container when zoomed, which is what makes the body scroll
+                    // horizontally. mx-auto rather than items-center on the parent: a centred flex
+                    // child that overflows cannot be scrolled to its left edge.
+                    style={{ maxWidth: PAGE_WIDTH * zoom }}
                   >
                     {/* The number is always visible, not only on the cited page: a reference reads
                         "p. 6" and a reader who cannot see which page they are looking at has to

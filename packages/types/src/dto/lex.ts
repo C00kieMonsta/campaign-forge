@@ -262,9 +262,42 @@ export const lexPinSchema = z.object({
 });
 export type LexPin = z.infer<typeof lexPinSchema>;
 
+/**
+ * Ceiling on a voice message, set by the transcription API rather than by us: whisper-1 rejects a
+ * file over 25 MB. Roughly two hours of opus, so the 30-minute recording cap binds first in
+ * practice; this is the backstop for an odd codec.
+ */
+export const MAX_VOICE_MESSAGE_BYTES = 25 * 1024 * 1024;
+
+export const presignVoiceRequestSchema = z.object({
+  // Constrained to audio, unlike the document presign: this object is only ever fed to
+  // speech-to-text, and anything else is a mistake worth rejecting before it reaches the bucket.
+  contentType: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine((v) => v.toLowerCase().startsWith("audio/"), {
+      message: "contentType must be an audio/* type"
+    }),
+  size: z.number().int().positive().max(MAX_VOICE_MESSAGE_BYTES),
+  /** What the recorder's timer measured. Whisper reports its own, which wins when it arrives. */
+  durationSeconds: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(4 * 60 * 60)
+    .optional()
+});
+export type PresignVoiceRequest = z.infer<typeof presignVoiceRequestSchema>;
+
 export const sendMessageRequestSchema = z.object({
   content: z.string().min(1),
   pins: z.array(lexPinSchema).max(20).optional(),
+  /**
+   * The recording this turn was spoken into. The content is still the text, corrected or not; this
+   * only binds the audio to the message so the bubble can play it back.
+   */
+  audioId: z.string().uuid().optional(),
   /**
    * How much deliberation this turn deserves. Per-turn rather than a setting: a question about
    * which piece mentions a date and a passage that will be argued from are not the same request,

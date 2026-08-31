@@ -105,10 +105,11 @@ export default function TaskPanel({
 
   return (
     <div className="rounded-xl border bg-card p-3 text-sm">
-      <div className="flex items-start gap-2">
+      <div className="flex flex-wrap items-start gap-2">
         <button
           onClick={() => setExpanded((prev) => !prev)}
-          className="mt-0.5 text-muted-foreground hover:text-foreground shrink-0"
+          // 36px on touch, back to a bare icon from sm up. Five controls sat on one 366px row.
+          className="-my-1 -ml-1 inline-flex h-9 w-9 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground sm:mt-0.5 sm:h-auto sm:w-auto"
           aria-label={expanded ? t.lex.showLess : t.lex.showMore}
         >
           {expanded ? (
@@ -160,7 +161,7 @@ export default function TaskPanel({
         {!running && task.resultArtifactId ? (
           <Button
             size="sm"
-            className="shrink-0"
+            className="h-9 shrink-0 sm:h-8"
             onClick={() => navigate(`/lex/artifacts/${task.resultArtifactId}`)}
           >
             <FileText className="h-3.5 w-3.5 mr-1.5" />
@@ -171,7 +172,7 @@ export default function TaskPanel({
           <Button
             variant="outline"
             size="sm"
-            className="shrink-0"
+            className="h-9 shrink-0 sm:h-8"
             onClick={() => void controllers.tasks.cancel(task.id)}
           >
             {t.lex.cancel}
@@ -190,7 +191,7 @@ export default function TaskPanel({
           // opposite of what it does.
           aria-label={t.lex.dismissTask}
           title={t.lex.dismissTask}
-          className="text-muted-foreground hover:text-foreground shrink-0"
+          className="-my-1 -mr-1 inline-flex h-9 w-9 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground sm:h-auto sm:w-auto"
         >
           <X className="h-4 w-4" />
         </button>
@@ -199,7 +200,7 @@ export default function TaskPanel({
       {expanded && trace.length > 0 ? (
         <div
           ref={traceRef}
-          className="mt-2 max-h-48 overflow-auto rounded-lg bg-muted/50 p-2 space-y-1"
+          className="mt-2 max-h-48 space-y-1 overflow-auto overscroll-contain rounded-lg bg-muted/50 p-2"
         >
           {trace.map((line) => (
             <p

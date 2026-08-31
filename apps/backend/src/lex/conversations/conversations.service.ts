@@ -12,9 +12,13 @@ import { PgService } from "../../shared/pg.service";
 import { estimateTokens } from "../../shared/tokens";
 import { sourceKey } from "../ai/rag.service";
 import { WorkspacesService } from "../workspaces/workspaces.service";
-import { extractCitedIndexes } from "./citation-markers";
+import {
+  countOutOfRangeMarkers,
+  extractCitedIndexes
+} from "./citation-markers";
 import { ContextAssembler } from "./context-assembler.service";
 import { SummarizationService } from "./summarization.service";
+import { VoiceService } from "./voice.service";
 
 /**
  * Messages returned per page. Roughly a screenful and a half of a long thread — enough that the
@@ -81,7 +85,8 @@ export class ConversationsService {
     private openai: OpenAiService,
     private workspaces: WorkspacesService,
     private assembler: ContextAssembler,
-    private summarization: SummarizationService
+    private summarization: SummarizationService,
+    private voice: VoiceService
   ) {}
 
   async create(
@@ -185,6 +190,19 @@ export class ConversationsService {
     const page = hasMore ? res.rows.slice(0, limit) : res.rows;
     // Reverse into chronological order — the DESC + LIMIT was only how to reach the newest.
     const items = page.reverse().map(mapMessage);
+
+    // Attached to the messages rather than returned as a second map like citations, because there
+    // is nothing for the client to correlate: a turn either was spoken or it was not. Only user
+    // turns are asked for — an assistant reply is never a recording.
+    const audio = await this.voice.audioForMessages(
+      ownerEmail,
+      items.filter((m) => m.role === "user").map((m) => m.id)
+    );
+    for (const m of items) {
+      const found = audio[m.id];
+      if (found) m.audio = found;
+    }
+
     return {
       items,
       hasMore,
@@ -270,7 +288,9 @@ export class ConversationsService {
     /** Pages the user pinned in the viewer; they constrain retrieval for this turn. */
     pins: LexPin[] = [],
     /** How hard to think about this turn. See the model registry for what each depth costs. */
-    depth?: ReasoningDepth
+    depth?: ReasoningDepth,
+    /** The recording this turn was spoken into, if any. See VoiceService.bindToMessage. */
+    audioId?: string
   ): Promise<{ messageId: string; citations: LexCitationEvent[] }> {
     const conv = await this.getOrFail(ownerEmail, conversationId);
 
@@ -292,11 +312,26 @@ export class ConversationsService {
         [conversationId]
       );
       const base = Number(seqRes.rows[0].m);
+      // The id is allocated here rather than left to the default, because a spoken turn's audio is
+      // bound to it below and both have to land or neither.
+      const userId = randomUUID();
       await client.query(
-        `INSERT INTO lex_messages (conversation_id, owner_email, seq, role, content, status)
-         VALUES ($1, $2, $3, 'user', $4, 'complete')`,
-        [conversationId, ownerEmail, base + 1, content]
+        `INSERT INTO lex_messages (id, conversation_id, owner_email, seq, role, content, status)
+         VALUES ($1, $2, $3, $4, 'user', $5, 'complete')`,
+        [userId, conversationId, ownerEmail, base + 1, content]
       );
+      // Inside the same transaction as the message itself. A recording that is not this user's, not
+      // this conversation's, or already spoken for must leave nothing behind — not a turn whose
+      // bubble offers a player that plays nothing.
+      if (audioId) {
+        await this.voice.bindToMessage(
+          client,
+          ownerEmail,
+          audioId,
+          conversationId,
+          userId
+        );
+      }
       await client.query(
         `INSERT INTO lex_messages (id, conversation_id, owner_email, seq, role, content, status)
          VALUES ($1, $2, $3, $4, 'assistant', '', 'pending')`,
@@ -336,6 +371,24 @@ export class ConversationsService {
     }
 
     // Attribute only the sources the model actually cited via [n] markers.
+    //
+    // Markers pointing past the end of the list are dropped by extractCitedIndexes and counted
+    // here: with the CASE FILE inventory in the prompt, a model tempted to cite a document whose
+    // text was never retrieved shows up as exactly this. Logged, not acted on.
+    const outOfRange = countOutOfRangeMarkers(full, sources.length);
+    if (outOfRange > 0) {
+      this.logger.warn(
+        JSON.stringify({
+          level: "warn",
+          action: "lexOutOfRangeMarkers",
+          conversationId,
+          messageId: assistantId,
+          sourceCount: sources.length,
+          outOfRange
+        })
+      );
+    }
+
     const citations: LexCitationEvent[] = extractCitedIndexes(
       full,
       sources.length

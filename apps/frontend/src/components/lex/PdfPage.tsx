@@ -27,7 +27,16 @@ export const PdfPage = memo(function PdfPage({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const holderRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
-  const [rendered, setRendered] = useState(false);
+  /**
+   * The width this page was last rasterised at, or 0 for never.
+   *
+   * A width rather than a boolean, so a resized panel re-rasterises IN PLACE. Re-keying the
+   * component on its width was the alternative and it threw the reader somewhere else in the
+   * filing: the remount reset `visible`, every page fell back to the 160px spinner, and the
+   * container's scroll height collapsed to a third while scrollTop was preserved.
+   */
+  const [renderedWidth, setRenderedWidth] = useState(0);
+  const rendered = renderedWidth > 0;
 
   useEffect(() => {
     const node = holderRef.current;
@@ -43,7 +52,7 @@ export const PdfPage = memo(function PdfPage({
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || rendered) return;
+    if (!visible || renderedWidth === width) return;
     let cancelled = false;
     let task: { cancel: () => void } | null = null;
 
@@ -51,7 +60,13 @@ export const PdfPage = memo(function PdfPage({
       const page = await doc.getPage(pageNumber);
       if (cancelled) return;
       const base = page.getViewport({ scale: 1 });
-      const viewport = page.getViewport({ scale: width / base.width });
+      // Rasterised at the SCREEN's pixel density, displayed at `width`. The canvas is w-full, so at
+      // 1x a page on a 3x phone had a third of the resolution it needed, and reading a scanned
+      // filing is the whole point of the panel it sits in. Capped at 2: a 200-page filing at 3x is
+      // a lot of memory for no visible gain. Captured at render time, so moving the window between
+      // displays does not re-rasterise.
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const viewport = page.getViewport({ scale: (width * dpr) / base.width });
       const canvas = canvasRef.current;
       const context = canvas?.getContext("2d");
       if (!canvas || !context) return;
@@ -61,7 +76,7 @@ export const PdfPage = memo(function PdfPage({
       task = render;
       try {
         await render.promise;
-        if (!cancelled) setRendered(true);
+        if (!cancelled) setRenderedWidth(width);
       } catch {
         /* cancelled render — nothing to do */
       }
@@ -71,7 +86,7 @@ export const PdfPage = memo(function PdfPage({
       cancelled = true;
       task?.cancel();
     };
-  }, [visible, rendered, doc, pageNumber, width]);
+  }, [visible, renderedWidth, doc, pageNumber, width]);
 
   return (
     <div ref={holderRef} className="relative">
@@ -86,7 +101,7 @@ export const PdfPage = memo(function PdfPage({
               : "border-border hover:border-muted-foreground"
           }`}
         >
-          <canvas ref={canvasRef} className="block w-full bg-white" />
+          <canvas ref={canvasRef} className="block h-auto w-full bg-white" />
           {!rendered ? (
             <span className="flex h-40 items-center justify-center text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -96,7 +111,7 @@ export const PdfPage = memo(function PdfPage({
       ) : (
         // Read-only: no button, no hover affordance — nothing here is clickable.
         <div className="block w-full rounded-lg border overflow-hidden">
-          <canvas ref={canvasRef} className="block w-full bg-white" />
+          <canvas ref={canvasRef} className="block h-auto w-full bg-white" />
           {!rendered ? (
             <span className="flex h-40 items-center justify-center text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />

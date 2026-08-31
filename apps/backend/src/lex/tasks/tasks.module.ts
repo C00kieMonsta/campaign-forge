@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AuthModule } from "../../auth/auth.module";
 import { ArtifactsModule } from "../artifacts/artifacts.module";
 import { ConversationsModule } from "../conversations/conversations.module";
+import { CaseFileModule } from "../documents/case-file.module";
 import { SettingsModule } from "../settings/settings.module";
 import { WorkspacesModule } from "../workspaces/workspaces.module";
 import { TaskRunner } from "./task-runner.service";
@@ -24,7 +25,8 @@ import { TasksService } from "./tasks.service";
     WorkspacesModule,
     SettingsModule,
     ConversationsModule,
-    ArtifactsModule
+    ArtifactsModule,
+    CaseFileModule
   ],
   controllers: [TasksController],
   providers: [TasksService, TaskRunner],

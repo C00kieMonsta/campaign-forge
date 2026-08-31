@@ -16,6 +16,7 @@ const runner = new TaskRunner(
   {} as never,
   {} as never,
   {} as never,
+  {} as never,
   {} as never
 ) as unknown as {
   windowsOf(
@@ -27,7 +28,31 @@ const runner = new TaskRunner(
     chunks: { chunkId: string; content: string }[]
   ): { chunkId: string } | null;
   budgetFindings<T>(findings: T[]): T[];
+  documentHeader(
+    doc: {
+      id: string;
+      filename: string;
+      page_count: number | null;
+      timeline_date: Date | string | null;
+      language: string | null;
+      summary: string | null;
+    },
+    partIndex: number,
+    partCount: number
+  ): string;
 };
+
+const docRow = (
+  over: Partial<Parameters<typeof runner.documentHeader>[0]> = {}
+) => ({
+  id: "d1",
+  filename: "convention-1998.pdf",
+  page_count: 12,
+  timeline_date: "1998-05-27",
+  language: "fr",
+  summary: "Convention de partage entre les consorts Pirson.",
+  ...over
+});
 
 const chunk = (chunkId: string, content: string) => ({
   chunkId,
@@ -162,5 +187,70 @@ describe("TaskRunner synthesis budget", () => {
 
     expect(kept.length).toBeLessThan(2000);
     expect(kept[0]).toBe(findings[0]); // earliest documents survive; the tail is what goes
+  });
+});
+
+describe("documentHeader", () => {
+  it("carries the document's own date, language and page count", () => {
+    const header = runner.documentHeader(docRow(), 0, 1);
+    expect(header).toContain("convention-1998.pdf");
+    expect(header).toContain("1998-05-27");
+    expect(header).toContain("fr");
+    expect(header).toContain("12 pages");
+  });
+
+  it("states what the document is, so a letter is not read as a letter about nothing", () => {
+    expect(runner.documentHeader(docRow(), 0, 1)).toContain(
+      "WHAT IT IS: Convention de partage entre les consorts Pirson."
+    );
+  });
+
+  it("names the section only when the document was split", () => {
+    expect(runner.documentHeader(docRow(), 0, 1)).not.toContain("section");
+    expect(runner.documentHeader(docRow(), 1, 4)).toContain("section 2 of 4");
+  });
+
+  it("caps the summary, so one verbose document cannot dominate 200 window prompts", () => {
+    const header = runner.documentHeader(
+      docRow({ summary: "x".repeat(5000) }),
+      0,
+      1
+    );
+    expect(header.length).toBeLessThan(600);
+  });
+
+  it("collapses newlines in the summary so the header stays two lines", () => {
+    const header = runner.documentHeader(
+      docRow({ summary: "first line\n\nsecond line" }),
+      0,
+      1
+    );
+    expect(header).toContain("WHAT IT IS: first line second line");
+    expect(header.trimEnd().split("\n")).toHaveLength(2);
+  });
+
+  it("omits every optional field rather than rendering empty parentheses", () => {
+    const header = runner.documentHeader(
+      docRow({
+        page_count: null,
+        timeline_date: null,
+        language: null,
+        summary: null
+      }),
+      0,
+      1
+    );
+    expect(header).toBe("DOCUMENT: convention-1998.pdf\n");
+  });
+
+  it("reads timeline_date from local parts, never through toISOString", () => {
+    // A Postgres `date` arrives as a Date at LOCAL midnight. Under Europe/Brussels toISOString()
+    // would report 1958-07-09 for the 10 July marriage contract.
+    const header = runner.documentHeader(
+      docRow({ timeline_date: new Date(1958, 6, 10) }),
+      0,
+      1
+    );
+    expect(header).toContain("1958-07-10");
   });
 });

@@ -21,6 +21,7 @@ import type {
 import { LexS3Service } from "../../shared/lex-s3.service";
 import { PgService } from "../../shared/pg.service";
 import { WorkspacesService } from "../workspaces/workspaces.service";
+import { dateOnly } from "./calendar-date";
 import { isAudio } from "./document-parser";
 
 export interface UploadedFileLike {
@@ -125,26 +126,6 @@ function asStringArray(v: unknown): string[] {
 
 function iso(v: Date | string): string {
   return v instanceof Date ? v.toISOString() : String(v);
-}
-
-/**
- * A calendar date as YYYY-MM-DD, read from the LOCAL parts — never through toISOString().
- *
- * timeline_date is a Postgres `date`: a calendar day with no time and no zone. node-postgres parses
- * it into a Date at LOCAL midnight, so toISOString() re-reads that instant in UTC and, at any
- * positive offset, lands on the previous day. Under Europe/Brussels the marriage contract of
- * 1958-07-10 was served to the client as "1958-07-09" — contradicting, on the same screen, both its
- * own summary ("établi le 10 juillet 1958") and its filename.
- *
- * A day is not a rounding error in a succession file: it orders the acts, and it is what prescription
- * and filing deadlines are counted from.
- */
-function dateOnly(v: Date | string | null): string | null {
-  if (v === null) return null;
-  if (!(v instanceof Date)) return String(v).slice(0, 10);
-  const month = String(v.getMonth() + 1).padStart(2, "0");
-  const day = String(v.getDate()).padStart(2, "0");
-  return `${v.getFullYear()}-${month}-${day}`;
 }
 
 export function mapDocument(r: DocumentRow): LexDocument {

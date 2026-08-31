@@ -216,6 +216,41 @@ export interface LexConversation {
   updatedAt: string;
 }
 
+/**
+ * The audio behind a spoken turn.
+ *
+ * The transcript IS the message's own `content`, so the agent reads a dictated question exactly as
+ * it reads a typed one. This is what lets the bubble be played back. `transcript` here is verbatim
+ * speech-to-text, before any hand correction, so the two can be compared later.
+ */
+export interface LexMessageAudio {
+  id: string;
+  /** Null while the recording is a draft in the composer. */
+  messageId?: string | null;
+  contentType: string;
+  /**
+   * From whisper's verbose_json, falling back to the recorder's own timer. Load-bearing for the
+   * player: a webm produced by MediaRecorder carries no duration in its container, so the browser
+   * reports Infinity for it.
+   */
+  durationSeconds?: number | null;
+  transcript?: string | null;
+  /** Set once the recording has also been filed as a pièce. */
+  documentId?: string | null;
+  createdAt: string;
+}
+
+/**
+ * One reserved voice-message upload. Same shape and the same reason as LexUploadSlot: the bytes go
+ * browser to S3, and `contentType` is echoed back because S3 validates that the PUT sends exactly
+ * the type the URL was signed for.
+ */
+export interface LexVoiceUploadSlot {
+  audio: LexMessageAudio;
+  uploadUrl: string;
+  contentType: string;
+}
+
 export interface LexMessage {
   id: string;
   conversationId: string;
@@ -225,6 +260,8 @@ export interface LexMessage {
   content: string;
   status: LexMessageStatus;
   tokenCount?: number | null;
+  /** Present when this turn was spoken. The content above is its transcript. */
+  audio?: LexMessageAudio | null;
   createdAt: string;
 }
 

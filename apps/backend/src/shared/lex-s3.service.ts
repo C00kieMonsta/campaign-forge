@@ -1,4 +1,5 @@
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -49,6 +50,24 @@ export class LexS3Service {
         Key: key,
         Body: body,
         ContentType: contentType
+      })
+    );
+    return { versionId: res.VersionId };
+  }
+
+  /**
+   * Server-side copy, so filing a voice message as a pièce never pulls the bytes through this box.
+   *
+   * CopySource is URL-encoded: a Lex key contains the owner's email, so it carries an @ and may
+   * carry a +, both of which S3 reads as something else in a raw CopySource.
+   */
+  async copy(fromKey: string, toKey: string): Promise<{ versionId?: string }> {
+    const bucket = this.getBucket();
+    const res = await this.getClient().send(
+      new CopyObjectCommand({
+        Bucket: bucket,
+        Key: toKey,
+        CopySource: encodeURIComponent(`${bucket}/${fromKey}`)
       })
     );
     return { versionId: res.VersionId };

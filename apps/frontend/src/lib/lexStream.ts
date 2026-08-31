@@ -19,18 +19,44 @@ export interface LexStreamHandlers {
   onError?: (message: string) => void;
 }
 
+export interface LexStreamOptions {
+  /** Pinned pages: sent structured so the server can constrain retrieval to them. */
+  pins?: LexPin[];
+  depth?: ReasoningDepth;
+  /** The recording this turn was spoken into. The content is still the text. */
+  audioId?: string;
+  signal?: AbortSignal;
+}
+
+/**
+ * Thrown when the request was rejected BEFORE the stream opened.
+ *
+ * Worth its own type: nothing was written server-side, so the caller can put the question back in
+ * the composer and keep its attachments. A failure inside the stream is the opposite — the user
+ * turn is already committed — and restoring state there would duplicate it.
+ */
+export class LexStreamRejected extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "LexStreamRejected";
+  }
+}
+
 /**
  * Streams an assistant reply for a conversation. Resolves when the stream ends; rejects on
- * transport/auth errors. Pass an AbortSignal to cancel.
+ * transport/auth errors.
+ *
+ * Options rather than positionals: pins, depth, audioId and signal is already four trailing
+ * arguments and the call sites were becoming unreadable.
  */
 export async function streamLexMessage(
   conversationId: string,
   content: string,
   handlers: LexStreamHandlers,
-  /** Pinned pages: sent structured so the server can constrain retrieval to them. */
-  pins: LexPin[] = [],
-  depth?: ReasoningDepth,
-  signal?: AbortSignal
+  opts: LexStreamOptions = {}
 ): Promise<void> {
   const token = sessionStorage.getItem(TOKEN_KEY);
   const res = await fetch(
@@ -45,10 +71,11 @@ export async function streamLexMessage(
       // every request would make the default a client concern.
       body: JSON.stringify({
         content,
-        ...(pins.length ? { pins } : {}),
-        ...(depth ? { depth } : {})
+        ...(opts.pins?.length ? { pins: opts.pins } : {}),
+        ...(opts.depth ? { depth: opts.depth } : {}),
+        ...(opts.audioId ? { audioId: opts.audioId } : {})
       }),
-      signal
+      signal: opts.signal
     }
   );
 
@@ -58,7 +85,19 @@ export async function streamLexMessage(
     throw new Error("Unauthorized");
   }
   if (!res.ok || !res.body) {
-    throw new Error(`Stream failed: ${res.status}`);
+    // The server's own message, when it sent one. A rejected recording id is answered here as a
+    // 400 with a sentence the composer can show; without reading the body it surfaced as
+    // "Stream failed: 400", which tells the user nothing they can act on.
+    let message = `Stream failed: ${res.status}`;
+    try {
+      const body = (await res.json()) as { message?: unknown };
+      if (typeof body?.message === "string" && body.message) {
+        message = body.message;
+      }
+    } catch {
+      // Not JSON, or already consumed. The status line is what there is.
+    }
+    throw new LexStreamRejected(message, res.status);
   }
 
   const reader = res.body.getReader();

@@ -13,3 +13,23 @@ export function extractCitedIndexes(
   }
   return [...cited].sort((a, b) => a - b);
 }
+
+/**
+ * Markers the answer wrote that point past the end of the SOURCES list.
+ *
+ * extractCitedIndexes drops these silently, which is right for the citation rows and hides a signal
+ * worth having: a model with an inventory of the whole case file in front of it may try to cite a
+ * document whose text was never in SOURCES. This number rising after the CASE FILE block shipped is
+ * that failure, measured. Nothing acts on it yet.
+ */
+export function countOutOfRangeMarkers(
+  text: string,
+  sourceCount: number
+): number {
+  let n = 0;
+  for (const m of text.matchAll(/\[(\d+)\]/g)) {
+    const i = Number(m[1]);
+    if (i < 1 || i > sourceCount) n += 1;
+  }
+  return n;
+}

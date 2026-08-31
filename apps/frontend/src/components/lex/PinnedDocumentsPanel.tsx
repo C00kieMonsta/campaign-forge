@@ -9,9 +9,9 @@ import { errorMessage } from "@/lib/errorMessage";
 import { loadPdf, type LoadedPdf, type PdfDocument } from "./pdf";
 import { PdfPage } from "./PdfPage";
 
-// Rendered page width inside the panel. Wide enough to read a scanned filing's headings; the
-// panel itself is the constraint, and the sidebar collapses when more room is needed.
-const PAGE_WIDTH = 360;
+// Fallback rendered page width, used when the container does not size it. Wide enough to read a
+// scanned filing's headings.
+const DEFAULT_PAGE_WIDTH = 360;
 
 /**
  * The pinned-documents panel: several documents held open as tabs, on the right, next to the
@@ -31,7 +31,8 @@ export default function PinnedDocumentsPanel({
   onActivate,
   onClose,
   onSendToChat,
-  className = "w-[25rem] shrink-0 border-l"
+  className = "w-[25rem] shrink-0 border-l",
+  pageWidth = DEFAULT_PAGE_WIDTH
 }: {
   docs: LexDocument[];
   activeId: string | null;
@@ -43,6 +44,11 @@ export default function PinnedDocumentsPanel({
    * conversation; inside the small-screen sheet the parent passes a fill-the-sheet variant.
    */
   className?: string;
+  /**
+   * Rendered width of a PDF page, in px. Passed by the container when the panel is resizable, so a
+   * wider panel rasterises a bigger page instead of stretching the same 360px bitmap.
+   */
+  pageWidth?: number;
 }) {
   const { t } = useLanguage();
   const { toast } = useToast();
@@ -149,7 +155,9 @@ export default function PinnedDocumentsPanel({
           return (
             <div
               key={doc.id}
-              className={`group/tab flex items-center gap-1 px-2 py-1.5 max-w-[12rem] shrink-0 border-b-2 ${
+              // max-w in ch, so a wider panel means wider tabs. A readable pinned filename is half
+              // the reason to widen this panel, and a fixed 12rem cap meant it never happened.
+              className={`group/tab flex max-w-[24ch] shrink-0 items-center gap-1 border-b-2 px-2 py-2.5 sm:py-1.5 lg:max-w-[32ch] ${
                 isActive
                   ? "border-sidebar-primary bg-background"
                   : "border-transparent hover:bg-background/60"
@@ -166,9 +174,10 @@ export default function PinnedDocumentsPanel({
                 onClick={() => onClose(doc.id)}
                 aria-label={t.lex.unpin}
                 title={t.lex.unpin}
-                className="shrink-0 text-muted-foreground hover:text-destructive"
+                // 28px on touch: unpinning is a routine correction and this was a 12px target.
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-destructive sm:h-4 sm:w-4"
               >
-                <X className="h-3 w-3" />
+                <X className="h-3.5 w-3.5 sm:h-3 sm:w-3" />
               </button>
             </div>
           );
@@ -209,7 +218,7 @@ export default function PinnedDocumentsPanel({
             size="sm"
             onClick={send}
             title={t.lex.sendToChat}
-            className="ml-auto shrink-0 gradient-terracotta text-white h-7 px-2 text-xs"
+            className="ml-auto h-9 shrink-0 gradient-terracotta px-2.5 text-xs text-white sm:h-7 sm:px-2"
           >
             <Send className="h-3 w-3 mr-1" />
             {t.lex.sendToChat}
@@ -218,7 +227,7 @@ export default function PinnedDocumentsPanel({
       ) : null}
 
       {/* Continuous page scroll */}
-      <div className="flex-1 overflow-auto p-2">
+      <div className="flex-1 overflow-auto overscroll-contain p-2">
         {loading ? (
           <div className="py-12 flex justify-center text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />
@@ -227,10 +236,13 @@ export default function PinnedDocumentsPanel({
           <div className="space-y-2">
             {Array.from({ length: pageCount }, (_, i) => i + 1).map((page) => (
               <PdfPage
+                // Keyed on the document and page only. PdfPage tracks the width it rasterised at
+                // and re-renders in place, so a resize must not remount it: remounting reset its
+                // visibility, collapsed the container's scroll height, and moved the reader.
                 key={`${active?.id}-${page}`}
                 doc={pdf}
                 pageNumber={page}
-                width={PAGE_WIDTH}
+                width={pageWidth}
                 selected={selected.includes(page)}
                 onToggle={togglePage}
                 selectLabel={t.lex.page}

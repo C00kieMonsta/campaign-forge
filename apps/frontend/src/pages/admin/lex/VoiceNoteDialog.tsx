@@ -102,8 +102,12 @@ export default function VoiceNoteDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
+      {/* Capped and scrollable. It was a bare DialogContent: a player, a 12-row textarea, a hint
+          and a two-button footer come to roughly 500px, and DialogContent is centred with no
+          max-height and nothing to scroll, so on a phone the title and the Save button both sat
+          off-screen with no way to reach them. Same pattern as DocumentViewerDialog. */}
+      <DialogContent className="flex max-h-[90dvh] flex-col p-4 sm:p-6">
+        <DialogHeader className="shrink-0 pr-10">
           <DialogTitle className="truncate">{filename}</DialogTitle>
         </DialogHeader>
 
@@ -112,7 +116,7 @@ export default function VoiceNoteDialog({
             <Loader2 className="h-4 w-4 animate-spin" />
           </div>
         ) : (
-          <div className="space-y-4 py-2">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain py-2">
             {audioUrl ? (
               <div className="space-y-1">
                 {/* No <track>: the transcript shown below IS this audio's text alternative. */}
@@ -135,11 +139,13 @@ export default function VoiceNoteDialog({
                   </span>
                 ) : null}
               </div>
+              {/* A height, not `rows`: rows cannot be responsive, and 12 rows is taller than a
+                  phone viewport once the keyboard is up. */}
               <Textarea
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder={t.lex.noTranscript}
-                rows={12}
+                className="h-40 sm:h-72"
               />
               <p className="text-xs text-muted-foreground">
                 {t.lex.transcriptEditHint}
@@ -148,7 +154,7 @@ export default function VoiceNoteDialog({
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button
             variant="outline"
             onClick={() => void handleRetranscribe()}

@@ -3,7 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/logo_white_bg.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover so env(safe-area-inset-*) has real values on a notched phone.
+         interactive-widget=resizes-content makes Chrome Android shrink the layout for the
+         keyboard instead of panning; iOS ignores it, which is what use-app-height handles.
+         No maximum-scale: pinch-zoom is the only way to read a scanned filing on a phone. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>Monique Pirson - Admin</title>
   </head>
   <body>
