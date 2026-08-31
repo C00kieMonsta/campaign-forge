@@ -37,6 +37,7 @@ import {
   AudioLines,
   Brain,
   CalendarClock,
+  Check,
   ChevronDown,
   ChevronUp,
   Copy,
@@ -120,9 +121,15 @@ const PROBLEM_STATUS: ReadonlySet<LexDocument["parseStatus"]> = new Set([
 const AUDIO_EXT_RE =
   /\.(webm|m4a|mp3|mp4|mpga|mpeg|wav|ogg|oga|opus|flac|aac)$/i;
 
-/** The year a document sits at on the case timeline, or null when it has no extracted date. */
-function yearOf(doc: LexDocument | undefined): string | null {
-  return doc?.timelineDate ? doc.timelineDate.slice(0, 4) : null;
+/**
+ * The panel's group heading for a document: the day it was added.
+ *
+ * Keyed on the rendered label rather than on the ISO date, so the grouping cannot disagree with
+ * the text — createdAt is UTC and the label is local, which near midnight would otherwise print
+ * the same day twice.
+ */
+function addedDayOf(doc: LexDocument | undefined): string | null {
+  return doc ? formatAddedAt(doc.createdAt) : null;
 }
 
 /** A voice note: an audio document, whose text came from transcription. */
@@ -138,6 +145,21 @@ function isVoiceNote(doc: LexDocument): boolean {
  * an excerpt of a filing is normal here, and an uncollapsed one buries the assistant's answer.
  */
 const LONG_MESSAGE_CHARS = 900;
+
+/**
+ * Upload time, short. The chat-side panel is ordered by it, so the order has to be readable —
+ * and the year only earns its place when it is not the current one.
+ */
+function formatAddedAt(iso: string) {
+  const added = new Date(iso);
+  if (Number.isNaN(added.getTime())) return "";
+  const sameYear = added.getFullYear() === new Date().getFullYear();
+  return added.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "numeric" })
+  });
+}
 
 /** How far from the end of the thread still counts as "at the end". One short message's worth. */
 const BOTTOM_SLACK = 120;
@@ -213,36 +235,165 @@ const StatusBadge = memo(function StatusBadge({
   );
 });
 
-/** One document in the panel. Shared by primaries and their nested duplicates. */
+/**
+ * One document in the panel. Shared by primaries and their nested duplicates.
+ *
+ * `roomy` is the touch layout, used wherever the panel is a sheet rather than an inline column.
+ * There, "add to chat" gets its own line as a full-width labelled button instead of being a 14px
+ * icon wedged between two other 14px icons — that icon was the most-wanted action on a phone and
+ * the hardest thing on the screen to hit.
+ */
 const DocumentRow = memo(function DocumentRow({
   doc,
   isDuplicate = false,
+  roomy = false,
   selected,
   onSelect,
   onOpen,
   onPin,
   isPinned,
   onReference,
+  isReferenced,
   onRetry
 }: {
   doc: LexDocument;
   isDuplicate?: boolean;
+  roomy?: boolean;
   selected: boolean;
   onSelect: (id: string) => void;
   onOpen: (doc: LexDocument) => void;
   onPin: (doc: LexDocument) => void;
   isPinned: boolean;
   onReference: (doc: LexDocument) => void;
+  isReferenced: boolean;
   onRetry: (id: string) => void;
 }) {
   const { t } = useLanguage();
   const audio = isVoiceNote(doc);
   // Nothing was ever uploaded for these, so there is nothing to open or retry.
   const neverUploaded = doc.parseStatus === "awaiting_upload";
+  const ready = doc.parseStatus === "ready";
+  const canRetry =
+    doc.parseStatus === "failed" || doc.parseStatus === "needs_ocr";
 
-  // Two lines and one row of icon actions. Tags are deliberately NOT shown here: a 68-document
-  // case file has to be scannable, and three tag chips per row tripled the height of the panel.
-  // They live on the documents page, and the search box above still matches on them.
+  /**
+   * Added date first, because that is what this panel is now sorted by — an order you cannot read
+   * off the rows is just an order you have to trust. The document's own date follows it, still
+   * marked when it has none, since which pièce is undated is a legal fact about the file.
+   *
+   * Tags are deliberately NOT here: a 68-document case file has to be scannable, and three tag
+   * chips per row tripled the height of the panel. They live on the documents page, and the
+   * search box above still matches on them.
+   */
+  const meta = `${isDuplicate ? `${t.lex.duplicateOf} ↑ · ` : ""}${formatAddedAt(doc.createdAt)} · ${doc.timelineDate ?? t.lex.noDate}${doc.language ? ` · ${doc.language.toUpperCase()}` : ""}${doc.durationSeconds ? ` · ${formatDuration(doc.durationSeconds)}` : ""}`;
+
+  /* Three distinct actions, deliberately:
+       PIN       — holds the document open as a tab in the right panel, to work from while asking
+                   questions; that panel is where PAGES are picked and sent to chat.
+       OPEN      — a one-off read in a modal, full size, no decisions attached.
+       ADD       — attach the WHOLE document to the next question, in one tap, without opening
+                   anything. Deleting is not here on purpose: it lives behind the checkbox
+                   selection, where it takes a deliberate second step. */
+  if (roomy) {
+    return (
+      <div className="px-2 py-2 text-sm">
+        <div className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onSelect(doc.id)}
+            aria-label={doc.filename}
+            className="mt-1 h-4 w-4 shrink-0"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              {audio ? (
+                <AudioLines className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {doc.filename}
+              </span>
+              {ready ? null : <StatusBadge status={doc.parseStatus} />}
+            </div>
+            <div className="truncate text-[11px] text-muted-foreground">
+              {meta}
+            </div>
+            {doc.parseStatus === "failed" && doc.error ? (
+              <p className="truncate text-[11px] text-destructive">
+                {doc.error}
+              </p>
+            ) : null}
+
+            {/* The action line. "Add to chat" takes the width that is left over: on a phone it is
+                the reason the panel was opened, so it is the only control here that is allowed to
+                be large. The rest stay 36px squares, which is still a real tap target. */}
+            {!neverUploaded ? (
+              <div className="mt-1.5 flex items-center gap-1.5">
+                {ready ? (
+                  <button
+                    type="button"
+                    onClick={() => onReference(doc)}
+                    aria-pressed={isReferenced}
+                    className={`inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors ${
+                      isReferenced
+                        ? "gradient-terracotta text-white"
+                        : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                    }`}
+                  >
+                    {isReferenced ? (
+                      <Check className="h-3.5 w-3.5 shrink-0" />
+                    ) : (
+                      <Quote className="h-3.5 w-3.5 shrink-0" />
+                    )}
+                    <span className="truncate">
+                      {isReferenced ? t.lex.addedToChat : t.lex.addToChat}
+                    </span>
+                  </button>
+                ) : null}
+                {canRetry ? (
+                  <button
+                    type="button"
+                    onClick={() => onRetry(doc.id)}
+                    title={t.lex.retry}
+                    aria-label={t.lex.retry}
+                    className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md border px-3 text-xs text-muted-foreground"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{t.lex.retry}</span>
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => onOpen(doc)}
+                  title={audio ? t.lex.openVoiceNote : t.lex.viewDocument}
+                  aria-label={audio ? t.lex.openVoiceNote : t.lex.viewDocument}
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border text-muted-foreground"
+                >
+                  <Eye className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onPin(doc)}
+                  title={t.lex.pinDocument}
+                  aria-label={t.lex.pinDocument}
+                  className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border ${
+                    isPinned ? "text-sidebar-primary" : "text-muted-foreground"
+                  }`}
+                >
+                  <Pin className="h-4 w-4" />
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Inline column, pointer available: two lines, actions revealed on hover so sixty-eight rows
+  // stay scannable.
   return (
     <div className="group px-2 py-1.5 text-sm">
       <div className="flex items-center gap-1.5">
@@ -265,22 +416,11 @@ const DocumentRow = memo(function DocumentRow({
           {doc.filename}
         </span>
 
-        {/* Three distinct actions, deliberately:
-              PIN       — holds the document open as a tab in the right panel, to work from while
-                          asking questions; that panel is where PAGES are picked and sent to chat.
-              OPEN      — a one-off read in a modal, full size, no decisions attached.
-              REFERENCE — attach the WHOLE document to the next question, in one click, without
-                          opening anything. Deleting is not here on purpose: it lives behind the
-                          checkbox selection, where it takes a deliberate second step.
-            Icons only, on hover where hover exists — a touch screen has none, so below md the
-            actions are simply always visible. */}
         <span className="flex items-center gap-1 shrink-0">
           <span className="group-hover:hidden">
-            {doc.parseStatus === "ready" ? null : (
-              <StatusBadge status={doc.parseStatus} />
-            )}
+            {ready ? null : <StatusBadge status={doc.parseStatus} />}
           </span>
-          <span className="flex items-center gap-1.5 md:hidden md:group-hover:flex">
+          <span className="hidden items-center gap-1.5 group-hover:flex group-focus-within:flex">
             {!neverUploaded ? (
               <button
                 onClick={() => onPin(doc)}
@@ -305,7 +445,7 @@ const DocumentRow = memo(function DocumentRow({
                 <Eye className="h-3.5 w-3.5" />
               </button>
             ) : null}
-            {doc.parseStatus === "failed" || doc.parseStatus === "needs_ocr" ? (
+            {canRetry ? (
               <button
                 onClick={() => onRetry(doc.id)}
                 title={t.lex.retry}
@@ -315,25 +455,32 @@ const DocumentRow = memo(function DocumentRow({
                 <RefreshCw className="h-3.5 w-3.5" />
               </button>
             ) : null}
-            {doc.parseStatus === "ready" ? (
-              <button
-                onClick={() => onReference(doc)}
-                title={t.lex.addReference}
-                aria-label={t.lex.addReference}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <Quote className="h-3.5 w-3.5" />
-              </button>
-            ) : null}
           </span>
+          {/* Always visible, hover or not: it is the action the panel exists for. */}
+          {ready ? (
+            <button
+              onClick={() => onReference(doc)}
+              aria-pressed={isReferenced}
+              title={isReferenced ? t.lex.addedToChat : t.lex.addToChat}
+              aria-label={isReferenced ? t.lex.addedToChat : t.lex.addToChat}
+              className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${
+                isReferenced
+                  ? "gradient-terracotta text-white"
+                  : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+              }`}
+            >
+              {isReferenced ? (
+                <Check className="h-3 w-3" />
+              ) : (
+                <Quote className="h-3 w-3" />
+              )}
+            </button>
+          ) : null}
         </span>
       </div>
 
       <div className="pl-[1.35rem] text-[11px] text-muted-foreground truncate">
-        {isDuplicate ? `${t.lex.duplicateOf} ↑ · ` : ""}
-        {doc.timelineDate ?? t.lex.noDate}
-        {doc.language ? ` · ${doc.language.toUpperCase()}` : ""}
-        {doc.durationSeconds ? ` · ${formatDuration(doc.durationSeconds)}` : ""}
+        {meta}
       </div>
       {doc.parseStatus === "failed" && doc.error ? (
         <p className="pl-[1.35rem] text-[11px] text-destructive truncate">
@@ -423,12 +570,15 @@ function DocumentsPanelContainer({
   open,
   onOpenChange,
   title,
+  footer,
   children
 }: {
   inline: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
+  /** Sheet only: the inline column sits next to the composer, so it needs no way back to it. */
+  footer?: ReactNode;
   children: ReactNode;
 }) {
   if (inline) {
@@ -448,6 +598,7 @@ function DocumentsPanelContainer({
           <SheetTitle className="text-sm">{title}</SheetTitle>
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col p-3">{children}</div>
+        {footer ? <div className="border-t p-3">{footer}</div> : null}
       </SheetContent>
     </Sheet>
   );
@@ -523,12 +674,17 @@ export default function LexWorkspaceChat() {
   const [docQuery, setDocQuery] = useState("");
 
   /**
-   * Documents for display: filtered by the search box, ordered along the case timeline, each
-   * primary carrying the duplicates that point at it so both copies show on one line.
+   * Documents for display: filtered by the search box, most recently ADDED first, each primary
+   * carrying the duplicates that point at it so both copies show on one line.
    *
-   * Ordering is CHRONOLOGICAL ASCENDING, matching the timeline view — a case file reads
-   * oldest-first, and the panel disagreeing with the timeline page was a quiet inconsistency.
-   * Documents with no extracted date sort last: they are undated, not ancient.
+   * Ordered by upload time, not by the date extracted from the document. This panel exists to
+   * feed the conversation, and the pièce you are about to ask about is nearly always the one you
+   * just put in — on a phone that is the whole interaction. Sorting by the document's own date
+   * buried a file just uploaded somewhere in the middle of sixty-eight others, which on a 320px
+   * sheet meant scrolling to find a file added ten seconds earlier.
+   *
+   * The timeline reading of the same case file (oldest-first, by extracted date) is what the
+   * story and documents pages are for; it is not what this panel is for.
    */
   const docGroups = useMemo(() => {
     const needle = docQuery.trim().toLowerCase();
@@ -551,14 +707,7 @@ export default function LexWorkspaceChat() {
       .filter((d) => showProblems || !PROBLEM_STATUS.has(d.parseStatus))
       .filter((d) => !d.duplicateOf) // duplicates render nested under their primary
       .filter(matches)
-      .sort((a, b) => {
-        // Undated last, then oldest first.
-        if (!a.timelineDate && !b.timelineDate)
-          return a.createdAt.localeCompare(b.createdAt);
-        if (!a.timelineDate) return 1;
-        if (!b.timelineDate) return -1;
-        return a.timelineDate.localeCompare(b.timelineDate);
-      })
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map((primary) => ({
         primary,
         duplicates: dupesByPrimary.get(primary.id) ?? []
@@ -1068,15 +1217,24 @@ export default function LexWorkspaceChat() {
     []
   );
 
-  /** One-click: attach the whole document to the next question, no viewer, no page picking. */
-  const referenceWholeDocument = useCallback(
-    (doc: LexDocument) => {
-      referenceInChat(doc.id, doc.filename, []);
-      // The reference lands as a chip above the composer — close the sheet so it is visible.
-      setDocsSheetOpen(false);
-    },
-    [referenceInChat]
-  );
+  /**
+   * One tap: attach the whole document to the next question, no viewer, no page picking. Tapping
+   * again detaches it, so the control states what it did and is its own undo.
+   *
+   * It used to close the documents sheet, on the reasoning that the reference chip lands above the
+   * composer where the sheet was covering it. But attaching pièces is not a one-shot action — a
+   * question is usually about two or three of them — and closing meant reopening the sheet, finding
+   * your place in it, and tapping again for every one after the first. The sheet now stays open,
+   * says which rows are attached, and carries a footer with the count and the way back to the
+   * composer.
+   */
+  const referenceWholeDocument = useCallback((doc: LexDocument) => {
+    setRefs((prev) =>
+      prev.some((r) => r.documentId === doc.id)
+        ? prev.filter((r) => r.documentId !== doc.id)
+        : [...prev, { documentId: doc.id, filename: doc.filename, pages: [] }]
+    );
+  }, []);
 
   const handleRetryDoc = useCallback(
     async (docId: string) => {
@@ -1561,6 +1719,16 @@ export default function LexWorkspaceChat() {
           open={docsSheetOpen}
           onOpenChange={setDocsSheetOpen}
           title={t.lex.documents}
+          footer={
+            refs.length > 0 ? (
+              <Button
+                className="w-full gradient-terracotta text-white"
+                onClick={() => setDocsSheetOpen(false)}
+              >
+                {t.lex.backToQuestion} ({refs.length})
+              </Button>
+            ) : null
+          }
         >
           <div className="mb-3 space-y-1.5">
             <div className="flex gap-1.5">
@@ -1668,15 +1836,18 @@ export default function LexWorkspaceChat() {
             ) : (
               docGroups.map(({ primary, duplicates }, index) => (
                 <div key={primary.id} className="rounded-lg border bg-card">
-                  {/* A subtle year marker where the year changes — enough to read the panel as a
-                      chronology without turning it into a full timeline widget. */}
-                  {yearOf(primary) !== yearOf(docGroups[index - 1]?.primary) ? (
+                  {/* A marker where the upload day changes. It used to mark the year on the case
+                      timeline, which only read as a chronology while the panel was sorted by the
+                      documents' own dates; against an upload order it alternated at random. */}
+                  {addedDayOf(primary) !==
+                  addedDayOf(docGroups[index - 1]?.primary) ? (
                     <div className="px-2.5 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-                      {yearOf(primary) ?? t.lex.noDate}
+                      {formatAddedAt(primary.createdAt)}
                     </div>
                   ) : null}
                   <DocumentRow
                     doc={primary}
+                    roomy={!docsInline}
                     selected={selectedDocs.includes(primary.id)}
                     onSelect={toggleDocSelected}
                     onOpen={(d) =>
@@ -1685,6 +1856,7 @@ export default function LexWorkspaceChat() {
                     onPin={pinDocument}
                     isPinned={pinnedDocs.some((p) => p.id === primary.id)}
                     onReference={referenceWholeDocument}
+                    isReferenced={refs.some((r) => r.documentId === primary.id)}
                     onRetry={handleRetryDoc}
                   />
                   {/* Duplicates sit with their primary so both copies are visible at once and
@@ -1697,6 +1869,7 @@ export default function LexWorkspaceChat() {
                       <DocumentRow
                         doc={dupe}
                         isDuplicate
+                        roomy={!docsInline}
                         selected={selectedDocs.includes(dupe.id)}
                         onSelect={toggleDocSelected}
                         onOpen={(d) =>
@@ -1707,6 +1880,9 @@ export default function LexWorkspaceChat() {
                         onPin={pinDocument}
                         isPinned={pinnedDocs.some((p) => p.id === dupe.id)}
                         onReference={referenceWholeDocument}
+                        isReferenced={refs.some(
+                          (r) => r.documentId === dupe.id
+                        )}
                         onRetry={handleRetryDoc}
                       />
                     </div>
