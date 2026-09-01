@@ -89,7 +89,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   formatDuration,
   MAX_RECORDING_SECONDS,
-  MIN_VOICE_SECONDS,
+  MIN_VOICE_MS,
   useVoiceRecorder
 } from "@/hooks/use-voice-recorder";
 import { api } from "@/lib/api";
@@ -866,6 +866,24 @@ export default function LexWorkspaceChat() {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Synchronous in-flight flag for sending — see the note in handleSend.
   const sendingRef = useRef(false);
+  /**
+   * The current handleSend, for callers that outlive the render they were created in.
+   *
+   * `transcribeRecording` is a useCallback whose deps almost never change, so it captured the FIRST
+   * render's handleSend and kept it. That closure reads `mode`, `depth`, `refs`, `pinnedDocs` and
+   * `runScope` as they were at mount, which is how sending a recording could take the wrong branch
+   * and, with runScope 'selected', bail on an empty scope without ever reaching the network.
+   *
+   * Assigned during render rather than in an effect: the spoken path can fire between a render and
+   * its effects, and an effect-assigned ref would still be one render behind.
+   */
+  const handleSendRef = useRef<
+    (override?: {
+      text: string;
+      audioId: string;
+      durationSeconds: number;
+    }) => Promise<void>
+  >(async () => {});
 
   /**
    * Whether the thread is parked at its end.
@@ -1553,20 +1571,36 @@ export default function LexWorkspaceChat() {
   }, [input, recorder.isRecording]);
 
   /**
-   * Re-sticks the thread when the shell shrinks.
+   * Re-pins the thread to its end whenever the scroll container's own box changes.
    *
-   * The keyboard opening changes the shell's height (see use-app-height), which moves the thread's
-   * bottom. If that is where the reader was, follow it; otherwise leave them where they are.
+   * The layout effect above pins to scrollHeight in the commit that brought the messages in, which
+   * is right but early: the container is not its final height yet. Three things resize it after that
+   * first paint, and each one left the thread scrolled short of the end —
+   *
+   *  - `--app-height`, which use-app-height publishes from an effect, so the shell is 100dvh for
+   *    one paint and the real visible height after it. On first open that alone was enough to leave
+   *    the newest message below the fold.
+   *  - the on-screen keyboard, via the same variable.
+   *  - fonts and markdown settling.
+   *
+   * A ResizeObserver rather than a visualViewport listener, which is what this replaced: the box is
+   * the thing that actually matters, and observing it covers the window, the keyboard, the sidebar
+   * collapsing and a dragged panel with one mechanism.
+   *
+   * Only while the reader is at the end, and never while an older page is being restored — that has
+   * its own held offset and re-pinning would throw it away.
    */
   useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const onResize = () => {
-      if (atBottomRef.current) scrollToBottom("auto");
-    };
-    vv.addEventListener("resize", onResize);
-    return () => vv.removeEventListener("resize", onResize);
-  }, [scrollToBottom]);
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (holdFromBottomRef.current !== null) return;
+      if (!atBottomRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   /**
    * Files (or a whole folder) go straight to S3. Nothing is silently dropped: rejects and
@@ -1874,6 +1908,19 @@ export default function LexWorkspaceChat() {
     convIdRef.current = activeConvId;
   }, [activeConvId]);
 
+  /**
+   * Opening a thread means "show me where we got to".
+   *
+   * Without this the end-of-thread flag survived from whatever the reader was doing in the previous
+   * conversation, so arriving at a case scrolled part-way up the last one left the newest message
+   * off-screen with no indication that it was there.
+   */
+  useEffect(() => {
+    if (!activeConvId) return;
+    atBottomRef.current = true;
+    setAtBottom(true);
+  }, [activeConvId]);
+
   const ensureConversation = useCallback(
     async (title?: string): Promise<string> => {
       if (convIdRef.current) return convIdRef.current;
@@ -2066,6 +2113,8 @@ export default function LexWorkspaceChat() {
     }
   };
 
+  handleSendRef.current = handleSend;
+
   /**
    * Uploads a held recording, transcribes it, and either sends it or puts the text in the composer.
    *
@@ -2076,7 +2125,19 @@ export default function LexWorkspaceChat() {
    */
   const transcribeRecording = useCallback(
     async (rec: { file: File; durationSeconds: number; autoSend: boolean }) => {
-      if (transcribingRef.current) return;
+      // Silent before. A hung upload left this true and every later press did nothing at all, with
+      // no toast and no request, which is indistinguishable from a dead button.
+      if (transcribingRef.current) {
+        console.error(
+          JSON.stringify({
+            level: "error",
+            action: "lexVoiceSendDropped",
+            reason: "already_transcribing"
+          })
+        );
+        toast({ title: t.lex.transcribing });
+        return;
+      }
       transcribingRef.current = true;
       setTranscribing(true);
       try {
@@ -2098,7 +2159,8 @@ export default function LexWorkspaceChat() {
           return;
         }
         if (rec.autoSend) {
-          await handleSend({
+          // Through the ref, never the captured binding. See handleSendRef.
+          await handleSendRef.current({
             text: transcript,
             audioId: result.audioId,
             durationSeconds
@@ -2118,9 +2180,9 @@ export default function LexWorkspaceChat() {
         setTranscribing(false);
       }
     },
-    // handleSend is deliberately absent: it is a plain function redefined each render, it reads
-    // everything it needs from state at call time, and listing it would rebuild this callback on
-    // every keystroke.
+    // handleSend is reached through handleSendRef, so it is deliberately not a dependency: listing
+    // it would rebuild this callback on every keystroke, and capturing it would freeze the composer's
+    // state at mount.
     [ensureConversation, toast, t]
   );
 
@@ -2133,24 +2195,43 @@ export default function LexWorkspaceChat() {
    * and in a case file one extra tap costs less than a message naming the wrong party.
    */
   const handleStopRecording = async (autoSend: boolean) => {
-    const durationSeconds = recorder.elapsed;
     const file = await recorder.stop();
+    // Measured, not the display timer. `elapsed` ticks once a second starting from 0, so a real
+    // recording under a second reported 0 and was dropped as "too short" before any request went
+    // out — pressing send quickly after speaking was enough to hit it.
+    const ms = recorder.durationMs();
+    const durationSeconds = Math.round(ms / 1000);
+    // Every branch below drops the recording before it reaches the network, so each one says which
+    // it was. Without this the three read identically from outside: "I pressed send and nothing
+    // happened".
+    const drop = (reason: string, title: string) => {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          action: "lexVoiceSendDropped",
+          reason,
+          ms,
+          bytes: file?.size ?? 0,
+          contentType: file?.type ?? null
+        })
+      );
+      toast({ title, variant: "destructive" });
+    };
+
     if (!file) {
       // Nothing captured, unless the 30-minute cap already settled it — onAutoStop has that file
       // and is transcribing it, so a "nothing was recorded" toast here would be a lie.
-      if (!heldRecording) {
-        toast({ title: t.lex.voiceEmpty, variant: "destructive" });
-      }
+      if (!heldRecording) drop("empty_blob", t.lex.voiceEmpty);
       return;
     }
-    if (durationSeconds < MIN_VOICE_SECONDS) {
-      toast({ title: t.lex.voiceTooShort, variant: "destructive" });
+    if (ms < MIN_VOICE_MS) {
+      drop("too_short", t.lex.voiceTooShort);
       return;
     }
     // Checked here as well as server-side, so a long dictation is not uploaded before being told
     // it cannot be transcribed.
     if (file.size > MAX_VOICE_MESSAGE_BYTES) {
-      toast({ title: t.lex.voiceTooLarge, variant: "destructive" });
+      drop("too_large", t.lex.voiceTooLarge);
       return;
     }
     const rec = { file, durationSeconds, autoSend };

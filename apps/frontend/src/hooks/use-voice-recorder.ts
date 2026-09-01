@@ -5,8 +5,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // 30 minutes).
 export const MAX_RECORDING_SECONDS = 30 * 60;
 
-/** Below this a recording is a mis-tap, not a message: too short for speech-to-text to hear. */
-export const MIN_VOICE_SECONDS = 1;
+/**
+ * Below this a recording is a mis-tap, not a message: too short for speech-to-text to hear.
+ *
+ * Milliseconds, and checked against a wall clock rather than against `elapsed`. `elapsed` is the
+ * display timer: it starts at 0 and its first tick is a full second in, so a real 900ms recording
+ * reported 0 and a one-second threshold threw it away before it reached the network.
+ */
+export const MIN_VOICE_MS = 600;
 
 /** Preferred container, in order — Safari has no webm/opus encoder, so it falls back to mp4. */
 const MIME_CANDIDATES = [
@@ -35,6 +41,14 @@ export interface VoiceRecorder {
   start: () => Promise<void>;
   /** Stops and resolves with the recorded audio as a File (null if nothing was captured). */
   stop: () => Promise<File | null>;
+  /**
+   * How long the recording actually ran, in ms, from a wall clock.
+   *
+   * Separate from `elapsed`, which exists to be rendered and is therefore quantised to whole
+   * seconds. Callers deciding whether a recording is real, or telling the server how long it is,
+   * need the measured value. Frozen once the recorder stops, so it can be read after `stop()`.
+   */
+  durationMs: () => number;
   /** Stops and discards the recording. */
   cancel: () => void;
 }
@@ -66,6 +80,9 @@ export function useVoiceRecorder(
   optionsRef.current = options;
   /** Set when the cap stopped the recorder, so onstop can tell that from a cancel. */
   const cappedRef = useRef(false);
+  const startedAtRef = useRef(0);
+  /** Non-zero once stopped, so durationMs stops advancing after the fact. */
+  const stoppedAtRef = useRef(0);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -101,6 +118,7 @@ export function useVoiceRecorder(
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
     recorder.onstop = () => {
+      stoppedAtRef.current = Date.now();
       const settle = settleRef.current;
       settleRef.current = null;
       const type = recorder.mimeType || mimeType || "audio/webm";
@@ -129,16 +147,16 @@ export function useVoiceRecorder(
     recorderRef.current = recorder;
     streamRef.current = stream;
     cappedRef.current = false;
+    startedAtRef.current = Date.now();
+    stoppedAtRef.current = 0;
     setElapsed(0);
     setIsRecording(true);
-    // Timesliced, so ondataavailable fires every five seconds instead of only at stop().
-    //
-    // On iOS the page is frozen when the screen locks or the user switches apps, and the recorder
-    // then yields nothing after resume: the whole dictation was lost while the UI carried on showing
-    // a running timer. With a timeslice, everything captured before the freeze is already in
-    // chunksRef. Five seconds rather than one: it is the same trade as a smaller buffer, and one
-    // second of loss is not worth four times the events.
-    recorder.start(5000);
+    // No timeslice. A 5s timeslice was tried, to salvage a dictation from an iOS screen lock (the
+    // page is frozen and the recorder yields nothing after resume). It is not worth it: it puts an
+    // extra flush path in front of EVERY recording, and an empty blob here means stop() resolves
+    // null and the send is dropped before it reaches the network. A rare partial loss is a better
+    // trade than a common total one.
+    recorder.start();
 
     timerRef.current = setInterval(() => {
       setElapsed((prev) => {
@@ -177,12 +195,21 @@ export function useVoiceRecorder(
     else teardown();
   }, [teardown]);
 
+  const durationMs = useCallback(
+    () =>
+      startedAtRef.current === 0
+        ? 0
+        : (stoppedAtRef.current || Date.now()) - startedAtRef.current,
+    []
+  );
+
   return {
     isSupported: typeof MediaRecorder !== "undefined",
     isRecording,
     elapsed,
     start,
     stop,
+    durationMs,
     cancel
   };
 }

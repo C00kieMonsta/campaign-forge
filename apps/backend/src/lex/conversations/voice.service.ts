@@ -368,16 +368,32 @@ export class VoiceService {
     messageIds: readonly string[]
   ): Promise<Record<string, LexMessageAudio>> {
     if (messageIds.length === 0) return {};
-    const res = await this.pg.query<MessageAudioRow>(
-      `SELECT ${AUDIO_COLUMNS} FROM lex_message_audio
-        WHERE owner_email = $1 AND message_id = ANY($2::uuid[])`,
-      [ownerEmail, messageIds]
-    );
-    const byMessage: Record<string, LexMessageAudio> = {};
-    for (const r of res.rows) {
-      if (r.message_id) byMessage[r.message_id] = mapMessageAudio(r);
+    try {
+      const res = await this.pg.query<MessageAudioRow>(
+        `SELECT ${AUDIO_COLUMNS} FROM lex_message_audio
+          WHERE owner_email = $1 AND message_id = ANY($2::uuid[])`,
+        [ownerEmail, messageIds]
+      );
+      const byMessage: Record<string, LexMessageAudio> = {};
+      for (const r of res.rows) {
+        if (r.message_id) byMessage[r.message_id] = mapMessageAudio(r);
+      }
+      return byMessage;
+    } catch (err) {
+      // Best-effort, like the case-file manifest. This runs inside the message-page read, which is
+      // how the thread is loaded at all: a failure here must cost the bubbles their player, never
+      // the conversation. An un-run migration is the obvious way to hit it.
+      this.logger.warn(
+        JSON.stringify({
+          level: "warn",
+          action: "lexMessageAudioReadFailed",
+          ownerEmail,
+          messages: messageIds.length,
+          error: String(err)
+        })
+      );
+      return {};
     }
-    return byMessage;
   }
 
   /**

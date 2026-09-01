@@ -463,10 +463,18 @@ export class ConversationsService {
     // by ContextAssembler's RECENT_TURN_LIMIT headroom, and the fold is batched so a backlog drains
     // rather than compounding.
     //
+    // NOT AWAITED. It used to be, and that put a whole summarisation model call between the reply
+    // being persisted and the client being told so: the caller only sends `citations` and `done`
+    // once this returns, and the browser only reloads the thread once it sees `done`. Every twelfth
+    // turn — CHECKPOINT_THRESHOLD — the finished answer therefore sat invisible for the length of
+    // another model call, and if that call hung the stream never closed and the reply could only be
+    // seen by reloading the page. The message is already committed at this point; the summary is
+    // housekeeping and has no reader until the next turn.
+    //
     // LOGGED, not discarded. `.catch(() => undefined)` meant a checkpoint could fail on every turn
     // of a long case thread with no trace anywhere — and the symptom, a thread quietly losing its
     // own early history, surfaces far from the cause.
-    await this.summarization
+    void this.summarization
       .maybeCheckpoint(conversationId, ownerEmail)
       .catch((err: unknown) =>
         this.logger.warn(
