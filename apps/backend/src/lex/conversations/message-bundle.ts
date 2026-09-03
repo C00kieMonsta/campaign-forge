@@ -1,11 +1,11 @@
 import { sanitizeForStorage } from "../documents/chunker";
 
 /**
- * Builds the "hand this answer to someone else" bundle: every pièce an answer cited, plus one
- * markdown file holding the passages it was cited for.
+ * Builds the "hand this answer to someone else" bundle: every pièce an answer cited, plus a
+ * reference table saying which marker points at which pièce and page.
  *
  * Pure and service-free, so the layout of the zip — which document gets which entry name, which
- * marker lands under which heading, what a missing source reads as — is testable without S3 or a
+ * marker resolves to which page, what a missing source reads as — is testable without S3 or a
  * database. MessageBundleService does the fetching; everything here decides what the reader sees.
  */
 
@@ -19,10 +19,6 @@ export interface BundleCitationRow {
   pageLabel: string | null;
   pageFrom: number | null;
   pageTo: number | null;
-  /** The 240-char quote copied into lex_citations at write time. The fallback, not the source. */
-  quote: string | null;
-  /** The full cited span: lex_document_chunks.content or lex_document_pages.text. */
-  sourceText: string | null;
   s3Key: string | null;
   s3VersionId: string | null;
   sizeBytes: number | null;
@@ -44,8 +40,8 @@ export interface BundlePlan {
   documents: BundleDocument[];
   /**
    * Citations with no file to put in the zip. `lex_citations.document_id` is ON DELETE SET NULL, so
-   * a marker outlives the pièce it cites — and the passage is still worth handing over. Dropping
-   * these rows would make the bundle claim the answer cited fewer sources than it did.
+   * a marker outlives the pièce it cites. They stay in the table as "non joint": dropping them
+   * would make the bundle claim the answer cited fewer sources than it did.
    */
   orphans: BundleCitationRow[];
   totalBytes: number;
@@ -151,40 +147,20 @@ export function planBundle(rows: readonly BundleCitationRow[]): BundlePlan {
 
 // ── Rendering ──────────────────────────────────────────────────────────────────────────────
 
-/**
- * Ceiling on one rendered passage.
- *
- * A chunk is roughly this size already, so the cap only bites on page anchors, where the stored
- * text is a whole page of a scanned bundle. Generous on purpose: this file exists so a new lawyer
- * can read what the answer relied on without opening the PDF, and the 240-char teaser that
- * lex_citations stores does not settle whether a reference supports a sentence.
- */
-export const SNIPPET_MAX_CHARS = 2000;
-
-export function snippetFor(row: BundleCitationRow): string {
-  const text = sanitizeForStorage(row.sourceText ?? row.quote ?? "").trim();
-  if (text.length <= SNIPPET_MAX_CHARS) return text;
-  const cut = text.slice(0, SNIPPET_MAX_CHARS);
-  const lastSpace = cut.lastIndexOf(" ");
-  const kept =
-    lastSpace > SNIPPET_MAX_CHARS - 200 ? cut.slice(0, lastSpace) : cut;
-  return `${kept.trimEnd()} […]`;
-}
-
-/** "p. 12", "p. 12-14", "sheet: Facturen", or nothing when the source has no pagination. */
+/** "p. 12", "p. 12-14", "sheet: Facturen", or a dash when the source has no pagination. */
 export function pageLabelFor(row: BundleCitationRow): string {
   if (row.pageFrom && row.pageTo && row.pageTo !== row.pageFrom)
     return `p. ${row.pageFrom}-${row.pageTo}`;
   if (row.pageFrom) return `p. ${row.pageFrom}`;
-  return row.pageLabel ?? "";
+  return row.pageLabel ?? "—";
 }
 
-function blockquote(text: string): string {
-  if (!text) return "> _(passage indisponible)_";
-  return text
-    .split("\n")
-    .map((line) => `> ${line}`.trimEnd())
-    .join("\n");
+/** A pipe inside a cell ends the column early, and filenames do contain them. */
+function cell(text: string): string {
+  return sanitizeForStorage(text)
+    .replace(/\|/g, "\\|")
+    .replace(/\n/g, " ")
+    .trim();
 }
 
 export interface BundleMeta {
@@ -196,81 +172,64 @@ export interface BundleMeta {
 }
 
 /**
- * EXTRAITS.md: one section per pièce, every marker under it, with the passage quoted.
+ * REFERENCES.md: one row per marker — which pièce it points at, which page, and which file in the
+ * zip to open.
+ *
+ * A table, in marker order, because that is the order someone reads `reponse.md` in: hit a [401],
+ * find the row, open the file. It carries no passages. The earlier version quoted the cited span
+ * under every marker, which turned a seven-pièce answer into pages of blockquotes that nobody reads
+ * — and the passage is already in the pièce, one page reference away.
  *
  * French, because the bundle is read by a Belgian confrère rather than by the app.
  */
-export function renderExtraits(
+export function renderReferences(
   plan: BundlePlan,
   meta: BundleMeta,
   /** Documents whose S3 object could not be fetched, id → reason. See MessageBundleService.write. */
   failed: ReadonlyMap<string, string> = new Map()
 ): string {
-  const citationCount =
-    plan.documents.reduce((n, d) => n + d.citations.length, 0) +
-    plan.orphans.length;
+  // Every marker, from both sources, back in the order the answer wrote them.
+  const rows = [
+    ...plan.documents.flatMap((doc) =>
+      doc.citations.map((c) => ({
+        marker: c.marker,
+        piece: doc.filename,
+        page: pageLabelFor(c),
+        file: failed.has(doc.documentId)
+          ? `non joint (${failed.get(doc.documentId)})`
+          : `\`${doc.entryName}\``
+      }))
+    ),
+    ...plan.orphans.map((c) => ({
+      marker: c.marker,
+      piece: c.filename ?? "pièce supprimée",
+      page: pageLabelFor(c),
+      file: "non joint (pièce retirée du dossier)"
+    }))
+  ].sort((a, b) => a.marker - b.marker);
 
-  const head = [
-    "# Extraits cités",
+  return [
+    "# Références",
     "",
-    `**Dossier :** ${meta.conversationTitle ?? "Conversation"}`,
+    `**Dossier :** ${cell(meta.conversationTitle ?? "Conversation")}`,
     `**Réponse du :** ${meta.createdAt}`,
-    `**Références :** ${citationCount} · **Pièces :** ${plan.documents.length}`,
+    `**Références :** ${rows.length} · **Pièces :** ${plan.documents.length}`,
     "",
-    "Chaque numéro entre crochets est le marqueur du même numéro dans `reponse.md`.",
+    "Chaque numéro est le marqueur du même numéro dans `reponse.md`.",
+    "",
+    "| # | Pièce | Page | Fichier |",
+    "| --- | --- | --- | --- |",
+    ...rows.map(
+      (r) =>
+        `| [${r.marker}] | ${cell(r.piece)} | ${cell(r.page)} | ${cell(r.file)} |`
+    ),
     ""
-  ];
-
-  const sections = plan.documents.map((doc, i) => {
-    const failure = failed.get(doc.documentId);
-    const lines = [
-      "---",
-      "",
-      `## ${String(i + 1).padStart(2, "0")} — ${doc.filename}`,
-      "",
-      failure
-        ? `**Fichier :** non joint (${failure})`
-        : `**Fichier :** \`${doc.entryName}\``,
-      `**Références :** ${doc.citations.map((c) => `[${c.marker}]`).join(", ")}`,
-      ""
-    ];
-    for (const c of doc.citations) {
-      const page = pageLabelFor(c);
-      lines.push(`### [${c.marker}]${page ? ` — ${page}` : ""}`, "");
-      lines.push(blockquote(snippetFor(c)), "");
-    }
-    return lines.join("\n");
-  });
-
-  const orphanSection = plan.orphans.length
-    ? [
-        "---",
-        "",
-        "## Sources introuvables",
-        "",
-        "Ces passages ont été cités, mais la pièce d'origine n'est plus dans le dossier :",
-        "",
-        ...plan.orphans.flatMap((c) => {
-          const page = pageLabelFor(c);
-          return [
-            `### [${c.marker}] — ${c.filename ?? "pièce supprimée"}${page ? `, ${page}` : ""}`,
-            "",
-            blockquote(snippetFor(c)),
-            ""
-          ];
-        })
-      ].join("\n")
-    : "";
-
-  return `${[head.join("\n"), ...sections, orphanSection]
-    .filter(Boolean)
-    .join("\n")
-    .trimEnd()}\n`;
+  ].join("\n");
 }
 
 /**
  * reponse.md: the answer verbatim. Markers are left untouched — they are the index into
- * EXTRAITS.md and into the numbered files.
+ * REFERENCES.md and into the numbered files.
  */
 export function renderAnswer(meta: BundleMeta): string {
   return [
@@ -278,7 +237,7 @@ export function renderAnswer(meta: BundleMeta): string {
     "",
     `**Réponse du :** ${meta.createdAt}`,
     "",
-    "Les marqueurs `[n]` renvoient à `EXTRAITS.md` et aux fichiers du dossier `pieces/`.",
+    "Les marqueurs `[n]` renvoient à `REFERENCES.md` et aux fichiers du dossier `pieces/`.",
     "",
     "---",
     "",

@@ -27,7 +27,6 @@ interface CitationOverrides {
   filename?: string | null;
   s3_key?: string | null;
   size_bytes?: string | null;
-  source_text?: string | null;
 }
 
 function citationRow(over: CitationOverrides = {}) {
@@ -38,8 +37,6 @@ function citationRow(over: CitationOverrides = {}) {
     page_label: null,
     page_from: 12,
     page_to: 12,
-    quote: "un rapport de 226.956,52 EUR",
-    source_text: "L'état liquidatif retient un rapport de 226.956,52 EUR.",
     s3_key: "lex/ws-1/doc-1/original.pdf",
     s3_version_id: null,
     size_bytes: "1024",
@@ -174,12 +171,12 @@ describe("MessageBundleService.write", () => {
 
     expect(text).toContain("pieces/01_CONCLUSIONS.pdf");
     expect(text).toContain("pieces/02_Inventaire.pdf");
-    expect(text).toContain("EXTRAITS.md");
+    expect(text).toContain("REFERENCES.md");
     expect(text).toContain("reponse.md");
     expect(zip.length).toBeGreaterThan(0);
   });
 
-  it("keeps going when one pièce is gone from S3, and says so in the manifest", async () => {
+  it("keeps going when one pièce is gone from S3, and says so in the table", async () => {
     const get = jest.fn(async (key: string) => {
       if (key.includes("doc-2")) throw new Error("NoSuchKey");
       return {
@@ -208,7 +205,7 @@ describe("MessageBundleService.write", () => {
     // The pièce that resolved is still there — the failure cost the reader one file, not forty.
     expect(text).toContain("pieces/01_CONCLUSIONS.pdf");
     expect(text).not.toContain("pieces/02_Inventaire.pdf");
-    expect(text).toContain("EXTRAITS.md");
+    expect(text).toContain("REFERENCES.md");
     expect(get).toHaveBeenCalledTimes(2);
   });
 

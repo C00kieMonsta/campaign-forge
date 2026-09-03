@@ -18,7 +18,7 @@ import {
   bundleFilename,
   planBundle,
   renderAnswer,
-  renderExtraits
+  renderReferences
 } from "./message-bundle";
 
 /**
@@ -44,20 +44,18 @@ interface CitationJoinRow {
   page_label: string | null;
   page_from: number | null;
   page_to: number | null;
-  quote: string | null;
-  source_text: string | null;
   s3_key: string | null;
   s3_version_id: string | null;
   size_bytes: string | null;
 }
 
 /**
- * Packages one answer as a zip: the pièces it cited, the passages it cited them for, and the answer
- * itself.
+ * Packages one answer as a zip: the pièces it cited, a table mapping each marker to a pièce and a
+ * page, and the answer itself.
  *
- * The whole thing reads from lex_citations, which already stores what is needed — marker, document,
- * anchor and quote — so nothing new is captured at answer time and every historical answer can be
- * bundled too.
+ * The whole thing reads from lex_citations, which already stores what is needed — marker, document
+ * and anchor — so nothing new is captured at answer time and every historical answer can be bundled
+ * too.
  */
 @Injectable()
 export class MessageBundleService {
@@ -88,19 +86,17 @@ export class MessageBundleService {
     );
     if (msg.rows.length === 0) throw new NotFoundException("Message not found");
 
-    // COALESCE, not two queries: a citation anchors to a chunk OR a page, in different tables with
-    // different foreign keys (see lexCitationEventSchema), and both carry the text of the span.
-    // marker_index IS NOT NULL for the same reason citationsFor filters on it — a row without one
-    // cannot be traced back to a place in the answer, so there is no [n] to file it under.
+    // The pages join is only for page_label — 'sheet: Facturen' or '§3', where a chunk anchor has
+    // no page number to print. marker_index IS NOT NULL for the same reason citationsFor filters on
+    // it: a row without one cannot be traced back to a place in the answer, so there is no [n] to
+    // put in the table.
     const res = await this.pg.query<CitationJoinRow>(
-      `SELECT c.marker_index, c.document_id, c.page_from, c.page_to, c.quote,
+      `SELECT c.marker_index, c.document_id, c.page_from, c.page_to,
               d.filename, d.s3_key, d.s3_version_id, d.size_bytes,
-              p.page_label,
-              COALESCE(ch.content, p.text) AS source_text
+              p.page_label
        FROM lex_citations c
-       LEFT JOIN lex_documents d        ON d.id  = c.document_id
-       LEFT JOIN lex_document_chunks ch ON ch.id = c.chunk_id
-       LEFT JOIN lex_document_pages p   ON p.id  = c.page_id
+       LEFT JOIN lex_documents d      ON d.id = c.document_id
+       LEFT JOIN lex_document_pages p ON p.id = c.page_id
        WHERE c.owner_email = $1
          AND c.message_id = $2
          AND c.marker_index IS NOT NULL
@@ -118,8 +114,6 @@ export class MessageBundleService {
       pageLabel: r.page_label,
       pageFrom: r.page_from,
       pageTo: r.page_to,
-      quote: r.quote,
-      sourceText: r.source_text,
       s3Key: r.s3_key,
       s3VersionId: r.s3_version_id,
       // BIGINT arrives as a string from pg; Number of a null is 0, which would silently zero the
@@ -153,8 +147,8 @@ export class MessageBundleService {
    *
    * A pièce that cannot be fetched does NOT fail the download. The S3 object can be gone while the
    * row survives, and the alternative — a 500 halfway through a 300 MB transfer — costs the reader
-   * every document that did resolve. The failure is written into EXTRAITS.md instead, next to the
-   * passages it belonged to, which is where someone reconstructing the file will look.
+   * every document that did resolve. The failure is written into REFERENCES.md instead, in the row
+   * of every marker that pointed at it.
    */
   async write(planned: PlannedBundle, out: Writable): Promise<void> {
     const { meta, plan } = planned;
@@ -220,11 +214,11 @@ export class MessageBundleService {
       }
     }
 
-    // Last, so the manifest can report which pièces did not make it into the zip beside it.
+    // Last, so the table can report which pièces did not make it into the zip beside it.
     await this.appendEntry(
       archive,
-      Buffer.from(renderExtraits(plan, meta, failed), "utf8"),
-      "EXTRAITS.md"
+      Buffer.from(renderReferences(plan, meta, failed), "utf8"),
+      "REFERENCES.md"
     );
     await this.appendEntry(
       archive,

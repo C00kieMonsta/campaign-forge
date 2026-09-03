@@ -242,8 +242,8 @@ export class ConversationsController {
   }
 
   /**
-   * Everything one answer cited, as a zip: the pièces themselves under `pieces/`, `EXTRAITS.md`
-   * with the passage behind each `[n]`, and the answer as `reponse.md`.
+   * Everything one answer cited, as a zip: the pièces themselves under `pieces/`, `REFERENCES.md`
+   * mapping each `[n]` to a pièce and a page, and the answer as `reponse.md`.
    *
    * Two segments, like documents/bulk-delete, so `conversations/:id/messages` cannot swallow it.
    * Planned before a byte is written — ownership, "cites nothing" and the size ceiling all still

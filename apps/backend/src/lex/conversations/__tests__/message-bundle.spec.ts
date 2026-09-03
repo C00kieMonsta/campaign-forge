@@ -4,17 +4,15 @@ import {
   entryNameFor,
   planBundle,
   renderAnswer,
-  renderExtraits,
-  sanitizeFilename,
-  SNIPPET_MAX_CHARS,
-  snippetFor
+  renderReferences,
+  sanitizeFilename
 } from "../message-bundle";
 
 /**
  * The bundle is what a lawyer hands to the next lawyer, so its failures are quiet ones: a pièce
- * silently overwritten by another of the same name, a marker whose passage is dropped because the
- * document was deleted, a 240-char teaser shipped where the full cited page was available. Each of
- * those is a test here.
+ * silently overwritten by another of the same name, a marker that disappears from the table because
+ * the document was deleted, a row pointing at a file the zip does not contain. Each of those is a
+ * test here.
  */
 
 function row(over: Partial<BundleCitationRow> = {}): BundleCitationRow {
@@ -25,8 +23,6 @@ function row(over: Partial<BundleCitationRow> = {}): BundleCitationRow {
     pageLabel: null,
     pageFrom: 12,
     pageTo: 12,
-    quote: "un rapport de 226.956,52 EUR",
-    sourceText: "L'état liquidatif retient un rapport de 226.956,52 EUR.",
     s3Key: "lex/x/ws-1/doc-1/original.pdf",
     s3VersionId: null,
     sizeBytes: 1024,
@@ -115,30 +111,7 @@ describe("entry naming", () => {
   });
 });
 
-describe("snippetFor", () => {
-  it("prefers the full cited span over the stored teaser", () => {
-    // lex_citations.quote is content.slice(0, 240). The bundle exists so a reader can judge whether
-    // a reference supports a sentence, which 240 characters does not settle.
-    expect(
-      snippetFor(row({ quote: "court", sourceText: "le texte entier" }))
-    ).toBe("le texte entier");
-  });
-
-  it("falls back to the quote when the chunk and page are gone", () => {
-    expect(snippetFor(row({ sourceText: null }))).toBe(
-      "un rapport de 226.956,52 EUR"
-    );
-  });
-
-  it("caps a whole-page anchor and says it was cut", () => {
-    const long = `${"mot ".repeat(2000)}fin`;
-    const out = snippetFor(row({ sourceText: long }));
-    expect(out.endsWith(" […]")).toBe(true);
-    expect(out.length).toBeLessThanOrEqual(SNIPPET_MAX_CHARS + 4);
-  });
-});
-
-describe("renderExtraits", () => {
+describe("renderReferences", () => {
   const plan = planBundle([
     row({ marker: 401 }),
     row({ marker: 407, pageFrom: 14, pageTo: 15 }),
@@ -153,39 +126,51 @@ describe("renderExtraits", () => {
     row({ marker: 9, documentId: null, s3Key: null, filename: "Farde F.pdf" })
   ]);
 
-  it("files every marker under the pièce it points at, with its page", () => {
-    const md = renderExtraits(plan, meta);
-    expect(md).toContain("## 01 — CONCLUSIONS_24_08_2024.pdf");
-    expect(md).toContain("**Références :** [401], [407]");
-    expect(md).toContain("### [401] — p. 12");
-    expect(md).toContain("### [407] — p. 14-15");
-    // A spreadsheet has no page number, and inventing one would be a citation to nowhere.
-    expect(md).toContain("### [412] — sheet: Facturen");
+  it("gives every marker a row with its pièce and page", () => {
+    const md = renderReferences(plan, meta);
     expect(md).toContain(
-      "**Fichier :** `pieces/01_CONCLUSIONS_24_08_2024.pdf`"
+      "| [401] | CONCLUSIONS_24_08_2024.pdf | p. 12 | `pieces/01_CONCLUSIONS_24_08_2024.pdf` |"
+    );
+    expect(md).toContain("| [407] | CONCLUSIONS_24_08_2024.pdf | p. 14-15 |");
+    // A spreadsheet has no page number, and inventing one would be a reference to nowhere.
+    expect(md).toContain("| [412] | Inventaire.pdf | sheet: Facturen |");
+  });
+
+  it("reads in marker order, which is the order the answer is read in", () => {
+    const markers = [
+      ...renderReferences(plan, meta).matchAll(/^\| \[(\d+)\]/gm)
+    ].map((m) => Number(m[1]));
+    expect(markers).toEqual([9, 401, 407, 412]);
+  });
+
+  it("carries no passages: the pièce is one page reference away", () => {
+    expect(renderReferences(plan, meta)).not.toContain(
+      "L'état liquidatif retient"
     );
   });
 
   it("counts every reference, including the ones with no file", () => {
-    expect(renderExtraits(plan, meta)).toContain(
+    expect(renderReferences(plan, meta)).toContain(
       "**Références :** 4 · **Pièces :** 2"
     );
   });
 
-  it("lists a deleted pièce's passages rather than dropping them", () => {
-    const md = renderExtraits(plan, meta);
-    expect(md).toContain("## Sources introuvables");
-    expect(md).toContain("### [9] — Farde F.pdf, p. 12");
+  it("keeps a deleted pièce's marker in the table rather than dropping it", () => {
+    expect(renderReferences(plan, meta)).toContain(
+      "| [9] | Farde F.pdf | p. 12 | non joint (pièce retirée du dossier) |"
+    );
   });
 
   it("says which pièce failed to download instead of pointing at a file that is not there", () => {
-    const md = renderExtraits(
+    const md = renderReferences(
       plan,
       meta,
       new Map([["doc-2", "fichier introuvable"]])
     );
-    expect(md).toContain("**Fichier :** non joint (fichier introuvable)");
-    expect(md).not.toContain("**Fichier :** `pieces/02_Inventaire.pdf`");
+    expect(md).toContain(
+      "| [412] | Inventaire.pdf | sheet: Facturen | non joint (fichier introuvable) |"
+    );
+    expect(md).not.toContain("`pieces/02_Inventaire.pdf`");
   });
 });
 

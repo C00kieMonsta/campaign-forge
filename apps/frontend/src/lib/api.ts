@@ -624,8 +624,8 @@ export const api = {
         });
       },
       /**
-       * One answer's cited pièces as a zip, with EXTRAITS.md holding the passage behind each [n].
-       * Built from the citations already stored for the message, so old answers bundle too.
+       * One answer's cited pièces as a zip, with REFERENCES.md mapping each [n] to a pièce and a
+       * page. Built from the citations already stored for the message, so old answers bundle too.
        */
       messageBundle(messageId: string) {
         return requestBlob(`/admin/lex/messages/${messageId}/bundle`);
