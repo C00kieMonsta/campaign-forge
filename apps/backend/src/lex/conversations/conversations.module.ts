@@ -8,6 +8,7 @@ import { WorkspacesModule } from "../workspaces/workspaces.module";
 import { ContextAssembler } from "./context-assembler.service";
 import { ConversationsController } from "./conversations.controller";
 import { ConversationsService } from "./conversations.service";
+import { MessageBundleService } from "./message-bundle.service";
 import { SummarizationService } from "./summarization.service";
 import { VoiceService } from "./voice.service";
 
@@ -24,6 +25,7 @@ import { VoiceService } from "./voice.service";
   providers: [
     ConversationsService,
     ContextAssembler,
+    MessageBundleService,
     SummarizationService,
     VoiceService
   ],

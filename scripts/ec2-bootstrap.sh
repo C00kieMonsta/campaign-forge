@@ -172,6 +172,23 @@ server {
         client_max_body_size 1m;
     }
 
+    # "Download the pièces this answer cited": one response carrying every cited PDF as a zip, so
+    # hundreds of megabytes assembled while the client reads. Buffering off, because the default
+    # spools the whole archive to disk before the browser sees a byte; timeouts raised, because the
+    # gap between two chunks is an S3 fetch of a scanned bundle and the default is 60s.
+    location ~ ^/api/admin/lex/messages/[^/]+/bundle$ {
+        proxy_pass                http://localhost:3001;
+        proxy_http_version        1.1;
+        proxy_set_header          Host $host;
+        proxy_set_header          X-Real-IP $remote_addr;
+        proxy_set_header          X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header          X-Forwarded-Proto $scheme;
+        proxy_buffering           off;
+        proxy_read_timeout        600s;
+        proxy_send_timeout        600s;
+        chunked_transfer_encoding on;
+    }
+
     location / {
         proxy_pass         http://localhost:3001;
         proxy_http_version 1.1;

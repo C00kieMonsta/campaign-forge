@@ -51,6 +51,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  Download,
   Eye,
   Files,
   FileText,
@@ -1166,6 +1167,8 @@ export default function LexWorkspaceChat() {
   const [citationsByMessage, setCitationsByMessage] = useState<
     Record<string, LexCitationEvent[]>
   >({});
+  /** The message whose pièces are being zipped, if any. A bundle can take a while to assemble. */
+  const [bundlingId, setBundlingId] = useState<string | null>(null);
 
   // Markdown is re-parsed whenever the text changes, so the streamed reply is throttled rather
   // than re-rendered on every token.
@@ -1655,6 +1658,32 @@ export default function LexWorkspaceChat() {
         ? { title: t.lex.copied }
         : { title: t.lex.copyFailed, variant: "destructive" }
     );
+  };
+
+  /**
+   * The pièces one answer cited, as a zip, with a markdown file holding the passage behind each
+   * marker. Assembled server-side from the message's stored citations, so what lands in the file is
+   * exactly what the [n] in the text point at — see MessageBundleService.
+   */
+  const handleDownloadBundle = async (messageId: string) => {
+    setBundlingId(messageId);
+    try {
+      const { blob, filename } =
+        await api.lex.conversations.messageBundle(messageId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename ?? "pieces-citees.zip";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Not revoked synchronously: Safari cancels a download whose blob URL dies in the same tick.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (err) {
+      toast({ title: errorMessage(err), variant: "destructive" });
+    } finally {
+      setBundlingId(null);
+    }
   };
 
   const handleCopyConversation = async () => {
@@ -2888,7 +2917,25 @@ export default function LexWorkspaceChat() {
                       {/* Hover-revealed where hover exists; on touch screens it is simply visible. */}
                       {/* Same: iPad portrait is >= md, so md:opacity-0 hid the copy action with
                           nothing able to reveal it. */}
-                      <div className="mt-1.5 flex justify-end transition-opacity can-hover:opacity-0 can-hover:group-hover:opacity-100 can-hover:focus-within:opacity-100">
+                      <div className="mt-1.5 flex justify-end gap-3 transition-opacity can-hover:opacity-0 can-hover:group-hover:opacity-100 can-hover:focus-within:opacity-100">
+                        {/* Only where there is something to bundle: an answer with no [n] would
+                            download a zip of one markdown file. */}
+                        {(citationsByMessage[m.id] ?? []).length > 0 ? (
+                          <button
+                            onClick={() => void handleDownloadBundle(m.id)}
+                            disabled={bundlingId === m.id}
+                            title={t.lex.downloadSources}
+                            aria-label={t.lex.downloadSources}
+                            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-60"
+                          >
+                            {bundlingId === m.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Download className="h-3 w-3" />
+                            )}
+                            {t.lex.downloadSources}
+                          </button>
+                        ) : null}
                         <button
                           onClick={() => void handleCopyMessage(m.content)}
                           title={t.lex.copy}

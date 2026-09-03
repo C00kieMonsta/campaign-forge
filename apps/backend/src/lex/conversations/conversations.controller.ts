@@ -26,6 +26,7 @@ import { CurrentUser } from "../../auth/current-user.decorator";
 import { formatZodError } from "../../shared/validation";
 import { RagService } from "../ai/rag.service";
 import { ConversationsService } from "./conversations.service";
+import { MessageBundleService } from "./message-bundle.service";
 import { VoiceService } from "./voice.service";
 
 @UseGuards(AdminGuard)
@@ -34,7 +35,8 @@ export class ConversationsController {
   constructor(
     private conversations: ConversationsService,
     private rag: RagService,
-    private voice: VoiceService
+    private voice: VoiceService,
+    private bundles: MessageBundleService
   ) {}
 
   @Get("workspaces/:workspaceId/conversations")
@@ -237,6 +239,29 @@ export class ConversationsController {
   ) {
     await this.voice.discard(user.email, audioId);
     return { ok: true as const };
+  }
+
+  /**
+   * Everything one answer cited, as a zip: the pièces themselves under `pieces/`, `EXTRAITS.md`
+   * with the passage behind each `[n]`, and the answer as `reponse.md`.
+   *
+   * Two segments, like documents/bulk-delete, so `conversations/:id/messages` cannot swallow it.
+   * Planned before a byte is written — ownership, "cites nothing" and the size ceiling all still
+   * have a status code at that point; after the first chunk they would only truncate a download.
+   */
+  @Get("messages/:messageId/bundle")
+  async bundle(
+    @CurrentUser() user: AuthUser,
+    @Param("messageId") messageId: string,
+    @Res() res: Response
+  ) {
+    const planned = await this.bundles.plan(user.email, messageId);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${planned.filename}"`
+    );
+    await this.bundles.write(planned, res);
   }
 
   /** Debug aid: inspect what retrieval returns for a query in a workspace. */

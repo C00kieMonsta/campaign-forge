@@ -15,7 +15,10 @@ async function bootstrap() {
       /127\.0\.0\.1:\d+$/,
       /https:\/\/(.*\.)?moniquepirson\.be$/
     ],
-    credentials: true
+    credentials: true,
+    // The chat's "download the cited pièces" button reads the zip's filename off this header, and
+    // a cross-origin response hides every header that is not exposed by name.
+    exposedHeaders: ["Content-Disposition"]
   });
 
   const port = process.env.PORT || 3001;

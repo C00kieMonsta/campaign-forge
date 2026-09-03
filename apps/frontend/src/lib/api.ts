@@ -100,6 +100,41 @@ async function requestText(path: string): Promise<string> {
   return res.text();
 }
 
+/**
+ * A binary download that still goes through the bearer-token header.
+ *
+ * The auth token lives in sessionStorage, not in a cookie, so a download cannot be an <a href> to
+ * the API — the browser would send no Authorization header and get a 401. The response is read as a
+ * blob and handed to a synthetic anchor instead.
+ */
+async function requestBlob(
+  path: string
+): Promise<{ blob: Blob; filename: string | null }> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}${path}`, { headers });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error("Unauthorized");
+  }
+  if (!res.ok) {
+    let msg = `Request failed: ${res.status}`;
+    try {
+      const data = await res.json();
+      msg = data.message || data.error || msg;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg);
+  }
+  // Readable cross-origin only because the API exposes the header — see enableCors in main.ts.
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename="([^"]+)"/.exec(disposition);
+  return { blob: await res.blob(), filename: match ? match[1] : null };
+}
+
 async function uploadRequest<T>(path: string, file: File): Promise<T> {
   const token = getToken();
   const form = new FormData();
@@ -587,6 +622,13 @@ export const api = {
         return request<{ ok: true }>(`/admin/lex/conversations/${id}`, {
           method: "DELETE"
         });
+      },
+      /**
+       * One answer's cited pièces as a zip, with EXTRAITS.md holding the passage behind each [n].
+       * Built from the citations already stored for the message, so old answers bundle too.
+       */
+      messageBundle(messageId: string) {
+        return requestBlob(`/admin/lex/messages/${messageId}/bundle`);
       }
       // Sending a message + streaming the reply: see streamLexMessage() in ./lexStream.ts.
     },
