@@ -156,9 +156,14 @@
   border-top: 1px solid hsl(var(--border));
   margin: 1em 0;
 }
+/* An email is 600px wide. Capped here so a wide editor does not blow a photo (or a grey
+   placeholder, 600x220) up to the full window and push the text out of view. */
 .tiptap-editor .ProseMirror img {
-  max-width: 100%;
+  max-width: min(100%, 600px);
   height: auto;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
   cursor: pointer;
   border-radius: 4px;
   transition: outline 0.15s;

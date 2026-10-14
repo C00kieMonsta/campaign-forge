@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button, Input, Label } from "@packages/ui";
-import { ArrowLeft, Code2, Eye, FileUp, LayoutTemplate, Loader2, Paperclip, Save, Sparkles, Variable, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, Code2, Eye, FileUp, LayoutTemplate, Loader2, Paperclip, Save, Sparkles, Variable, X } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
@@ -50,6 +50,9 @@ export default function CampaignEditor() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  // The template cards take a full row. Open by default only while the body is empty, which is
+  // when they are useful; a campaign that already has content gets the room for its text.
+  const [templatesToggle, setTemplatesToggle] = useState<boolean | null>(null);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -95,6 +98,8 @@ export default function CampaignEditor() {
     () => countImagePlaceholders(formData.html),
     [formData.html]
   );
+
+  const templatesOpen = templatesToggle ?? formData.html.trim() === "";
 
   const applyTemplate = (tpl: { html: string; fullHtml?: true }) => {
     if (tpl.fullHtml) {
@@ -177,7 +182,7 @@ export default function CampaignEditor() {
   return (
     <div className="animate-fade-up h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => navigate("/campaigns/mailings")}>
             <ArrowLeft className="h-5 w-5" />
@@ -217,7 +222,7 @@ export default function CampaignEditor() {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col gap-4 min-h-0">
+      <div className="flex-1 flex flex-col gap-3 min-h-0">
         {/* Name + Subject */}
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
@@ -236,6 +241,8 @@ export default function CampaignEditor() {
           </div>
         </div>
 
+        {/* Groups and attachments side by side: two short rows cost the editor a third of a screen. */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Target Groups */}
         <div className="space-y-2">
           <Label>{t.campaignForm.targetGroups}</Label>
@@ -322,20 +329,22 @@ export default function CampaignEditor() {
             )}
           </div>
         </div>
+        </div>
 
         {/* Grey photo boxes do not render in an inbox, so they must be filled before sending. */}
         {!isSent && placeholderCount > 0 && (
-          <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
-            <p className="font-medium">
+          <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+            <span className="font-medium">
               {placeholderCount} {t.campaignForm.placeholdersRemaining}
-            </p>
-            <p className="text-xs mt-0.5">{t.campaignForm.placeholdersHint}</p>
+            </span>
+            <span className="text-xs">{t.campaignForm.placeholdersHint}</span>
           </div>
         )}
 
-        {/* Editor / Preview — fills remaining space */}
-        <div className="flex-1 flex flex-col min-h-0 card-elevated p-4">
-          <div className="flex gap-1 border-b border-border mb-4">
+        {/* Editor / Preview: fills the remaining space, and never less than a readable page (the
+            layout's <main> scrolls when the viewport is shorter than that). */}
+        <div className="flex-1 flex flex-col min-h-[520px] card-elevated p-3">
+          <div className="flex gap-1 border-b border-border mb-3">
             <button
               type="button"
               onClick={() => setViewMode("editor")}
@@ -374,37 +383,21 @@ export default function CampaignEditor() {
           </div>
 
           {viewMode === "editor" ? (
-            <div className="flex-1 flex flex-col gap-3 min-h-0">
-              {/* Template picker — hidden for sent campaigns */}
-              {!isSent && (
-                <div className="space-y-2">
-                  <span className="text-sm text-muted-foreground flex items-center gap-1">
-                    <LayoutTemplate className="h-4 w-4" />
-                    {t.campaignForm.templates}:
-                  </span>
-                  <div className="flex gap-2 flex-wrap">
-                    {EMAIL_TEMPLATES.map((tpl) => {
-                      const labelKey = `template${tpl.key.charAt(0).toUpperCase() + tpl.key.slice(1)}` as keyof typeof t.campaignForm;
-                      const descKey = `template${tpl.key.charAt(0).toUpperCase() + tpl.key.slice(1)}Desc` as keyof typeof t.campaignForm;
-                      return (
-                        <button
-                          key={tpl.key}
-                          type="button"
-                          onClick={() => applyTemplate(tpl)}
-                          className="flex flex-col items-start px-3 py-2 rounded-lg border border-border bg-muted/40 hover:bg-muted hover:border-primary/40 transition-all text-left"
-                        >
-                          <span className="text-xs font-medium text-foreground">{t.campaignForm[labelKey] as string}</span>
-                          <span className="text-xs text-muted-foreground">{t.campaignForm[descKey] as string}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Variable insertion — hidden for sent campaigns */}
+            <div className="flex-1 flex flex-col gap-2 min-h-0">
+              {/* One row: the templates toggle and the variable chips. Hidden for sent campaigns. */}
               {!isSent && (
                 <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    type="button"
+                    variant={templatesOpen ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => setTemplatesToggle(!templatesOpen)}
+                  >
+                    <LayoutTemplate className="h-3.5 w-3.5 mr-1.5" />
+                    {t.campaignForm.templates}
+                    {templatesOpen ? <ChevronUp className="h-3.5 w-3.5 ml-1" /> : <ChevronDown className="h-3.5 w-3.5 ml-1" />}
+                  </Button>
+                  <span className="w-px h-5 bg-border mx-1" />
                   <span className="text-sm text-muted-foreground flex items-center gap-1">
                     <Variable className="h-4 w-4" />
                     {t.campaignForm.insertVariable}:
@@ -420,6 +413,32 @@ export default function CampaignEditor() {
                       {t.variables[v.key as keyof typeof t.variables]}
                     </Button>
                   ))}
+                </div>
+              )}
+
+              {/* Template cards, only when asked for (or while the body is still empty). */}
+              {!isSent && templatesOpen && (
+                <div className="space-y-2">
+                  <div className="flex gap-2 flex-wrap">
+                    {EMAIL_TEMPLATES.map((tpl) => {
+                      const labelKey = `template${tpl.key.charAt(0).toUpperCase() + tpl.key.slice(1)}` as keyof typeof t.campaignForm;
+                      const descKey = `template${tpl.key.charAt(0).toUpperCase() + tpl.key.slice(1)}Desc` as keyof typeof t.campaignForm;
+                      return (
+                        <button
+                          key={tpl.key}
+                          type="button"
+                          onClick={() => {
+                            applyTemplate(tpl);
+                            setTemplatesToggle(false);
+                          }}
+                          className="flex flex-col items-start px-3 py-2 rounded-lg border border-border bg-muted/40 hover:bg-muted hover:border-primary/40 transition-all text-left"
+                        >
+                          <span className="text-xs font-medium text-foreground">{t.campaignForm[labelKey] as string}</span>
+                          <span className="text-xs text-muted-foreground">{t.campaignForm[descKey] as string}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
