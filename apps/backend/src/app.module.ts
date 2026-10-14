@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AssistantModule } from "./assistant/assistant.module";
 import { AuthModule } from "./auth/auth.module";
 import { CampaignsModule } from "./campaigns/campaigns.module";
 import { ConfigModule } from "./config/config.module";
@@ -13,6 +14,9 @@ import { SharedModule } from "./shared/shared.module";
   imports: [
     ConfigModule,
     SharedModule,
+    // Before Contacts and Campaigns so its literal routes (admin/contacts/assistant/extract,
+    // admin/campaigns/assistant/turn) are registered ahead of their parameter routes.
+    AssistantModule,
     ContactsModule,
     CampaignsModule,
     GroupsModule,

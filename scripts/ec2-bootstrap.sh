@@ -189,6 +189,21 @@ server {
         chunked_transfer_encoding on;
     }
 
+    # Campaigns-app assistants. One model call per request, synchronously: a full email draft or
+    # the reading of a photographed business card takes longer than the default 60s read timeout.
+    # The extract route carries the photo or the recording itself (multipart), hence the body size.
+    location ~ ^/api/admin/(campaigns/assistant/(turn|transcribe)|contacts/assistant/extract)$ {
+        proxy_pass           http://localhost:3001;
+        proxy_http_version   1.1;
+        proxy_set_header     Host $host;
+        proxy_set_header     X-Real-IP $remote_addr;
+        proxy_set_header     X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header     X-Forwarded-Proto $scheme;
+        proxy_read_timeout   600s;
+        proxy_send_timeout   600s;
+        client_max_body_size 12m;
+    }
+
     location / {
         proxy_pass         http://localhost:3001;
         proxy_http_version 1.1;

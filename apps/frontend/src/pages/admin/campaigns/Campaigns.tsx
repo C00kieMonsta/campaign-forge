@@ -23,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@packages/ui";
-import { AlertTriangle, Loader2, MoreHorizontal, Plus, Send, TestTube, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, MoreHorizontal, Plus, Send, Sparkles, TestTube, Trash2 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
@@ -248,6 +248,13 @@ export default function Campaigns() {
             </label>
           )}
           <Button
+            variant="outline"
+            onClick={() => navigate("/campaigns/mailings/assistant")}
+          >
+            <Sparkles className="h-4 w-4 mr-2" />
+            {t.campaigns.createWithAssistant}
+          </Button>
+          <Button
             onClick={() => navigate("/campaigns/mailings/new")}
             className="gradient-terracotta text-white hover:opacity-90"
           >
@@ -265,24 +272,42 @@ export default function Campaigns() {
         ) : campaigns.length === 0 ? (
           <div className="p-12 text-center text-muted-foreground flex flex-col items-center gap-4">
             <span>{t.campaigns.noCampaigns}</span>
-            <Button
-              onClick={() => navigate("/campaigns/mailings/new")}
-              className="gradient-terracotta text-white hover:opacity-90"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              {t.campaigns.create}
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => navigate("/campaigns/mailings/assistant")}
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                {t.campaigns.createWithAssistant}
+              </Button>
+              <Button
+                onClick={() => navigate("/campaigns/mailings/new")}
+                className="gradient-terracotta text-white hover:opacity-90"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                {t.campaigns.create}
+              </Button>
+            </div>
           </div>
         ) : visibleCampaigns.length === 0 ? (
           <div className="p-12 text-center text-muted-foreground flex flex-col items-center gap-4">
             <span>{t.campaigns.noVisibleCampaigns}</span>
-            <Button
-              onClick={() => navigate("/campaigns/mailings/new")}
-              className="gradient-terracotta text-white hover:opacity-90"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              {t.campaigns.create}
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => navigate("/campaigns/mailings/assistant")}
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                {t.campaigns.createWithAssistant}
+              </Button>
+              <Button
+                onClick={() => navigate("/campaigns/mailings/new")}
+                className="gradient-terracotta text-white hover:opacity-90"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                {t.campaigns.create}
+              </Button>
+            </div>
           </div>
         ) : (
           <Table>

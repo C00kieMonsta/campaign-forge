@@ -6,3 +6,4 @@ export * from "./money";
 export * from "./dates";
 export * from "./legalText";
 export * from "./models";
+export * from "./emailPlaceholders";

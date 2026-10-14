@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import AdminLayout from "@/components/admin/AdminLayout";
+import CampaignAssistant from "@/pages/admin/campaigns/CampaignAssistant";
 import CampaignEditor from "@/pages/admin/campaigns/CampaignEditor";
 import Campaigns from "@/pages/admin/campaigns/Campaigns";
 import Contacts from "@/pages/admin/campaigns/Contacts";
@@ -40,6 +41,10 @@ export default function App() {
         <Route path="/campaigns/groups" element={<Groups />} />
         <Route path="/campaigns/mailings" element={<Campaigns />} />
         <Route path="/campaigns/mailings/new" element={<CampaignEditor />} />
+        <Route
+          path="/campaigns/mailings/assistant"
+          element={<CampaignAssistant />}
+        />
         <Route
           path="/campaigns/mailings/:id/edit"
           element={<CampaignEditor />}

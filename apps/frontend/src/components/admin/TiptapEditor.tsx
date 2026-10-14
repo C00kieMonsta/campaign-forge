@@ -6,7 +6,7 @@ import TextAlign from "@tiptap/extension-text-align";
 import Color from "@tiptap/extension-color";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Image from "@tiptap/extension-image";
-import { AlignCenter, AlignLeft, AlignRight, Bold, Image as ImageIcon, Italic, Link2, List, ListOrdered, Paperclip } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Bold, Image as ImageIcon, ImageUp, Italic, Link2, List, ListOrdered, Paperclip } from "lucide-react";
 import { api } from "@/lib/api";
 
 const ResizableImage = Image.extend({
@@ -77,6 +77,7 @@ interface Props {
 const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange, readonly = false, onAttachment }, ref) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
   const uploadingRef = useRef(false);
 
   const editor = useEditor({
@@ -112,6 +113,20 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
       editor?.chain().focus().setImage({ src: url }).run();
     } catch (err) {
       console.log(JSON.stringify({ event: "TiptapEditor:uploadError", error: String(err) }));
+    } finally {
+      uploadingRef.current = false;
+    }
+  };
+
+  // Swaps the selected image's source, so a placeholder becomes the real photo in place.
+  const replaceImage = async (file: File) => {
+    if (uploadingRef.current) return;
+    uploadingRef.current = true;
+    try {
+      const { url } = await api.campaigns.upload(file);
+      editor?.chain().focus().updateAttributes("image", { src: url }).run();
+    } catch (err) {
+      console.log(JSON.stringify({ event: "TiptapEditor:replaceImageError", error: String(err) }));
     } finally {
       uploadingRef.current = false;
     }
@@ -260,6 +275,17 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
             e.target.value = "";
           }}
         />
+        <input
+          ref={replaceInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) replaceImage(file);
+            e.target.value = "";
+          }}
+        />
         {onAttachment && (
           <>
             <ToolbarBtn onClick={() => attachInputRef.current?.click()} title="Joindre un fichier">
@@ -311,6 +337,9 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
                 <span className="text-[10px] font-semibold">{w.label}</span>
               </ToolbarBtn>
             ))}
+            <ToolbarBtn onClick={() => replaceInputRef.current?.click()} title="Remplacer l'image">
+              <ImageUp className="h-3.5 w-3.5" />
+            </ToolbarBtn>
           </>
         )}
       </div>}

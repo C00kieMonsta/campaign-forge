@@ -31,11 +31,19 @@ export const translations = {
       lastCampaign: "Dernière campagne envoyée",
       noCampaignSent: "Aucune campagne envoyée",
       sentOn: "Envoyée le",
-      recipients: "destinataires"
+      recipients: "destinataires",
+      quickActions: "Actions rapides",
+      assistantCampaignTitle: "Créer une campagne avec l'assistant",
+      assistantCampaignDesc:
+        "Décrivez-la en quelques phrases, l'assistant la rédige avec des emplacements pour vos photos.",
+      assistantContactTitle: "Ajouter un contact par photo ou voix",
+      assistantContactDesc:
+        "Carte de visite, note manuscrite ou dictée : l'assistant remplit la fiche."
     },
     contacts: {
       title: "Gestion des contacts",
       addNew: "Ajouter un contact",
+      addWithAssistant: "Ajouter par photo ou voix",
       search: "Rechercher...",
       name: "Nom",
       email: "Email",
@@ -114,6 +122,9 @@ export const translations = {
     campaigns: {
       title: "Campagnes",
       create: "Nouvelle campagne",
+      createWithAssistant: "Créer avec l'assistant",
+      createBlank: "Campagne vide",
+      missingPhotos: "Photos manquantes",
       name: "Nom",
       subject: "Objet",
       status: "Statut",
@@ -181,7 +192,14 @@ export const translations = {
       attachments: "Pièces jointes",
       addAttachment: "Ajouter un fichier",
       noAttachments: "Aucune pièce jointe",
-      uploading: "Téléchargement…"
+      uploading: "Téléchargement…",
+      replaceImage: "Remplacer l'image",
+      openAssistant: "Créer avec l'assistant",
+      placeholdersRemaining: "photo(s) à ajouter avant l'envoi",
+      placeholdersHint:
+        "Cliquez sur un emplacement gris dans l'éditeur pour y mettre votre photo.",
+      placeholdersBlockSend:
+        "Cette campagne contient encore des emplacements photo vides. Ajoutez les photos, ou supprimez les emplacements, avant d'envoyer."
     },
     variables: {
       firstName: "Prénom",
@@ -189,6 +207,121 @@ export const translations = {
       displayName: "Nom d'affichage",
       email: "Email",
       organization: "Organisation"
+    },
+    voiceCapture: {
+      record: "Dicter",
+      recording: "Enregistrement",
+      done: "Terminer",
+      cancel: "Annuler",
+      transcribing: "Transcription…",
+      micDenied:
+        "Micro refusé. Sur iPad : Réglages > Safari > Microphone > Autoriser, puis rechargez la page.",
+      tooShort: "Enregistrement trop court",
+      empty: "Rien n'a été enregistré",
+      tooLarge: "Enregistrement trop volumineux"
+    },
+    campaignAssistant: {
+      title: "Assistant campagne",
+      subtitle:
+        "Décrivez la campagne que vous voulez envoyer. L'assistant rédige le nom, l'objet et le contenu, et prévoit des emplacements pour vos photos.",
+      welcome:
+        "Bonjour ! Décrivez-moi la campagne que vous souhaitez envoyer : l'occasion, l'offre, le ton, à qui elle s'adresse. Par exemple : « Une newsletter de printemps avec la promo TM7 et ma recette de tarte aux fraises ».",
+      suggestion1: "Newsletter du mois avec la promo du moment et une recette",
+      suggestion2: "Invitation à un atelier de cuisine chez moi",
+      suggestion3: "Vœux de fin d'année avec une offre cadeau",
+      composerPlaceholder: "Décrivez votre campagne…",
+      send: "Envoyer",
+      thinking: "L'assistant rédige…",
+      you: "Vous",
+      assistant: "Assistant",
+      chatTab: "Discussion",
+      draftTab: "Campagne",
+      draftTitle: "Votre campagne",
+      noDraftYet:
+        "La campagne apparaîtra ici dès que l'assistant l'aura rédigée.",
+      name: "Nom",
+      subject: "Objet",
+      targets: "Destinataires",
+      allContacts: "Tous les contacts abonnés",
+      preview: "Aperçu",
+      photos: "Photos",
+      details: "Détails",
+      photosHint:
+        "L'assistant a prévu ces emplacements. Ajoutez vos photos maintenant, ou plus tard dans l'éditeur.",
+      noPhotos: "Aucune photo prévue dans cette campagne.",
+      addPhoto: "Ajouter une photo",
+      replacePhoto: "Remplacer",
+      photoAdded: "Photo ajoutée",
+      uploading: "Téléchargement…",
+      photosLeft: "photo(s) à ajouter",
+      photosLeftWarning:
+        "Des emplacements photo sont encore vides. Vous pourrez les remplir dans l'éditeur avant l'envoi.",
+      createCampaign: "Créer la campagne",
+      creating: "Création…",
+      created: "Campagne créée. Vous pouvez la retoucher ici avant de l'envoyer.",
+      startOver: "Recommencer",
+      startOverConfirm: "Effacer la conversation et la campagne en cours ?",
+      notConfigured: "L'assistant n'est pas configuré sur ce serveur.",
+      error: "L'assistant n'a pas pu répondre. Réessayez.",
+      thinking1: "Je lis votre demande…",
+      thinking2: "Je rédige la campagne…",
+      thinking3: "Encore quelques secondes…",
+      retry: "Réessayer",
+      transcriptInComposer: "Relisez le texte, puis envoyez.",
+      timeout: "L'assistant met trop de temps à répondre. Réessayez."
+    },
+    contactAssistant: {
+      title: "Ajouter des contacts avec l'assistant",
+      intro:
+        "Prenez en photo une carte de visite, une liste manuscrite ou un message, dictez les coordonnées, ou collez un texte. L'assistant en extrait les contacts.",
+      takePhoto: "Prendre une photo",
+      choosePhoto: "Choisir une image",
+      recordVoice: "Dicter",
+      pasteText: "Coller un texte",
+      textPlaceholder:
+        "Ex : Marie Dupont, marie.dupont@gmail.com, 0470 12 34 56, groupe Thermomix…",
+      analyze: "Analyser",
+      analyzing: "Analyse en cours…",
+      transcript: "Ce que j'ai entendu",
+      reviewTitle: "Vérifiez les contacts trouvés",
+      noneFound:
+        "Aucun contact trouvé. Essayez une autre photo ou dictez les coordonnées.",
+      found: "contact(s) trouvé(s)",
+      confidence: "Fiabilité",
+      confidenceHigh: "élevée",
+      confidenceMedium: "moyenne",
+      confidenceLow: "faible",
+      issues: "À vérifier",
+      existing: "Existe déjà",
+      existingHint:
+        "Un contact avec cet email existe déjà : il ne sera pas recréé.",
+      missingEmail: "Email manquant",
+      invalidEmail: "Email invalide",
+      duplicateInBatch: "Même email qu'un autre contact de la liste",
+      newGroup: "nouveau groupe",
+      groups: "Groupes",
+      create: "Créer",
+      contactsUnit: "contact(s)",
+      creating: "Création…",
+      created: "contact(s) créé(s)",
+      back: "Retour",
+      cancel: "Annuler",
+      retake: "Recommencer",
+      photoTooLarge: "Image trop volumineuse (max 10 Mo)",
+      unsupportedFile: "Fichier non pris en charge : image ou enregistrement audio uniquement",
+      notConfigured: "L'assistant n'est pas configuré sur ce serveur.",
+      error: "L'analyse a échoué. Réessayez.",
+      alreadyInContacts: "Déjà dans vos contacts",
+      unsubscribed: "désabonné(e)",
+      addToGroups: "Ajouter aux groupes",
+      addedToGroups: "Groupes mis à jour",
+      reanalyze: "Relancer l'analyse",
+      editTranscriptHint:
+        "Corrigez ce que l'assistant a entendu si nécessaire, puis relancez l'analyse.",
+      photoUnreadable:
+        "Format de photo non reconnu. Sur iPad, choisissez la photo depuis l'app Photos.",
+      alreadyPresent: "déjà présent(s)",
+      sourcePhoto: "Photo analysée"
     },
     lex: {
       title: "Lex",
@@ -850,11 +983,19 @@ export const translations = {
       lastCampaign: "Laatste verzonden campagne",
       noCampaignSent: "Geen campagne verzonden",
       sentOn: "Verzonden op",
-      recipients: "ontvangers"
+      recipients: "ontvangers",
+      quickActions: "Snelle acties",
+      assistantCampaignTitle: "Een campagne maken met de assistent",
+      assistantCampaignDesc:
+        "Beschrijf ze in enkele zinnen, de assistent schrijft ze met plaatsen voor uw foto's.",
+      assistantContactTitle: "Een contact toevoegen via foto of stem",
+      assistantContactDesc:
+        "Visitekaartje, handgeschreven nota of dictaat: de assistent vult de fiche in."
     },
     contacts: {
       title: "Contactbeheer",
       addNew: "Contact toevoegen",
+      addWithAssistant: "Toevoegen via foto of stem",
       search: "Zoeken...",
       name: "Naam",
       email: "Email",
@@ -933,6 +1074,9 @@ export const translations = {
     campaigns: {
       title: "Campagnes",
       create: "Nieuwe campagne",
+      createWithAssistant: "Maken met de assistent",
+      createBlank: "Lege campagne",
+      missingPhotos: "Ontbrekende foto's",
       name: "Naam",
       subject: "Onderwerp",
       status: "Status",
@@ -1001,7 +1145,14 @@ export const translations = {
       attachments: "Bijlagen",
       addAttachment: "Bestand toevoegen",
       noAttachments: "Geen bijlagen",
-      uploading: "Uploaden…"
+      uploading: "Uploaden…",
+      replaceImage: "Afbeelding vervangen",
+      openAssistant: "Maken met de assistent",
+      placeholdersRemaining: "foto('s) toe te voegen vóór het verzenden",
+      placeholdersHint:
+        "Klik op een grijze plaats in de editor om er uw foto in te zetten.",
+      placeholdersBlockSend:
+        "Deze campagne bevat nog lege fotoplaatsen. Voeg de foto's toe, of verwijder de plaatsen, vóór het verzenden."
     },
     variables: {
       firstName: "Voornaam",
@@ -1009,6 +1160,121 @@ export const translations = {
       displayName: "Weergavenaam",
       email: "Email",
       organization: "Organisatie"
+    },
+    voiceCapture: {
+      record: "Dicteren",
+      recording: "Opname",
+      done: "Klaar",
+      cancel: "Annuleren",
+      transcribing: "Transcriptie…",
+      micDenied:
+        "Microfoon geweigerd. Op iPad: Instellingen > Safari > Microfoon > Toestaan, en herlaad de pagina.",
+      tooShort: "Opname te kort",
+      empty: "Er is niets opgenomen",
+      tooLarge: "Opname te groot"
+    },
+    campaignAssistant: {
+      title: "Campagne-assistent",
+      subtitle:
+        "Beschrijf de campagne die u wilt versturen. De assistent schrijft de naam, het onderwerp en de inhoud, en voorziet plaatsen voor uw foto's.",
+      welcome:
+        "Hallo! Beschrijf de campagne die u wilt versturen: de aanleiding, het aanbod, de toon, voor wie ze bedoeld is. Bijvoorbeeld: « Een lentenieuwsbrief met de TM7-promo en mijn recept voor aardbeientaart ».",
+      suggestion1: "Nieuwsbrief van de maand met de promo van het moment en een recept",
+      suggestion2: "Uitnodiging voor een kookworkshop bij mij thuis",
+      suggestion3: "Eindejaarswensen met een cadeauaanbieding",
+      composerPlaceholder: "Beschrijf uw campagne…",
+      send: "Verzenden",
+      thinking: "De assistent schrijft…",
+      you: "U",
+      assistant: "Assistent",
+      chatTab: "Gesprek",
+      draftTab: "Campagne",
+      draftTitle: "Uw campagne",
+      noDraftYet:
+        "De campagne verschijnt hier zodra de assistent ze geschreven heeft.",
+      name: "Naam",
+      subject: "Onderwerp",
+      targets: "Ontvangers",
+      allContacts: "Alle geabonneerde contacten",
+      preview: "Voorbeeld",
+      photos: "Foto's",
+      details: "Details",
+      photosHint:
+        "De assistent heeft deze plaatsen voorzien. Voeg uw foto's nu toe, of later in de editor.",
+      noPhotos: "Geen foto's voorzien in deze campagne.",
+      addPhoto: "Foto toevoegen",
+      replacePhoto: "Vervangen",
+      photoAdded: "Foto toegevoegd",
+      uploading: "Uploaden…",
+      photosLeft: "foto('s) toe te voegen",
+      photosLeftWarning:
+        "Sommige fotoplaatsen zijn nog leeg. U kunt ze in de editor invullen vóór het verzenden.",
+      createCampaign: "Campagne aanmaken",
+      creating: "Aanmaken…",
+      created: "Campagne aangemaakt. U kunt ze hier bijwerken vóór het verzenden.",
+      startOver: "Opnieuw beginnen",
+      startOverConfirm: "Het gesprek en de huidige campagne wissen?",
+      notConfigured: "De assistent is niet geconfigureerd op deze server.",
+      error: "De assistent kon niet antwoorden. Probeer opnieuw.",
+      thinking1: "Ik lees uw vraag…",
+      thinking2: "Ik schrijf de campagne…",
+      thinking3: "Nog enkele seconden…",
+      retry: "Opnieuw proberen",
+      transcriptInComposer: "Lees de tekst na en verzend.",
+      timeout: "De assistent doet er te lang over. Probeer opnieuw."
+    },
+    contactAssistant: {
+      title: "Contacten toevoegen met de assistent",
+      intro:
+        "Fotografeer een visitekaartje, een handgeschreven lijst of een bericht, dicteer de gegevens, of plak een tekst. De assistent haalt er de contacten uit.",
+      takePhoto: "Foto nemen",
+      choosePhoto: "Afbeelding kiezen",
+      recordVoice: "Dicteren",
+      pasteText: "Tekst plakken",
+      textPlaceholder:
+        "Bv.: Marie Dupont, marie.dupont@gmail.com, 0470 12 34 56, groep Thermomix…",
+      analyze: "Analyseren",
+      analyzing: "Analyse bezig…",
+      transcript: "Wat ik gehoord heb",
+      reviewTitle: "Controleer de gevonden contacten",
+      noneFound:
+        "Geen contact gevonden. Probeer een andere foto of dicteer de gegevens.",
+      found: "contact(en) gevonden",
+      confidence: "Betrouwbaarheid",
+      confidenceHigh: "hoog",
+      confidenceMedium: "gemiddeld",
+      confidenceLow: "laag",
+      issues: "Te controleren",
+      existing: "Bestaat al",
+      existingHint:
+        "Een contact met dit e-mailadres bestaat al: het wordt niet opnieuw aangemaakt.",
+      missingEmail: "E-mail ontbreekt",
+      invalidEmail: "Ongeldig e-mailadres",
+      duplicateInBatch: "Zelfde e-mail als een ander contact in de lijst",
+      newGroup: "nieuwe groep",
+      groups: "Groepen",
+      create: "Aanmaken",
+      contactsUnit: "contact(en)",
+      creating: "Aanmaken…",
+      created: "contact(en) aangemaakt",
+      back: "Terug",
+      cancel: "Annuleren",
+      retake: "Opnieuw",
+      photoTooLarge: "Afbeelding te groot (max 10 MB)",
+      unsupportedFile: "Bestand niet ondersteund: alleen een afbeelding of een geluidsopname",
+      notConfigured: "De assistent is niet geconfigureerd op deze server.",
+      error: "De analyse is mislukt. Probeer opnieuw.",
+      alreadyInContacts: "Al in uw contacten",
+      unsubscribed: "uitgeschreven",
+      addToGroups: "Aan groepen toevoegen",
+      addedToGroups: "Groepen bijgewerkt",
+      reanalyze: "Analyse opnieuw starten",
+      editTranscriptHint:
+        "Verbeter indien nodig wat de assistent gehoord heeft en start de analyse opnieuw.",
+      photoUnreadable:
+        "Fotoformaat niet herkend. Kies op iPad de foto via de app Foto's.",
+      alreadyPresent: "al aanwezig",
+      sourcePhoto: "Geanalyseerde foto"
     },
     lex: {
       title: "Lex",

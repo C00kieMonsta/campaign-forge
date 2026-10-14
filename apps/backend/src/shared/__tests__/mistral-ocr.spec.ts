@@ -1,4 +1,4 @@
-import type { ConfigService } from "../../../config/config.service";
+import type { ConfigService } from "../../config/config.service";
 import { MistralOcrService } from "../mistral-ocr.service";
 
 /** Records the backoff instead of sleeping it, so the retry path is asserted in milliseconds. */

@@ -17,6 +17,19 @@ import { SecretsService } from "./secrets.service";
 /** The transcription endpoint rejects payloads above 25 MB — checked before we spend the call. */
 export const MAX_TRANSCRIBE_BYTES = 25 * 1024 * 1024;
 
+/** What a caller may bound on one call. Passed as the SDK's second argument, never into the body. */
+export interface RequestOptions {
+  timeoutMs?: number;
+  maxRetries?: number;
+}
+
+function sdkOptions(
+  opts: RequestOptions | undefined
+): { timeout?: number; maxRetries?: number } | undefined {
+  if (!opts) return undefined;
+  return { timeout: opts.timeoutMs, maxRetries: opts.maxRetries };
+}
+
 /**
  * Every field this app is allowed to put on a chat-completion request.
  *
@@ -46,8 +59,9 @@ export const ALLOWED_REQUEST_FIELDS: ReadonlySet<string> = new Set([
  * Characters in the assembled prompt, which is what the estimate in shared/tokens.ts is computed
  * from — so dividing this by the API's reported prompt_tokens gives the measured chars-per-token.
  *
- * Non-string content blocks count 0. This app never builds one, and a telemetry helper must not be
- * able to throw on the path that produces a legal answer.
+ * Non-string content blocks count 0. Only the contact assistant builds one (a photo as an image
+ * part), it never streams, and a telemetry helper must not be able to throw on the path that
+ * produces a legal answer.
  */
 function promptChars(
   messages: OpenAI.Chat.ChatCompletionMessageParam[]
@@ -180,7 +194,8 @@ export class OpenAiService {
   async transcribe(
     buffer: Buffer,
     filename: string,
-    contentType?: string
+    contentType?: string,
+    requestOptions?: RequestOptions
   ): Promise<{ text: string; durationSeconds: number | null }> {
     if (buffer.length > MAX_TRANSCRIBE_BYTES) {
       throw new Error(
@@ -191,11 +206,14 @@ export class OpenAiService {
     const file = await toFile(buffer, filename, {
       type: contentType || "audio/webm"
     });
-    const res = await client.audio.transcriptions.create({
-      file,
-      model: this.config.get("OPENAI_TRANSCRIBE_MODEL"),
-      response_format: "verbose_json"
-    });
+    const res = await client.audio.transcriptions.create(
+      {
+        file,
+        model: this.config.get("OPENAI_TRANSCRIBE_MODEL"),
+        response_format: "verbose_json"
+      },
+      sdkOptions(requestOptions)
+    );
     return {
       text: res.text ?? "",
       durationSeconds:
@@ -208,8 +226,18 @@ export class OpenAiService {
    * extraction. Pass `json: true` to force a JSON-object response. (Streaming lands in Phase 3.)
    */
   async complete(params: {
-    user: string;
+    /**
+     * The user turn: plain text, or content parts when the turn carries an image. The parts form
+     * is what lets the contact assistant hand a photo of a business card to the model.
+     */
+    user: string | OpenAI.Chat.ChatCompletionContentPart[];
     system?: string;
+    /**
+     * Earlier turns, oldest first, placed between the system prompt and `user`. The campaign
+     * assistant is a conversation; sending it as a transcript inside one user message would make
+     * the model answer the transcript rather than the last question.
+     */
+    history?: { role: "user" | "assistant"; content: string }[];
     json?: boolean;
     maxTokens?: number;
     /**
@@ -223,15 +251,28 @@ export class OpenAiService {
     fast?: boolean;
     /** How hard to think. Ignored when `fast` — deliberation on "copy this quote" buys nothing. */
     depth?: ReasoningDepth;
+    /**
+     * Pin the tier outright. For work that is neither mechanical nor legal: an email draft wants
+     * the balanced model at the depth's effort, not the frontier one at frontier prices. Wins over
+     * `fast`; the depth still sets the effort.
+     */
+    tier?: ModelTier;
+    /**
+     * Per-call ceiling. The SDK's defaults are ten minutes and two retries, which is right for a
+     * background job and wrong for a request a person is waiting on.
+     */
+    requestOptions?: RequestOptions;
   }): Promise<string> {
     const client = await this.getClient();
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
     if (params.system)
       messages.push({ role: "system", content: params.system });
+    for (const turn of params.history ?? [])
+      messages.push({ role: turn.role, content: turn.content });
     messages.push({ role: "user", content: params.user });
 
     const { model, effort } = this.resolve(
-      params.fast ? BULK_TIER : undefined,
+      params.tier ?? (params.fast ? BULK_TIER : undefined),
       params.depth
     );
     // The ceiling covers the model's reasoning as well as its prose, so the caller's budget gets an
@@ -239,13 +280,16 @@ export class OpenAiService {
     // reasoning models 400 on `max_tokens`, which took down every adverse-case run.
     const budget = completionBudget(params.maxTokens, effort);
 
-    const res = await client.chat.completions.create({
-      ...requestFields(model, effort, budget),
-      messages,
-      ...(params.json
-        ? { response_format: { type: "json_object" as const } }
-        : {})
-    });
+    const res = await client.chat.completions.create(
+      {
+        ...requestFields(model, effort, budget),
+        messages,
+        ...(params.json
+          ? { response_format: { type: "json_object" as const } }
+          : {})
+      },
+      sdkOptions(params.requestOptions)
+    );
 
     const choice = res.choices[0];
     // A truncated completion is NOT an empty answer, and returning "" for one is how a document

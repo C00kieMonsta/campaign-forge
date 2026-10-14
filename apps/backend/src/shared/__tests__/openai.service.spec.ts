@@ -146,6 +146,41 @@ describe("the chat-completion request builder", () => {
     });
   });
 
+  it("pins an explicit tier at the depth's effort, so an email draft is not billed at frontier rates", async () => {
+    const { service, create } = serviceWithStub(OK);
+    await service.complete({ user: "hi", tier: "balanced", fast: true });
+
+    // `tier` wins over `fast`: the bulk floor is for mechanical passes, and a pinned tier says the
+    // caller has already decided what this work is worth.
+    expect(create.mock.calls[0][0].model).toBe(MODELS.balanced.id);
+    expect(create.mock.calls[0][0].reasoning_effort).toBe("medium");
+  });
+
+  it("accepts content parts for the user turn and still emits only allow-listed fields", async () => {
+    // The contact assistant hands the model a photo. The parts land as the user message unchanged,
+    // and the request shape stays inside the allow-list that the spec above enforces.
+    const { service, create } = serviceWithStub(OK);
+    const parts = [
+      { type: "text" as const, text: "read this card" },
+      {
+        type: "image_url" as const,
+        image_url: {
+          url: "data:image/jpeg;base64,AAAA",
+          detail: "high" as const
+        }
+      }
+    ];
+    await service.complete({ user: parts, json: true });
+
+    const body = create.mock.calls[0][0];
+    expect(body.messages[body.messages.length - 1]).toEqual({
+      role: "user",
+      content: parts
+    });
+    for (const key of Object.keys(body))
+      expect(ALLOWED_REQUEST_FIELDS.has(key)).toBe(true);
+  });
+
   it("builds the streaming request through the same builder", async () => {
     // The two paths used to build their own. That is how `max_tokens` survived on one of them.
     const create = jest.fn().mockResolvedValue({

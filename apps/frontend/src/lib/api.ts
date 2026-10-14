@@ -1,8 +1,15 @@
 import type {
+  AssistantLanguage,
+  AssistantTranscribeResponse,
   Campaign,
+  CampaignAssistantTurnRequest,
+  CampaignAssistantTurnResponse,
   CampaignAttachment,
   Contact,
+  ContactAssistantCreateResponse,
+  ContactAssistantExtractResponse,
   ContactGroup,
+  CreateContactRequest,
   CreateConversationRequest,
   CreateTaskRequest,
   CreateWorkspaceRequest,
@@ -49,14 +56,32 @@ function handleUnauthorized() {
 }
 
 async function parseResponse<T>(res: Response): Promise<T> {
-  const data = await res.json();
+  // Read as text first: a 413 or 504 from nginx is an HTML page, and res.json() on it used to
+  // surface as "Unexpected token '<'" instead of the status.
+  const text = await res.text();
+  let data: { message?: unknown; error?: unknown } | null = null;
+  try {
+    data = text ? (JSON.parse(text) as typeof data) : null;
+  } catch {
+    data = null;
+  }
   if (!res.ok) {
-    const msg = Array.isArray(data.message)
-      ? data.message.join(", ")
-      : data.message || data.error || `Request failed: ${res.status}`;
+    const msg = Array.isArray(data?.message)
+      ? data!.message.join(", ")
+      : (typeof data?.message === "string" && data.message) ||
+        (typeof data?.error === "string" && data.error) ||
+        `Request failed: ${res.status}`;
     throw new Error(msg);
   }
-  return data;
+  if (data === null && text) throw new Error("Unexpected response from the server");
+  return data as T;
+}
+
+/** A client-side ceiling for the slow assistant calls, so a stalled request ends in a message. */
+function assistantSignal(): AbortSignal | undefined {
+  return typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+    ? AbortSignal.timeout(150_000)
+    : undefined;
 }
 
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -135,18 +160,21 @@ async function requestBlob(
   return { blob: await res.blob(), filename: match ? match[1] : null };
 }
 
-async function uploadRequest<T>(path: string, file: File): Promise<T> {
+/** A multipart POST. No Content-Type header: the browser sets it, boundary included. */
+async function multipartRequest<T>(
+  path: string,
+  form: FormData,
+  opts?: { signal?: AbortSignal }
+): Promise<T> {
   const token = getToken();
-  const form = new FormData();
-  form.append("file", file);
-
   const headers: Record<string, string> = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers,
-    body: form
+    body: form,
+    signal: opts?.signal
   });
 
   if (res.status === 401) {
@@ -155,6 +183,12 @@ async function uploadRequest<T>(path: string, file: File): Promise<T> {
   }
 
   return parseResponse<T>(res);
+}
+
+async function uploadRequest<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  return multipartRequest<T>(path, form);
 }
 
 async function publicRequest<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -249,6 +283,29 @@ export const api = {
           body: JSON.stringify({ email, subject, html })
         }
       );
+    },
+    /**
+     * The chat that writes a campaign. Stateless: the whole history and the current draft go up
+     * on every turn, and the reply comes back with the full draft after that turn.
+     */
+    assistant: {
+      turn(body: CampaignAssistantTurnRequest) {
+        return request<CampaignAssistantTurnResponse>(
+          "/admin/campaigns/assistant/turn",
+          {
+            method: "POST",
+            body: JSON.stringify(body),
+            signal: assistantSignal()
+          }
+        );
+      },
+      /** Speech-to-text for a dictated brief. The audio travels in the request, not via S3. */
+      transcribe(file: File) {
+        return uploadRequest<AssistantTranscribeResponse>(
+          "/admin/campaigns/assistant/transcribe",
+          file
+        );
+      }
     }
   },
   contacts: {
@@ -308,6 +365,38 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ contacts })
       });
+    },
+    /**
+     * Contacts out of a photo, a recording or a pasted text. One multipart call: the file (image
+     * or audio) and/or the text, plus the UI language the issues and summary are written in.
+     */
+    assistant: {
+      extract(input: {
+        file?: File;
+        text?: string;
+        language: AssistantLanguage;
+      }) {
+        const form = new FormData();
+        if (input.file) form.append("file", input.file);
+        if (input.text) form.append("text", input.text);
+        form.append("language", input.language);
+        return multipartRequest<ContactAssistantExtractResponse>(
+          "/admin/contacts/assistant/extract",
+          form,
+          { signal: assistantSignal() }
+        );
+      },
+      /**
+       * The confirmed candidates, written conditionally. An email that already has a contact is
+       * reported in `existing` and left untouched; the ordinary create and import endpoints would
+       * replace the row and re-subscribe it.
+       */
+      create(contacts: CreateContactRequest[]) {
+        return request<ContactAssistantCreateResponse>(
+          "/admin/contacts/assistant/create",
+          { method: "POST", body: JSON.stringify({ contacts }) }
+        );
+      }
     }
   },
   groups: {

@@ -8,7 +8,7 @@ import type { SettingsService } from "../../settings/settings.service";
 import { buildFullText, chunkText } from "../chunker";
 import { parseDocument } from "../document-parser";
 import { IngestionWorker } from "../ingestion.worker";
-import type { MistralOcrService } from "../mistral-ocr.service";
+import type { MistralOcrService } from "../../../shared/mistral-ocr.service";
 import { pageTextHash } from "../pager";
 
 // The 'pages' job mode builds the per-page index of a document that is ALREADY indexed, and its

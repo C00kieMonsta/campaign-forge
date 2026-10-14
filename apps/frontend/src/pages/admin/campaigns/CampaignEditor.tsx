@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button, Input, Label } from "@packages/ui";
-import { ArrowLeft, Code2, Eye, FileUp, LayoutTemplate, Loader2, Paperclip, Save, Variable, X } from "lucide-react";
+import { ArrowLeft, Code2, Eye, FileUp, LayoutTemplate, Loader2, Paperclip, Save, Sparkles, Variable, X } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
@@ -182,6 +182,15 @@ export default function CampaignEditor() {
             <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700 border border-green-200">
               {t.campaigns.sent}
             </span>
+          )}
+          {!isEditing && (
+            <Button
+              variant="outline"
+              onClick={() => navigate("/campaigns/mailings/assistant")}
+            >
+              <Sparkles className="h-4 w-4 mr-2" />
+              {t.campaignForm.openAssistant}
+            </Button>
           )}
           <Button variant="outline" onClick={() => navigate("/campaigns/mailings")}>
             {t.campaignForm.cancel}

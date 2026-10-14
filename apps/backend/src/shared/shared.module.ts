@@ -1,6 +1,7 @@
 import { Global, Module } from "@nestjs/common";
 import { DdbService } from "./ddb.service";
 import { LexS3Service } from "./lex-s3.service";
+import { MistralOcrService } from "./mistral-ocr.service";
 import { OpenAiService } from "./openai.service";
 import { PgService } from "./pg.service";
 import { S3Service } from "./s3.service";
@@ -18,7 +19,9 @@ const providers = [
   PgService,
   SecretsService,
   OpenAiService,
-  LexS3Service
+  LexS3Service,
+  // Lazy like the others: it reads MISTRAL_API_KEY on each call, never at boot.
+  MistralOcrService
 ];
 
 @Global()

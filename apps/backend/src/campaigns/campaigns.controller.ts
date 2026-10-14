@@ -3,6 +3,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { AdminGuard } from "../auth/admin.guard";
 import { z } from "zod";
 import {
+  countImagePlaceholders,
   createCampaignRequestSchema,
   listCampaignsQuerySchema,
   sendTestRequestSchema,
@@ -159,6 +160,15 @@ export class CampaignsController {
     const campaign = await this.campaigns.getOrFail(id);
     if (campaign.status === "sent") throw new BadRequestException("Campaign already sent");
     if (campaign.status === "sending") throw new BadRequestException("Campaign is already being sent");
+
+    // Inboxes do not render the grey "your photo here" box, so a campaign that still has one is
+    // not finished. The editor and the send dialog say so first; this is the backstop.
+    const placeholders = countImagePlaceholders(campaign.html);
+    if (placeholders > 0) {
+      throw new BadRequestException(
+        `Campaign still has ${placeholders} empty photo placeholder(s). Add the photos or remove the placeholders before sending.`,
+      );
+    }
 
     const subscribed = await this.contacts.queryAllSubscribed();
 

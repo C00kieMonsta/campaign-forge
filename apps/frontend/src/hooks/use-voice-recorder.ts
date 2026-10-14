@@ -38,6 +38,8 @@ export interface VoiceRecorder {
   isRecording: boolean;
   /** Seconds elapsed in the current recording. */
   elapsed: number;
+  /** The cap this recorder stops itself at, for the timer's "/ mm:ss" display. */
+  maxSeconds: number;
   start: () => Promise<void>;
   /** Stops and resolves with the recorded audio as a File (null if nothing was captured). */
   stop: () => Promise<File | null>;
@@ -54,6 +56,11 @@ export interface VoiceRecorder {
 }
 
 export interface VoiceRecorderOptions {
+  /**
+   * Shorter cap than the default. A dictated contact or a campaign brief is a few sentences, and
+   * a 30-minute ceiling only means a forgotten mic produces a file too big for the API body limit.
+   */
+  maxSeconds?: number;
   /**
    * Called when the 30-minute cap stops the recorder by itself, with what was captured.
    *
@@ -163,7 +170,7 @@ export function useVoiceRecorder(
         const next = prev + 1;
         // Hard cap: stop the recorder itself. A pending stop() still receives the audio.
         if (
-          next >= MAX_RECORDING_SECONDS &&
+          next >= (optionsRef.current.maxSeconds ?? MAX_RECORDING_SECONDS) &&
           recorderRef.current?.state === "recording"
         ) {
           // Marked BEFORE stop(), so onstop can tell a cap from a cancel.
@@ -207,6 +214,7 @@ export function useVoiceRecorder(
     isSupported: typeof MediaRecorder !== "undefined",
     isRecording,
     elapsed,
+    maxSeconds: options.maxSeconds ?? MAX_RECORDING_SECONDS,
     start,
     stop,
     durationMs,

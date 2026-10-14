@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input } from "@packages/ui";
-import { ChevronDown, Copy, Download, Plus, Search, Trash2, Upload, Users } from "lucide-react";
+import { Camera, ChevronDown, Copy, Download, Plus, Search, Trash2, Upload, Users } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import type { Contact, ContactGroup, ContactFormData, ContactFormErrors, ImportPreview } from "./contacts/types";
 import { emptyForm, AUTO_COLORS, CSV_COLUMNS, downloadTemplate, getGroupClasses, parseCsv } from "./contacts/constants";
+import { ContactAssistantDialog } from "./contacts/ContactAssistantDialog";
 import { ContactFormDialog } from "./contacts/ContactFormDialog";
 import { ImportPreviewDialog } from "./contacts/ImportPreviewDialog";
 import { ContactsTable } from "./contacts/ContactsTable";
@@ -17,6 +19,28 @@ export default function Contacts() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [groups, setGroups] = useState<ContactGroup[]>([]);
+  const existingEmails = useMemo(
+    () => new Set(contacts.map((c) => c.emailLower)),
+    [contacts]
+  );
+
+  // Contact assistant dialog, opened by ?assistant=1 so the dashboard can link to it
+  const [searchParams, setSearchParams] = useSearchParams();
+  const assistantOpen = searchParams.get("assistant") === "1";
+  const setAssistantOpen = useCallback(
+    (open: boolean) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (open) next.set("assistant", "1");
+          else next.delete("assistant");
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
 
   // Filters + pagination
   const [searchQuery, setSearchQuery] = useState("");
@@ -428,6 +452,10 @@ export default function Contacts() {
             <Upload className="h-4 w-4 mr-2" />{t.contacts.importCsv}
           </Button>
           <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileSelect} />
+          <Button variant="outline" onClick={() => setAssistantOpen(true)}>
+            <Camera className="h-4 w-4 mr-2" />
+            {t.contacts.addWithAssistant}
+          </Button>
           <Button onClick={openCreate} className="gradient-terracotta text-white hover:opacity-90">
             <Plus className="h-4 w-4 mr-2" />{t.contacts.addNew}
           </Button>
@@ -530,6 +558,15 @@ export default function Contacts() {
         importPreview={importPreview}
         onClose={() => setImportPreview(null)}
         onConfirm={confirmImport}
+      />
+
+      {/* Contact Assistant Dialog */}
+      <ContactAssistantDialog
+        open={assistantOpen}
+        onOpenChange={setAssistantOpen}
+        groups={groups}
+        existingEmails={existingEmails}
+        onCreated={loadContacts}
       />
 
       {/* Contact Form Dialog */}

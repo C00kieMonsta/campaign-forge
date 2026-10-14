@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { ConfigService } from "../../config/config.service";
+import { ConfigService } from "../config/config.service";
 
 interface OcrPage {
   index?: number;
@@ -20,8 +20,9 @@ const RETRY_DELAYS_MS = [1000, 3000, 9000];
 const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
 
 /**
- * Mistral OCR for scanned/no-text-layer documents and images. Lazy (no client at boot); only
- * called from the ingestion worker when the parser reports needsOcr. Returns text per page.
+ * Mistral OCR for scanned/no-text-layer documents and images. Lazy (no client at boot). Called from
+ * the Lex ingestion worker when the parser reports needsOcr, and by the contact assistant as a
+ * fallback when the vision model cannot read a photo. Returns text per page.
  *
  * NOTE: the exact Mistral OCR request/response shape should be re-verified against the live
  * API before the first scanned-doc ingest; parsing is defensive (markdown ?? text).

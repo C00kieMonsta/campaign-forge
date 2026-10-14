@@ -4,3 +4,4 @@ export * from "./common";
 export * from "./contacts";
 export * from "./campaigns";
 export * from "./lex";
+export * from "./assistant";

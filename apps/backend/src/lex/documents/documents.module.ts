@@ -5,12 +5,11 @@ import { WorkspacesModule } from "../workspaces/workspaces.module";
 import { DocumentsController } from "./documents.controller";
 import { DocumentsService } from "./documents.service";
 import { IngestionWorker } from "./ingestion.worker";
-import { MistralOcrService } from "./mistral-ocr.service";
 
 @Module({
   imports: [AuthModule, WorkspacesModule, SettingsModule],
   controllers: [DocumentsController],
-  providers: [DocumentsService, IngestionWorker, MistralOcrService],
+  providers: [DocumentsService, IngestionWorker],
   exports: [DocumentsService]
 })
 export class DocumentsModule {}

@@ -21,7 +21,7 @@ import {
   stitchChunks
 } from "./chunker";
 import { parseDocument } from "./document-parser";
-import { MistralOcrService } from "./mistral-ocr.service";
+import { MistralOcrService } from "../../shared/mistral-ocr.service";
 import {
   assertPageRoundTrip,
   buildPageRows,
