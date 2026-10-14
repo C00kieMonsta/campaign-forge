@@ -6,11 +6,13 @@ import {
   useState,
   type ReactNode
 } from "react";
-import type {
-  AssistantMessage,
-  CampaignDraft,
-  ContactGroup,
-  LexCitationEvent
+import {
+  MAX_ASSISTANT_MESSAGE_CHARS,
+  MAX_ASSISTANT_UPLOAD_BYTES,
+  type AssistantMessage,
+  type CampaignDraft,
+  type ContactGroup,
+  type LexCitationEvent
 } from "@packages/types";
 import {
   Button,
@@ -54,13 +56,23 @@ import {
   slotStates
 } from "@/lib/campaignDraft";
 import { errorMessage } from "@/lib/errorMessage";
+import { downscaleImage } from "@/lib/imageDownscale";
 
 type MobileTab = "chat" | "draft";
 type DraftTab = "preview" | "photos";
+type ThinkingStage = 1 | 2 | 3;
+
+interface FailedTurn {
+  text: string;
+  message: string;
+}
 
 // The assistant's replies carry no legal citations; the renderer still wants the list.
 const NO_CITATIONS: LexCitationEvent[] = [];
 const COMPOSER_MAX_HEIGHT = 160;
+// When the waiting text moves on, in ms after the turn was sent.
+const THINKING_STAGE_2_MS = 4000;
+const THINKING_STAGE_3_MS = 25000;
 
 function AssistantBubble({ children }: { children: ReactNode }) {
   return (
@@ -88,7 +100,10 @@ export default function CampaignAssistant() {
   );
   const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
+  const [thinkingStage, setThinkingStage] = useState<ThinkingStage>(1);
+  const [failed, setFailed] = useState<FailedTurn | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcriptHint, setTranscriptHint] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<MobileTab>("chat");
@@ -127,7 +142,25 @@ export default function CampaignAssistant() {
   useEffect(() => {
     const list = listRef.current;
     if (list) list.scrollTop = list.scrollHeight;
-  }, [messages, isThinking]);
+  }, [messages, isThinking, failed]);
+
+  // The waiting text moves on so a long generation does not look stuck.
+  useEffect(() => {
+    if (!isThinking) return;
+    setThinkingStage(1);
+    const second = window.setTimeout(
+      () => setThinkingStage(2),
+      THINKING_STAGE_2_MS
+    );
+    const third = window.setTimeout(
+      () => setThinkingStage(3),
+      THINKING_STAGE_3_MS
+    );
+    return () => {
+      window.clearTimeout(second);
+      window.clearTimeout(third);
+    };
+  }, [isThinking]);
 
   // Grows with the text up to a few lines, then scrolls.
   useEffect(() => {
@@ -136,6 +169,16 @@ export default function CampaignAssistant() {
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
   }, [input]);
+
+  const busy = isThinking || isTranscribing;
+
+  // A transcript lands in the composer for a read-through; the caret goes to its end.
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!transcriptHint || busy || !el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [transcriptHint, busy]);
 
   const draftHtml = draft?.html ?? "";
   const imageSlots = draft?.imageSlots;
@@ -155,16 +198,26 @@ export default function CampaignAssistant() {
     return html;
   }, [draftHtml]);
 
-  const hasSession = messages.length > 0 || draft !== null;
-  const busy = isThinking || isTranscribing;
+  const hasSession = messages.length > 0 || draft !== null || failed !== null;
   const canCreate =
     draft !== null &&
     draft.name.trim() !== "" &&
     draft.subject.trim() !== "" &&
     !isCreating;
   const suggestions = [ca.suggestion1, ca.suggestion2, ca.suggestion3];
+  const thinkingText =
+    thinkingStage === 1
+      ? ca.thinking1
+      : thinkingStage === 2
+        ? ca.thinking2
+        : ca.thinking3;
 
   const turnErrorTitle = (err: unknown): string => {
+    const name = (err as { name?: unknown } | null)?.name;
+    if (name === "AbortError" || name === "TimeoutError") return ca.timeout;
+    if (err instanceof Error && err.message === "undecodable") {
+      return t.contactAssistant.photoUnreadable;
+    }
     const message =
       err instanceof Error || typeof err === "string" ? errorMessage(err) : "";
     if (/not configured/i.test(message)) return ca.notConfigured;
@@ -178,12 +231,22 @@ export default function CampaignAssistant() {
       const userMessage: AssistantMessage = { role: "user", content };
       const history = trimHistory([...messages, userMessage]);
       setMessages((prev) => [...prev, userMessage]);
-      setInput("");
+      // A retry leaves the composer alone unless it still holds the same text.
+      setInput((prev) => (prev.trim() === content ? "" : prev));
+      setTranscriptHint(false);
+      setFailed(null);
       setIsThinking(true);
       try {
         const res = await api.campaigns.assistant.turn({
           messages: history,
-          draft,
+          // The schema refuses a blank name or subject; a cleared field goes up as a stub.
+          draft: draft
+            ? {
+                ...draft,
+                name: draft.name.trim() || ca.draftTitle,
+                subject: draft.subject.trim() || ca.draftTitle
+              }
+            : null,
           language
         });
         const reply = res.reply.trim();
@@ -199,9 +262,11 @@ export default function CampaignAssistant() {
         }
       } catch (err) {
         // The turn never happened: give the text back so it can be resent.
+        const title = turnErrorTitle(err);
         setMessages((prev) => prev.filter((m) => m !== userMessage));
         setInput(content);
-        toast({ title: turnErrorTitle(err), variant: "destructive" });
+        setFailed({ text: content, message: title });
+        toast({ title, variant: "destructive" });
       } finally {
         setIsThinking(false);
       }
@@ -211,20 +276,20 @@ export default function CampaignAssistant() {
 
   const handleRecorded = async (file: File) => {
     setIsTranscribing(true);
-    let text = "";
     try {
-      text = (await api.campaigns.assistant.transcribe(file)).text.trim();
+      const { text } = await api.campaigns.assistant.transcribe(file);
+      const transcript = text.trim();
+      if (!transcript) {
+        toast({ title: t.voiceCapture.empty, variant: "destructive" });
+        return;
+      }
+      setInput(transcript.slice(0, MAX_ASSISTANT_MESSAGE_CHARS));
+      setTranscriptHint(true);
     } catch (err) {
-      toast({ title: errorMessage(err), variant: "destructive" });
-      return;
+      toast({ title: turnErrorTitle(err), variant: "destructive" });
     } finally {
       setIsTranscribing(false);
     }
-    if (!text) {
-      toast({ title: t.voiceCapture.empty, variant: "destructive" });
-      return;
-    }
-    await sendTurn(text);
   };
 
   const startOver = () => {
@@ -232,6 +297,8 @@ export default function CampaignAssistant() {
     setMessages([]);
     setDraft(null);
     setInput("");
+    setFailed(null);
+    setTranscriptHint(false);
     setDraftUnseen(false);
     setDraftTab("preview");
     clearCampaignAssistantSession();
@@ -259,7 +326,15 @@ export default function CampaignAssistant() {
   const uploadPhoto = async (slotId: string, file: File) => {
     setUploadingSlot(slotId);
     try {
-      const { url } = await api.campaigns.upload(file);
+      const photo = await downscaleImage(file);
+      if (photo.size > MAX_ASSISTANT_UPLOAD_BYTES) {
+        toast({
+          title: t.contactAssistant.photoTooLarge,
+          variant: "destructive"
+        });
+        return;
+      }
+      const { url } = await api.campaigns.upload(photo);
       setDraft((prev) =>
         prev
           ? { ...prev, html: replaceSlotImage(prev.html, slotId, url) }
@@ -267,7 +342,7 @@ export default function CampaignAssistant() {
       );
       toast({ title: ca.photoAdded });
     } catch (err) {
-      toast({ title: errorMessage(err), variant: "destructive" });
+      toast({ title: turnErrorTitle(err), variant: "destructive" });
     } finally {
       setUploadingSlot(null);
     }
@@ -332,8 +407,8 @@ export default function CampaignAssistant() {
         </Button>
       </div>
 
-      {/* Mobile: one column at a time */}
-      <div className="md:hidden grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 mb-3">
+      {/* Below lg: one pane at a time */}
+      <div className="lg:hidden grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 mb-3">
         <button
           type="button"
           onClick={() => setMobileTab("chat")}
@@ -361,16 +436,16 @@ export default function CampaignAssistant() {
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 gap-4">
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Chat */}
         <section
           className={`${
             mobileTab === "chat" ? "flex" : "hidden"
-          } md:flex md:col-span-5 flex-col min-h-0 card-elevated overflow-hidden`}
+          } lg:flex lg:col-span-5 flex-col min-h-0 card-elevated overflow-hidden`}
         >
           <div
             ref={listRef}
-            className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3"
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-3"
           >
             {messages.length === 0 && (
               <>
@@ -410,22 +485,47 @@ export default function CampaignAssistant() {
             )}
             {isThinking && (
               <AssistantBubble>
-                <span className="inline-flex items-center gap-2 text-muted-foreground">
+                <span
+                  className="inline-flex items-center gap-2 text-muted-foreground"
+                  aria-live="polite"
+                >
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  {ca.thinking}
+                  {thinkingText}
                 </span>
+              </AssistantBubble>
+            )}
+            {failed && !isThinking && (
+              <AssistantBubble>
+                <div className="space-y-2">
+                  <p className="text-destructive">{failed.message}</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => void sendTurn(failed.text)}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    {ca.retry}
+                  </Button>
+                </div>
               </AssistantBubble>
             )}
           </div>
 
           {/* Composer */}
-          <div className="shrink-0 border-t border-border p-3">
+          <div className="shrink-0 border-t border-border p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             <div className="flex flex-wrap items-end gap-2">
               <Textarea
                 ref={composerRef}
                 value={input}
                 rows={1}
-                onChange={(e) => setInput(e.target.value)}
+                enterKeyHint="send"
+                maxLength={MAX_ASSISTANT_MESSAGE_CHARS}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  setTranscriptHint(false);
+                }}
                 onKeyDown={(e) => {
                   if (e.nativeEvent.isComposing) return;
                   if (e.key === "Enter" && !e.shiftKey) {
@@ -459,6 +559,11 @@ export default function CampaignAssistant() {
                 )}
               </Button>
             </div>
+            {transcriptHint && (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {ca.transcriptInComposer}
+              </p>
+            )}
           </div>
         </section>
 
@@ -466,7 +571,7 @@ export default function CampaignAssistant() {
         <section
           className={`${
             mobileTab === "draft" ? "flex" : "hidden"
-          } md:flex md:col-span-7 flex-col min-h-0 card-elevated overflow-y-auto md:overflow-hidden`}
+          } lg:flex lg:col-span-7 flex-col min-h-0 card-elevated overflow-y-auto lg:overflow-hidden`}
         >
           {!draft ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center text-muted-foreground">
@@ -540,7 +645,7 @@ export default function CampaignAssistant() {
               <Tabs
                 value={draftTab}
                 onValueChange={(value) => setDraftTab(value as DraftTab)}
-                className="gap-0 md:flex-1 md:min-h-0"
+                className="gap-0 lg:flex-1 lg:min-h-0"
               >
                 <div className="shrink-0 px-4 pt-3">
                   <TabsList>
@@ -561,18 +666,20 @@ export default function CampaignAssistant() {
                 </div>
                 <TabsContent
                   value="preview"
-                  className="flex flex-col p-4 md:min-h-0 md:overflow-y-auto"
+                  className="flex flex-col p-4 lg:min-h-0"
                 >
-                  <iframe
-                    title="preview"
-                    sandbox=""
-                    srcDoc={previewHtml}
-                    className="w-full flex-1 min-h-[420px] rounded-lg border border-border bg-white"
-                  />
+                  <div className="flex-1 min-h-0 overflow-auto rounded-lg border border-border bg-white">
+                    <iframe
+                      title="preview"
+                      sandbox=""
+                      srcDoc={previewHtml}
+                      className="block w-full h-[60vh] lg:h-full min-h-[420px]"
+                    />
+                  </div>
                 </TabsContent>
                 <TabsContent
                   value="photos"
-                  className="p-4 space-y-3 md:min-h-0 md:overflow-y-auto"
+                  className="p-4 space-y-3 lg:min-h-0 lg:overflow-y-auto"
                 >
                   {slots.length === 0 ? (
                     <p className="text-sm text-muted-foreground italic">

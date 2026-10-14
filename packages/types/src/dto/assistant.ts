@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { Contact, ContactStatus } from "../entities/contact";
-import { createContactRequestSchema } from "./contacts";
 
 // ── Shared ────────────────────────────────────────────────────────────────────────────
 // The two Campaigns-app assistants: a chat that writes a whole campaign, and an extractor that
@@ -157,7 +156,9 @@ export type ContactAssistantExtractFields = z.infer<
  * conditionally: a row that already exists is reported, never replaced.
  */
 export const contactAssistantCreateRequestSchema = z.object({
-  contacts: z.array(createContactRequestSchema).min(1).max(100)
+  // Items are validated one by one server-side (createContactRequestSchema), so one bad row is
+  // reported in `errors` instead of rejecting the whole batch.
+  contacts: z.array(z.unknown()).min(1).max(100)
 });
 export type ContactAssistantCreateRequest = z.infer<
   typeof contactAssistantCreateRequestSchema

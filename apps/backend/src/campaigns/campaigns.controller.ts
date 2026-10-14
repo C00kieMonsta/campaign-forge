@@ -1,30 +1,48 @@
-import { Controller, Get, Post, Patch, Delete, Query, Param, Body, BadRequestException, UseGuards, UseInterceptors, UploadedFile } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors
+} from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { AdminGuard } from "../auth/admin.guard";
-import { z } from "zod";
 import {
   countImagePlaceholders,
   createCampaignRequestSchema,
   listCampaignsQuerySchema,
   sendTestRequestSchema,
   updateCampaignRequestSchema,
-  type CampaignListItem,
+  type CampaignListItem
 } from "@packages/types";
-
-const directTestSendSchema = z.object({
-  email: z.string().email("Invalid email"),
-  subject: z.string().min(1),
-  html: z.string().min(1),
-});
-import type { Contact } from "@packages/types";
-import type { CampaignAttachment } from "@packages/types";
-import { CampaignsService } from "./campaigns.service";
+import type { CampaignAttachment, Contact } from "@packages/types";
+import { z } from "zod";
+import { AdminGuard } from "../auth/admin.guard";
 import { ContactsService } from "../contacts/contacts.service";
 import { S3Service } from "../shared/s3.service";
 import { SesService, type EmailAttachment } from "../shared/ses.service";
 import { TokenService } from "../shared/token.service";
+import { CampaignsService } from "./campaigns.service";
 
-function replaceTemplateVars(html: string, contact: Pick<Contact, "firstName" | "lastName" | "email" | "displayName" | "organization">): string {
+const directTestSendSchema = z.object({
+  email: z.string().email("Invalid email"),
+  subject: z.string().min(1),
+  html: z.string().min(1)
+});
+
+function replaceTemplateVars(
+  html: string,
+  contact: Pick<
+    Contact,
+    "firstName" | "lastName" | "email" | "displayName" | "organization"
+  >
+): string {
   return html
     .replace(/\{\{firstName\}\}/gi, contact.firstName ?? "")
     .replace(/\{\{lastName\}\}/gi, contact.lastName ?? "")
@@ -38,7 +56,7 @@ const SAMPLE_CONTACT = {
   lastName: "Dupont",
   email: "marie.dupont@example.com",
   displayName: "Marie Dupont",
-  organization: "Acme Corp",
+  organization: "Acme Corp"
 };
 
 @UseGuards(AdminGuard)
@@ -49,21 +67,29 @@ export class CampaignsController {
     private contacts: ContactsService,
     private s3: S3Service,
     private ses: SesService,
-    private token: TokenService,
+    private token: TokenService
   ) {}
 
-  private async fetchAttachments(meta: CampaignAttachment[]): Promise<EmailAttachment[]> {
+  private async fetchAttachments(
+    meta: CampaignAttachment[]
+  ): Promise<EmailAttachment[]> {
     if (meta.length === 0) return [];
     return Promise.all(
       meta.map(async (a) => {
         const { body } = await this.s3.get(a.key);
-        return { filename: a.filename, content: body, contentType: a.contentType };
-      }),
+        return {
+          filename: a.filename,
+          content: body,
+          contentType: a.contentType
+        };
+      })
     );
   }
 
   @Post("upload")
-  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024 } }))
+  @UseInterceptors(
+    FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024 } })
+  )
   async upload(@UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException("No file provided");
 
@@ -78,17 +104,27 @@ export class CampaignsController {
       url: this.s3.publicUrl(key),
       filename: file.originalname,
       contentType: file.mimetype,
-      size: file.size,
+      size: file.size
     };
   }
 
   @Get()
   async list(@Query() query: Record<string, string>) {
     const parsed = listCampaignsQuerySchema.safeParse(query);
-    if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
+    if (!parsed.success)
+      throw new BadRequestException(
+        parsed.error.errors.map((e) => e.message).join(", ")
+      );
 
-    const result = await this.campaigns.list(parsed.data.limit, parsed.data.cursor);
-    return { items: result.items as CampaignListItem[], cursor: result.cursor, count: result.count };
+    const result = await this.campaigns.list(
+      parsed.data.limit,
+      parsed.data.cursor
+    );
+    return {
+      items: result.items as CampaignListItem[],
+      cursor: result.cursor,
+      count: result.count
+    };
   }
 
   @Get(":id")
@@ -100,7 +136,10 @@ export class CampaignsController {
   @Post()
   async create(@Body() body: unknown) {
     const parsed = createCampaignRequestSchema.safeParse(body);
-    if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
+    if (!parsed.success)
+      throw new BadRequestException(
+        parsed.error.errors.map((e) => e.message).join(", ")
+      );
     const campaign = await this.campaigns.create(parsed.data);
     return { ok: true, campaign };
   }
@@ -108,21 +147,32 @@ export class CampaignsController {
   @Patch(":id")
   async update(@Param("id") id: string, @Body() body: unknown) {
     const parsed = updateCampaignRequestSchema.safeParse(body);
-    if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
+    if (!parsed.success)
+      throw new BadRequestException(
+        parsed.error.errors.map((e) => e.message).join(", ")
+      );
 
     const existing = await this.campaigns.getOrFail(id);
-    if (existing.status === "sent") throw new BadRequestException("Cannot edit a sent campaign");
+    if (existing.status === "sent")
+      throw new BadRequestException("Cannot edit a sent campaign");
 
     const updates: Record<string, unknown> = {};
     if (parsed.data.name !== undefined) updates.name = parsed.data.name;
-    if (parsed.data.subject !== undefined) updates.subject = parsed.data.subject;
+    if (parsed.data.subject !== undefined)
+      updates.subject = parsed.data.subject;
     if (parsed.data.html !== undefined) updates.html = parsed.data.html;
-    if (parsed.data.targetGroups !== undefined) updates.targetGroups = parsed.data.targetGroups;
-    if (parsed.data.attachments !== undefined) updates.attachments = parsed.data.attachments;
+    if (parsed.data.targetGroups !== undefined)
+      updates.targetGroups = parsed.data.targetGroups;
+    if (parsed.data.attachments !== undefined)
+      updates.attachments = parsed.data.attachments;
 
-    if (Object.keys(updates).length === 0) return { ok: true, campaign: existing };
+    if (Object.keys(updates).length === 0)
+      return { ok: true, campaign: existing };
     await this.campaigns.update(id, updates);
-    return { ok: true, campaign: { ...existing, ...updates, updatedAt: new Date().toISOString() } };
+    return {
+      ok: true,
+      campaign: { ...existing, ...updates, updatedAt: new Date().toISOString() }
+    };
   }
 
   @Delete(":id")
@@ -135,38 +185,63 @@ export class CampaignsController {
   @Post("test-send")
   async testSendDirect(@Body() body: unknown) {
     const parsed = directTestSendSchema.safeParse(body);
-    if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
+    if (!parsed.success)
+      throw new BadRequestException(
+        parsed.error.errors.map((e) => e.message).join(", ")
+      );
 
-    const html = this.token.appendFooter(replaceTemplateVars(parsed.data.html, SAMPLE_CONTACT), parsed.data.email.toLowerCase());
-    await this.ses.send(parsed.data.email, `[TEST] ${parsed.data.subject}`, html);
+    const html = this.token.appendFooter(
+      replaceTemplateVars(parsed.data.html, SAMPLE_CONTACT),
+      parsed.data.email.toLowerCase()
+    );
+    await this.ses.send(
+      parsed.data.email,
+      `[TEST] ${parsed.data.subject}`,
+      html
+    );
     return { ok: true, message: `Test sent to ${parsed.data.email}` };
   }
 
   @Post(":id/test")
   async testSend(@Param("id") id: string, @Body() body: unknown) {
     const parsed = sendTestRequestSchema.safeParse(body);
-    if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
+    if (!parsed.success)
+      throw new BadRequestException(
+        parsed.error.errors.map((e) => e.message).join(", ")
+      );
 
     const campaign = await this.campaigns.getOrFail(id);
-    const html = this.token.appendFooter(replaceTemplateVars(campaign.html, SAMPLE_CONTACT), parsed.data.email.toLowerCase());
+    const html = this.token.appendFooter(
+      replaceTemplateVars(campaign.html, SAMPLE_CONTACT),
+      parsed.data.email.toLowerCase()
+    );
 
-    const attachmentBuffers = await this.fetchAttachments(campaign.attachments ?? []);
-    await this.ses.sendWithAttachments(parsed.data.email, `[TEST] ${campaign.subject}`, html, attachmentBuffers);
+    const attachmentBuffers = await this.fetchAttachments(
+      campaign.attachments ?? []
+    );
+    await this.ses.sendWithAttachments(
+      parsed.data.email,
+      `[TEST] ${campaign.subject}`,
+      html,
+      attachmentBuffers
+    );
     return { ok: true, message: `Test sent to ${parsed.data.email}` };
   }
 
   @Post(":id/send")
   async sendCampaign(@Param("id") id: string) {
     const campaign = await this.campaigns.getOrFail(id);
-    if (campaign.status === "sent") throw new BadRequestException("Campaign already sent");
-    if (campaign.status === "sending") throw new BadRequestException("Campaign is already being sent");
+    if (campaign.status === "sent")
+      throw new BadRequestException("Campaign already sent");
+    if (campaign.status === "sending")
+      throw new BadRequestException("Campaign is already being sent");
 
     // Inboxes do not render the grey "your photo here" box, so a campaign that still has one is
     // not finished. The editor and the send dialog say so first; this is the backstop.
     const placeholders = countImagePlaceholders(campaign.html);
     if (placeholders > 0) {
       throw new BadRequestException(
-        `Campaign still has ${placeholders} empty photo placeholder(s). Add the photos or remove the placeholders before sending.`,
+        `Campaign still has ${placeholders} empty photo placeholder(s). Add the photos or remove the placeholders before sending.`
       );
     }
 
@@ -175,17 +250,23 @@ export class CampaignsController {
     const targetGroups = campaign.targetGroups ?? [];
     const recipients =
       targetGroups.length > 0
-        ? subscribed.filter((c) => c.groups?.some((g) => targetGroups.includes(g)))
+        ? subscribed.filter((c) =>
+            c.groups?.some((g) => targetGroups.includes(g))
+          )
         : subscribed;
 
-    if (recipients.length === 0) throw new BadRequestException("No subscribed contacts in target groups");
+    if (recipients.length === 0)
+      throw new BadRequestException("No subscribed contacts in target groups");
 
     await this.campaigns.markSending(id);
 
     const emails = recipients.map((c) => ({
       to: c.email,
       subject: campaign.subject,
-      html: this.token.appendFooter(replaceTemplateVars(campaign.html, c), c.emailLower),
+      html: this.token.appendFooter(
+        replaceTemplateVars(campaign.html, c),
+        c.emailLower
+      )
     }));
 
     const attachmentMeta = campaign.attachments ?? [];
@@ -193,13 +274,39 @@ export class CampaignsController {
     setImmediate(async () => {
       try {
         const attachmentBuffers = await this.fetchAttachments(attachmentMeta);
-        console.log(JSON.stringify({ level: "info", action: "campaignSendStart", campaignId: id, recipients: emails.length, attachments: attachmentBuffers.length }));
+        console.log(
+          JSON.stringify({
+            level: "info",
+            action: "campaignSendStart",
+            campaignId: id,
+            recipients: emails.length,
+            attachments: attachmentBuffers.length
+          })
+        );
 
-        const { sent, failed } = await this.ses.sendBatch(emails, attachmentBuffers);
+        const { sent, failed } = await this.ses.sendBatch(
+          emails,
+          attachmentBuffers
+        );
         await this.campaigns.markSent(id, sent);
-        console.log(JSON.stringify({ level: "info", action: "campaignSent", campaignId: id, sent, failed }));
+        console.log(
+          JSON.stringify({
+            level: "info",
+            action: "campaignSent",
+            campaignId: id,
+            sent,
+            failed
+          })
+        );
       } catch (err) {
-        console.log(JSON.stringify({ level: "error", action: "campaignSendFailed", campaignId: id, error: String(err) }));
+        console.log(
+          JSON.stringify({
+            level: "error",
+            action: "campaignSendFailed",
+            campaignId: id,
+            error: String(err)
+          })
+        );
       }
     });
 

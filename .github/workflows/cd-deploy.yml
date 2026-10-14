@@ -207,7 +207,7 @@ jobs:
           # apps/frontend/package.json on the box fails the install the moment a frontend
           # dependency changes (ERR_PNPM_OUTDATED_LOCKFILE) — even though the backend does not
           # use it. apps/backend/migrations/ ships so schema changes can be applied on the box.
-          source: "apps/backend/dist/,apps/backend/package.json,apps/backend/migrations/,apps/frontend/package.json,apps/landing/package.json,packages/types/dist/,packages/types/package.json,packages/ui/package.json,packages/utils/package.json,infrastructure/package.json,package.json,pnpm-lock.yaml,pnpm-workspace.yaml"
+          source: "apps/backend/dist/,apps/backend/package.json,apps/backend/migrations/,scripts/nginx/,apps/frontend/package.json,apps/landing/package.json,packages/types/dist/,packages/types/package.json,packages/ui/package.json,packages/utils/package.json,infrastructure/package.json,package.json,pnpm-lock.yaml,pnpm-workspace.yaml"
           target: "/home/ec2-user/campaign-forge/"
           tar_dereference: true
           overwrite: true
@@ -346,6 +346,48 @@ jobs:
             fi
 
             echo "✅ Backend deployed and healthy"
+
+      # The assistant routes need their own nginx location (long read timeout, multipart photo).
+      # The server block was written once by the EC2 user-data at first boot, so the only way a
+      # change in scripts/nginx/ reaches the live box is this step. Idempotent: the include file is
+      # refreshed every run, the include line is added once, and a config that does not pass
+      # `nginx -t` is rolled back so the site stays up.
+      - name: Apply nginx locations on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 60s
+          script: |
+            set -e
+            APP_DIR="/home/ec2-user/campaign-forge"
+            CONF="/etc/nginx/conf.d/campaign-forge.conf"
+            INC="/etc/nginx/campaign-forge/assistant-locations.inc"
+            SRC="${APP_DIR}/scripts/nginx/assistant-locations.inc"
+
+            if [ ! -f "$SRC" ]; then echo "ℹ️ no nginx include shipped, skipping"; exit 0; fi
+            if [ ! -f "$CONF" ]; then echo "⚠️ $CONF not found, skipping nginx step"; exit 0; fi
+
+            sudo cp "$CONF" "${CONF}.prev"
+            if [ -f "$INC" ]; then sudo cp "$INC" "${INC}.prev"; fi
+            sudo install -D -m 0644 "$SRC" "$INC"
+            if ! grep -q "assistant-locations.inc" "$CONF"; then
+              # Only the main server block has a `location /`; the certbot redirect block does not.
+              sudo sed -i "0,/^[[:space:]]*location \/ {/s||    include ${INC};\n    location / {|" "$CONF"
+              echo "➕ include line added to $CONF"
+            fi
+
+            if sudo nginx -t; then
+              sudo systemctl reload nginx
+              echo "✅ nginx reloaded with the assistant locations"
+            else
+              echo "❌ nginx -t failed, restoring the previous config"
+              sudo cp "${CONF}.prev" "$CONF"
+              if [ -f "${INC}.prev" ]; then sudo cp "${INC}.prev" "$INC"; fi
+              sudo nginx -t && sudo systemctl reload nginx || true
+              exit 1
+            fi
 
   # ─── Summary ────────────────────────────────────────────────────────────────
   deployment-complete:

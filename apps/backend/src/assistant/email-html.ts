@@ -60,13 +60,21 @@ const ALLOWED_STYLE_PROPS = new Set([
   "text-decoration"
 ]);
 
-const TAG_RE = /<\/?([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g;
+/**
+ * One token of the input: a comment, a tag (quote-aware, so a '>' inside an attribute value does
+ * not end it), a run of text, or a lone '<' that starts no tag.
+ *
+ * Tokenising once is what makes the allow-list hold. A single search-and-replace over tags left
+ * the text between them unexamined, so `<<x>img onerror=...>` had its unknown `<x>` removed and the
+ * pieces on either side joined into a live tag.
+ */
+const TOKEN_RE =
+  /<!--[\s\S]*?-->|<\/?([a-zA-Z][a-zA-Z0-9]*)\b((?:"[^"]*"|'[^']*'|[^>"'])*)>|[^<]+|</g;
 const ATTR_RE =
   /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*(?:=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
 /** Tags whose whole content is dropped, not just the tags themselves. */
 const DROP_WITH_CONTENT_RE =
   /<(script|style|iframe|object|embed|form|textarea|select|svg|math|title|head)\b[\s\S]*?<\/\1\s*>/gi;
-const COMMENT_RE = /<!--[\s\S]*?-->/g;
 
 function sanitizeStyle(value: string): string | null {
   const kept: string[] = [];
@@ -76,7 +84,9 @@ function sanitizeStyle(value: string): string | null {
     const prop = decl.slice(0, idx).trim().toLowerCase();
     const val = decl.slice(idx + 1).trim();
     if (!ALLOWED_STYLE_PROPS.has(prop)) continue;
-    if (/url\s*\(|expression\s*\(|javascript:|\\/i.test(val)) continue;
+    // No entities and no escapes: a client decodes `&#59` before parsing the CSS, which would turn
+    // one declaration into two. The allowed vocabulary never needs either character.
+    if (/url\s*\(|expression\s*\(|javascript:|[\\&]/i.test(val)) continue;
     if (val.length === 0 || val.length > 100) continue;
     kept.push(`${prop}: ${val}`);
   }
@@ -121,6 +131,11 @@ function sanitizeAttrs(tag: string, raw: string): string {
   return out.length ? ` ${out.join(" ")}` : "";
 }
 
+/** Text between tags: angle brackets become entities, existing entities stay as they are. */
+function escapeText(text: string): string {
+  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /**
  * Reduces model-written HTML to the editor's vocabulary.
  *
@@ -129,19 +144,26 @@ function sanitizeAttrs(tag: string, raw: string): string {
  * their text is not prose.
  */
 export function sanitizeEmailHtml(input: string): string {
-  const stripped = input
-    .replace(COMMENT_RE, "")
-    .replace(DROP_WITH_CONTENT_RE, "");
-  return stripped
-    .replace(TAG_RE, (whole, rawTag: string, rawAttrs: string) => {
-      const tag = rawTag.toLowerCase();
-      if (!ALLOWED_TAGS.has(tag)) return "";
-      const closing = whole.startsWith("</");
-      if (closing) return `</${tag}>`;
-      const selfClosing = tag === "br" || tag === "hr" || tag === "img";
-      return `<${tag}${sanitizeAttrs(tag, rawAttrs)}${selfClosing ? " /" : ""}>`;
-    })
-    .trim();
+  const stripped = input.replace(DROP_WITH_CONTENT_RE, "");
+  let out = "";
+  for (const m of stripped.matchAll(TOKEN_RE)) {
+    const token = m[0];
+    if (token.startsWith("<!--")) continue;
+    const rawTag = m[1];
+    if (rawTag === undefined) {
+      out += escapeText(token);
+      continue;
+    }
+    const tag = rawTag.toLowerCase();
+    if (!ALLOWED_TAGS.has(tag)) continue;
+    if (token.startsWith("</")) {
+      out += `</${tag}>`;
+      continue;
+    }
+    const selfClosing = tag === "br" || tag === "hr" || tag === "img";
+    out += `<${tag}${sanitizeAttrs(tag, m[2] ?? "")}${selfClosing ? " /" : ""}>`;
+  }
+  return out.trim();
 }
 
 /** Characters that must be escaped inside SVG text. */
@@ -170,15 +192,47 @@ export function placeholderDataUri(label: string): string {
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 
-const SLOT_SRC_RE = /\{\{image:([a-z0-9][a-z0-9-]*)\}\}/g;
-const IMG_RE = /<img\b([^>]*)\/?>/gi;
+/** Slots per draft. The UI lists them one by one; past this it is not an email any more. */
+export const MAX_IMAGE_SLOTS = 20;
+
+/** Lazy attribute group, and the self-closing solidus absorbed so it is not read as an attribute. */
+export const IMG_TAG_RE = /<img\b([^>]*?)\s*\/?>/gi;
+const SRC_ATTR_RE = /\bsrc\s*=\s*"([^"]*)"/i;
+const SLOT_ATTR_RE = /\bdata-slot\s*=\s*"([^"]*)"/i;
+const PLACEHOLDER_SRC_RE = /^\{\{image:([a-z0-9][a-z0-9-]*)\}\}$/i;
+const SLOT_TEXT_RE = /\{\{image:[a-z0-9][a-z0-9-]*\}\}/gi;
+
+/** The slot id as the schema accepts it: lowercase, ascii, dashes, at most 60 characters. */
+export function slugifySlotId(id: string): string {
+  const slug = id
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return slug || "photo";
+}
+
+/** The src and data-slot of one <img> tag's attribute string, whatever their order. */
+export function imageAttrs(attrs: string): {
+  src: string;
+  slot: string | null;
+} {
+  const slot = SLOT_ATTR_RE.exec(attrs)?.[1] ?? null;
+  return {
+    src: (SRC_ATTR_RE.exec(attrs)?.[1] ?? "").trim(),
+    slot: slot ? slugifySlotId(slot) : null
+  };
+}
 
 /**
  * Turns `{{image:slug}}` sources into labelled placeholders and keeps the slot list honest.
  *
- * Returns the html with every placeholder resolved and the slots that are actually present in it.
- * A slot the model listed but never placed is dropped; a slug it placed but never listed is added
- * with the slug as its label, so the "photos to add" list and the picture always agree.
+ * Returns the html with every placeholder resolved and the slots that are actually present in it:
+ * the placeholders, plus the photos already uploaded into a slot (an https src with a data-slot),
+ * so the Photos tab keeps showing them as filled. A slot the model listed but never placed is
+ * dropped; a slug it placed but never listed is added with the slug as its label.
  */
 export function resolveImageSlots(
   html: string,
@@ -187,30 +241,40 @@ export function resolveImageSlots(
   const byId = new Map(declared.map((s) => [s.id, s]));
   const placed: CampaignImageSlot[] = [];
   const seen = new Set<string>();
+  const slotFor = (id: string): CampaignImageSlot =>
+    byId.get(id) ?? { id, label: id.replace(/-/g, " ") };
+  const record = (id: string): boolean => {
+    if (seen.has(id)) return true;
+    if (placed.length >= MAX_IMAGE_SLOTS) return false;
+    seen.add(id);
+    placed.push(slotFor(id));
+    return true;
+  };
 
-  const out = html.replace(IMG_RE, (whole, attrs: string) => {
-    const m = /\bsrc\s*=\s*"\{\{image:([a-z0-9][a-z0-9-]*)\}\}"/i.exec(attrs);
-    if (!m) return whole;
-    const id = m[1];
-    const slot = byId.get(id) ?? { id, label: id.replace(/-/g, " ") };
-    if (!seen.has(id)) {
-      seen.add(id);
-      placed.push(slot);
+  const out = html.replace(IMG_TAG_RE, (whole, attrs: string) => {
+    const { src, slot } = imageAttrs(attrs);
+    const placeholder = PLACEHOLDER_SRC_RE.exec(src);
+    if (!placeholder) {
+      if (slot && /^https?:\/\//i.test(src)) record(slot);
+      return whole;
     }
-    const dataUri = placeholderDataUri(slot.label);
+    const id = slugifySlotId(placeholder[1]);
+    // Past the cap the tag goes, rather than a placeholder the list cannot show.
+    if (!record(id)) return "";
+    const resolved = slotFor(id);
     let rest = attrs
       .replace(/\bsrc\s*=\s*"[^"]*"/i, "")
       .replace(/\bdata-slot\s*=\s*"[^"]*"/i, "")
       .replace(/\balt\s*=\s*"[^"]*"/i, "")
       .trim();
     if (!/\bstyle\s*=/i.test(rest)) {
-      rest += ` style="width: 100%; max-width: 600px; display: block; margin: 16px auto; border-radius: 8px"`;
+      rest = `${rest} style="width: 100%; max-width: 600px; display: block; margin: 16px auto; border-radius: 8px"`;
     }
-    return `<img src="${dataUri}" alt="${escapeXml(slot.label)}" data-slot="${id}"${rest ? ` ${rest.trim()}` : ""} />`;
+    return `<img src="${placeholderDataUri(resolved.label)}" alt="${escapeXml(resolved.label)}" data-slot="${id}"${rest.trim() ? ` ${rest.trim()}` : ""} />`;
   });
 
   // Any bare `{{image:x}}` left outside an <img> (the model put it in text) is removed.
-  return { html: out.replace(SLOT_SRC_RE, ""), imageSlots: placed };
+  return { html: out.replace(SLOT_TEXT_RE, ""), imageSlots: placed };
 }
 
 /** Plain text of an html fragment, for logging and for the model's own summary. */

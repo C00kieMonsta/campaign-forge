@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
+  campaignDraftSchema,
   campaignImageSlotSchema,
   type CampaignAssistantTurnRequest,
   type CampaignAssistantTurnResponse,
@@ -9,7 +10,13 @@ import {
 import { z } from "zod";
 import { GroupsService } from "../groups/groups.service";
 import { OpenAiService } from "../shared/openai.service";
-import { resolveImageSlots, sanitizeEmailHtml } from "./email-html";
+import {
+  imageAttrs,
+  IMG_TAG_RE,
+  resolveImageSlots,
+  sanitizeEmailHtml,
+  slugifySlotId
+} from "./email-html";
 import { LANGUAGE_NAMES, ModelOutputError, parseModelJson } from "./model-json";
 
 /**
@@ -38,16 +45,18 @@ const modelOutputSchema = z.object({
     .nullable()
     .optional()
 });
+type ModelOutput = z.infer<typeof modelOutputSchema>;
+type ModelDraft = NonNullable<ModelOutput["draft"]>;
 
 /** Prose budget for one turn: a full newsletter is ~2.5k tokens, with room for a long reply. */
 const TURN_PROSE_TOKENS = 6000;
-/** A person is waiting on this call; the client gives up at 150s and nginx at 600s. */
+/**
+ * A person is waiting on this call. No SDK retries: the service retries once itself on a bad
+ * answer, so the worst case is two of these, under the client's 300 s and nginx's 600 s.
+ */
 const CALL_TIMEOUT_MS = 120_000;
 
-const PLACEHOLDER_IMG_RE =
-  /<img\b[^>]*\bsrc="data:image\/svg\+xml;base64,[^"]*"[^>]*\bdata-slot="([a-z0-9-]+)"[^>]*\/?>/gi;
-const SLOT_IMG_RE = (id: string) =>
-  new RegExp(`<img\\b([^>]*)\\bdata-slot="${id}"([^>]*)\\/?>`, "i");
+const PLACEHOLDER_SRC = /^data:image\/svg\+xml/i;
 
 /**
  * The draft as the model should see it again: placeholders back to `{{image:slug}}`.
@@ -56,10 +65,11 @@ const SLOT_IMG_RE = (id: string) =>
  * every turn would spend the prompt on grey rectangles. Uploaded photos keep their short URL.
  */
 export function compactDraftHtml(html: string): string {
-  return html.replace(
-    PLACEHOLDER_IMG_RE,
-    (_whole, id: string) => `<img src="{{image:${id}}}" alt="${id}" />`
-  );
+  return html.replace(IMG_TAG_RE, (whole, attrs: string) => {
+    const { src, slot } = imageAttrs(attrs);
+    if (!slot || !PLACEHOLDER_SRC.test(src)) return whole;
+    return `<img src="{{image:${slot}}}" alt="${slot}" />`;
+  });
 }
 
 /**
@@ -67,7 +77,8 @@ export function compactDraftHtml(html: string): string {
  *
  * The model is told to keep uploaded URLs, but it sees the html as text and a revision of the
  * paragraph next to a photo is enough for it to emit the `{{image:slug}}` form again. The slot id
- * survives either way, so a slot that had a real image before keeps it.
+ * survives either way, so a slot that had a real image before keeps it. Attribute order does not
+ * matter: the model may write data-slot before src and the sanitizer keeps what it wrote.
  */
 export function carryUploadedImages(
   previousHtml: string | null,
@@ -75,37 +86,18 @@ export function carryUploadedImages(
 ): string {
   if (!previousHtml) return nextHtml;
   const uploaded = new Map<string, string>();
-  for (const m of previousHtml.matchAll(
-    /<img\b[^>]*\bsrc="(https?:\/\/[^"]+)"[^>]*\bdata-slot="([a-z0-9-]+)"[^>]*\/?>/gi
-  )) {
-    uploaded.set(m[2], m[1]);
+  for (const m of previousHtml.matchAll(IMG_TAG_RE)) {
+    const { src, slot } = imageAttrs(m[1]);
+    if (slot && /^https?:\/\//i.test(src)) uploaded.set(slot, src);
   }
-  let out = nextHtml;
-  for (const [id, url] of uploaded) {
-    out = out.replace(
-      SLOT_IMG_RE(id),
-      (whole, before: string, after: string) => {
-        if (!/\bsrc="data:image\/svg\+xml/i.test(whole)) return whole;
-        const attrs = `${before}data-slot="${id}"${after}`.replace(
-          /\bsrc="[^"]*"/i,
-          `src="${url}"`
-        );
-        return `<img ${attrs.trim()} />`;
-      }
-    );
-  }
-  return out;
-}
-
-function slugify(id: string): string {
-  const slug = id
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
-  return slug || "photo";
+  if (uploaded.size === 0) return nextHtml;
+  return nextHtml.replace(IMG_TAG_RE, (whole, attrs: string) => {
+    const { src, slot } = imageAttrs(attrs);
+    const url = slot ? uploaded.get(slot) : undefined;
+    if (!url || !PLACEHOLDER_SRC.test(src)) return whole;
+    const restored = attrs.replace(/\bsrc\s*=\s*"[^"]*"/i, `src="${url}"`);
+    return `<img ${restored.trim()} />`;
+  });
 }
 
 export function buildSystemPrompt(params: {
@@ -201,19 +193,25 @@ export class CampaignAssistantService {
           ? "Ga verder."
           : "Continue.";
 
-    const raw = await this.completeWithOneRetry({
+    const result = await this.completeWithOneRetry({
       system,
       history,
       user,
       // A revision rewrites a draft that exists; medium effort buys nothing there and the turn
-      // has to come back before nginx gives up on it.
-      depth: previous ? "quick" : "standard"
+      // has to come back before the client gives up on it.
+      depth: previous ? "quick" : "standard",
+      // Parsing AND finishing, so a draft that is unusable after sanitising (an empty body, a
+      // slot id the schema rejects) is retried like a malformed answer rather than sent back.
+      validate: (raw) => {
+        const parsed = parseModelJson(raw, modelOutputSchema);
+        return {
+          reply: parsed.reply.trim(),
+          draft: parsed.draft
+            ? this.finishDraft(parsed.draft, groups, previous)
+            : null
+        };
+      }
     });
-    const parsed = parseModelJson(raw, modelOutputSchema);
-
-    const draft = parsed.draft
-      ? this.finishDraft(parsed.draft, groups, previous)
-      : null;
 
     this.logger.log(
       JSON.stringify({
@@ -221,14 +219,14 @@ export class CampaignAssistantService {
         turns: messages.length,
         language: req.language,
         hadDraft: previous !== null,
-        draft: draft !== null,
-        slots: draft?.imageSlots.length ?? 0,
-        htmlChars: draft?.html.length ?? 0,
+        draft: result.draft !== null,
+        slots: result.draft?.imageSlots.length ?? 0,
+        htmlChars: result.draft?.html.length ?? 0,
         ms: Date.now() - started
       })
     );
 
-    return { reply: parsed.reply.trim(), draft };
+    return result;
   }
 
   /**
@@ -236,12 +234,13 @@ export class CampaignAssistantService {
    * rare; a shape failure (a draft with no html) is the one that happens, and the second attempt
    * nearly always fixes it. A second failure is reported, not retried again.
    */
-  private async completeWithOneRetry(params: {
+  private async completeWithOneRetry<T>(params: {
     system: string;
     history: { role: "user" | "assistant"; content: string }[];
     user: string;
     depth: "quick" | "standard";
-  }): Promise<string> {
+    validate: (raw: string) => T;
+  }): Promise<T> {
     const call = (user: string) =>
       this.openai.complete({
         system: params.system,
@@ -251,12 +250,11 @@ export class CampaignAssistantService {
         tier: "balanced",
         depth: params.depth,
         maxTokens: TURN_PROSE_TOKENS,
-        requestOptions: { timeoutMs: CALL_TIMEOUT_MS, maxRetries: 1 }
+        requestOptions: { timeoutMs: CALL_TIMEOUT_MS, maxRetries: 0 }
       });
     const first = await call(params.user);
     try {
-      parseModelJson(first, modelOutputSchema);
-      return first;
+      return params.validate(first);
     } catch (err) {
       if (!(err instanceof ModelOutputError)) throw err;
       this.logger.warn(
@@ -267,25 +265,31 @@ export class CampaignAssistantService {
           sample: err.sample.slice(0, 200)
         })
       );
-      return call(
+      const second = await call(
         `${params.user}\n\n(Your previous answer was rejected: ${err.message}. Answer again with exactly the JSON object described, including a complete "draft" with "html".)`
       );
+      return params.validate(second);
     }
   }
 
   private finishDraft(
-    draft: NonNullable<z.infer<typeof modelOutputSchema>["draft"]>,
+    draft: ModelDraft,
     groups: ContactGroup[],
     previous: CampaignDraft | null
   ): CampaignDraft {
     const knownGroupIds = new Set(groups.map((g) => g.id));
-    const declared = (draft.imageSlots ?? []).flatMap((s) => {
-      const parsed = campaignImageSlotSchema.safeParse({
-        ...s,
-        id: slugify(s.id)
-      });
-      return parsed.success ? [parsed.data] : [];
-    });
+    // The previous draft's slots first, the model's on top: a revision that omits imageSlots or
+    // lists a subset keeps the labels and descriptions she already saw.
+    const declared = [
+      ...(previous?.imageSlots ?? []),
+      ...(draft.imageSlots ?? []).flatMap((s) => {
+        const parsed = campaignImageSlotSchema.safeParse({
+          ...s,
+          id: slugifySlotId(s.id)
+        });
+        return parsed.success ? [parsed.data] : [];
+      })
+    ];
 
     // Sanitize first so the placeholder we insert is never itself subject to the filter, then
     // resolve the slots, then put back whatever she had already uploaded.
@@ -293,7 +297,7 @@ export class CampaignAssistantService {
     const resolved = resolveImageSlots(sanitized, declared);
     const html = carryUploadedImages(previous?.html ?? null, resolved.html);
 
-    return {
+    const finished = campaignDraftSchema.safeParse({
       name: draft.name.trim().slice(0, 200),
       subject: draft.subject.trim().slice(0, 200),
       html,
@@ -303,6 +307,16 @@ export class CampaignAssistantService {
         )
       ],
       imageSlots: resolved.imageSlots
-    };
+    });
+    if (!finished.success) {
+      throw new ModelOutputError(
+        `The draft is not usable after cleaning: ${finished.error.errors
+          .slice(0, 3)
+          .map((e) => `${e.path.join(".")}: ${e.message}`)
+          .join("; ")}`,
+        draft.html.slice(0, 500)
+      );
+    }
+    return finished.data;
   }
 }

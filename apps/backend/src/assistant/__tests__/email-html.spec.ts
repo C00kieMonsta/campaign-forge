@@ -126,3 +126,82 @@ describe("htmlToText", () => {
     expect(htmlToText("<p>a &amp; b</p><p>c<br>d</p>")).toBe("a & b\nc\nd");
   });
 });
+
+/** Review regressions: the tokenising sanitizer and the slot bookkeeping. */
+describe("sanitizeEmailHtml (tokeniser)", () => {
+  it("cannot be spliced into a live tag by a stray '<' and a removed tag", () => {
+    const out = sanitizeEmailHtml(
+      '<p>Bonjour</p><<x>img src="https://t.example/p.png" onerror="alert(1)"><<x>style>body{display:none}<<x>/style>'
+    );
+    expect(out).not.toMatch(/<img/);
+    expect(out).not.toMatch(/<style/);
+    expect(out).toContain("&lt;img src=");
+  });
+
+  it("honours quotes, so a '>' inside an attribute does not end the tag", () => {
+    expect(sanitizeEmailHtml('<p title="a>b">x</p>')).toBe("<p>x</p>");
+    const out = sanitizeEmailHtml('<img alt="TM7 > TM6" src="{{image:tm7}}">');
+    // Attribute order is kept as written; angle brackets never survive in alt text.
+    expect(out).toBe('<img alt="TM7  TM6" src="{{image:tm7}}" />');
+  });
+
+  it("escapes angle brackets in text and keeps existing entities", () => {
+    expect(sanitizeEmailHtml("<p>1 < 2 &amp; 3 > 2</p>")).toBe(
+      "<p>1 &lt; 2 &amp; 3 &gt; 2</p>"
+    );
+  });
+
+  it("drops a style value that smuggles an entity or a backslash", () => {
+    expect(
+      sanitizeEmailHtml('<p style="color: red&#59;background:url(x)">a</p>')
+    ).toBe("<p>a</p>");
+  });
+});
+
+describe("resolveImageSlots (review)", () => {
+  it("lowercases the slug so the slot matches the declared one and passes the schema", () => {
+    const { html, imageSlots } = resolveImageSlots(
+      '<img src="{{image:Recette}}" alt="x" />',
+      [{ id: "recette", label: "Photo de la recette" }]
+    );
+    expect(html).toContain('data-slot="recette"');
+    expect(html).toContain('alt="Photo de la recette"');
+    expect(imageSlots).toEqual([
+      { id: "recette", label: "Photo de la recette" }
+    ]);
+  });
+
+  it("keeps an uploaded photo's slot in the list, whatever the attribute order", () => {
+    const { html, imageSlots } = resolveImageSlots(
+      '<img data-slot="hero" src="https://x/y.jpg" alt="a" /><img src="{{image:tm7}}" />',
+      [{ id: "hero", label: "Visuel principal" }]
+    );
+    expect(html).toContain('src="https://x/y.jpg"');
+    expect(imageSlots).toEqual([
+      { id: "hero", label: "Visuel principal" },
+      { id: "tm7", label: "tm7" }
+    ]);
+  });
+
+  it("does not leave a stray solidus inside the rebuilt tag", () => {
+    const { html } = resolveImageSlots('<img src="{{image:a}}" alt="x" />', []);
+    expect(html).not.toMatch(/\s\/\s/);
+    expect(html).toMatch(/\/>$/);
+  });
+
+  it("removes a stray {{image:X}} in text regardless of case", () => {
+    expect(resolveImageSlots("<p>voir {{image:Hero}}</p>", []).html).toBe(
+      "<p>voir </p>"
+    );
+  });
+
+  it("caps the slots at 20", () => {
+    const html = Array.from(
+      { length: 25 },
+      (_, i) => `<img src="{{image:s${i}}}" />`
+    ).join("");
+    const { imageSlots, html: out } = resolveImageSlots(html, []);
+    expect(imageSlots).toHaveLength(20);
+    expect((out.match(/<img/g) ?? []).length).toBe(20);
+  });
+});

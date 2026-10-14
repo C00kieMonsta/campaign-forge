@@ -5,7 +5,11 @@ import { ArrowLeft, Code2, Eye, FileUp, LayoutTemplate, Loader2, Paperclip, Save
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
-import type { CampaignAttachment, ContactGroup } from "@packages/types";
+import {
+  countImagePlaceholders,
+  type CampaignAttachment,
+  type ContactGroup
+} from "@packages/types";
 import {
   EMAIL_TEMPLATES,
   SAMPLE_DATA,
@@ -86,6 +90,11 @@ export default function CampaignEditor() {
     }
     return html;
   }, [formData.html]);
+
+  const placeholderCount = useMemo(
+    () => countImagePlaceholders(formData.html),
+    [formData.html]
+  );
 
   const applyTemplate = (tpl: { html: string; fullHtml?: true }) => {
     if (tpl.fullHtml) {
@@ -313,6 +322,16 @@ export default function CampaignEditor() {
             )}
           </div>
         </div>
+
+        {/* Grey photo boxes do not render in an inbox, so they must be filled before sending. */}
+        {!isSent && placeholderCount > 0 && (
+          <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
+            <p className="font-medium">
+              {placeholderCount} {t.campaignForm.placeholdersRemaining}
+            </p>
+            <p className="text-xs mt-0.5">{t.campaignForm.placeholdersHint}</p>
+          </div>
+        )}
 
         {/* Editor / Preview — fills remaining space */}
         <div className="flex-1 flex flex-col min-h-0 card-elevated p-4">

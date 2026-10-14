@@ -55,32 +55,40 @@ function handleUnauthorized() {
   window.location.href = "/login";
 }
 
+type ErrorBody = { message?: unknown; error?: unknown };
+
 async function parseResponse<T>(res: Response): Promise<T> {
   // Read as text first: a 413 or 504 from nginx is an HTML page, and res.json() on it used to
   // surface as "Unexpected token '<'" instead of the status.
   const text = await res.text();
-  let data: { message?: unknown; error?: unknown } | null = null;
+  let data: ErrorBody | null = null;
   try {
-    data = text ? (JSON.parse(text) as typeof data) : null;
+    data = text ? (JSON.parse(text) as ErrorBody) : null;
   } catch {
     data = null;
   }
   if (!res.ok) {
-    const msg = Array.isArray(data?.message)
-      ? data!.message.join(", ")
-      : (typeof data?.message === "string" && data.message) ||
+    const message = data?.message;
+    const msg = Array.isArray(message)
+      ? message.join(", ")
+      : (typeof message === "string" && message) ||
         (typeof data?.error === "string" && data.error) ||
         `Request failed: ${res.status}`;
     throw new Error(msg);
   }
-  if (data === null && text) throw new Error("Unexpected response from the server");
+  if (data === null && text) {
+    throw new Error("Unexpected response from the server");
+  }
   return data as T;
 }
 
-/** A client-side ceiling for the slow assistant calls, so a stalled request ends in a message. */
+/**
+ * A client-side ceiling for the slow assistant calls, so a stalled request ends in a message.
+ * Above the server's worst case (two 120 s model calls) and below nginx's 600 s.
+ */
 function assistantSignal(): AbortSignal | undefined {
   return typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
-    ? AbortSignal.timeout(150_000)
+    ? AbortSignal.timeout(300_000)
     : undefined;
 }
 
@@ -185,10 +193,14 @@ async function multipartRequest<T>(
   return parseResponse<T>(res);
 }
 
-async function uploadRequest<T>(path: string, file: File): Promise<T> {
+async function uploadRequest<T>(
+  path: string,
+  file: File,
+  opts?: { signal?: AbortSignal }
+): Promise<T> {
   const form = new FormData();
   form.append("file", file);
-  return multipartRequest<T>(path, form);
+  return multipartRequest<T>(path, form, opts);
 }
 
 async function publicRequest<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -303,7 +315,8 @@ export const api = {
       transcribe(file: File) {
         return uploadRequest<AssistantTranscribeResponse>(
           "/admin/campaigns/assistant/transcribe",
-          file
+          file,
+          { signal: assistantSignal() }
         );
       }
     }

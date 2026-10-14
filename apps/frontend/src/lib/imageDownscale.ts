@@ -5,8 +5,9 @@
  * or a handwritten list is readable at 1600 px on its longest edge, and re-encoding as JPEG also
  * turns a HEIC (which Safari decodes natively) into a type every server-side model accepts.
  *
- * Resolves with the ORIGINAL file when anything fails (undecodable file, no canvas), so the server
- * still gets a chance to read it.
+ * When decoding fails here (HEIC on Chrome, for example) the original goes up unchanged only if
+ * the server can read its type; otherwise the promise rejects with "undecodable" and the caller
+ * asks for another photo rather than uploading bytes nobody can open.
  */
 
 export interface DownscaleOptions {
@@ -19,8 +20,13 @@ export interface DownscaleOptions {
 const DEFAULT_MAX_EDGE = 1600;
 const DEFAULT_QUALITY = 0.85;
 
-/** Types the server reads as-is, so a re-encode that grew the file can be dropped. */
-const SERVER_READABLE = new Set(["image/jpeg", "image/png", "image/webp"]);
+/** Types the server reads as-is: the only ones worth sending without a successful re-encode. */
+const SERVER_READABLE = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif"
+]);
 
 /** The size to draw at: scaled so the longest edge is at most maxEdge, never larger than the source. */
 export function targetSize(
@@ -96,6 +102,10 @@ export async function downscaleImage(
 ): Promise<File> {
   const maxEdge = opts.maxEdge ?? DEFAULT_MAX_EDGE;
   const quality = opts.quality ?? DEFAULT_QUALITY;
+  const original = () => {
+    if (SERVER_READABLE.has(file.type)) return file;
+    throw new Error("undecodable");
+  };
   let decoded: Decoded | null = null;
   try {
     decoded = await decode(file);
@@ -104,19 +114,20 @@ export async function downscaleImage(
     canvas.width = size.width;
     canvas.height = size.height;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return file;
+    if (!ctx) return original();
     ctx.drawImage(decoded.source, 0, 0, size.width, size.height);
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/jpeg", quality)
     );
-    if (!blob) return file;
+    if (!blob) return original();
+    // A re-encode that grew a file the server already reads bought nothing.
     if (blob.size >= file.size && SERVER_READABLE.has(file.type)) return file;
     return new File([blob], jpegName(file.name), {
       type: "image/jpeg",
       lastModified: file.lastModified
     });
   } catch {
-    return file;
+    return original();
   } finally {
     decoded?.release();
   }

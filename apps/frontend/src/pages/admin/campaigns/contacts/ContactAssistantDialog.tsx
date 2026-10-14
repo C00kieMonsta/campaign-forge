@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   CONTACT_CANDIDATE_FIELDS,
+  MAX_ASSISTANT_TEXT_CHARS,
   MAX_ASSISTANT_UPLOAD_BYTES,
   MAX_ASSISTANT_VOICE_SECONDS,
   type ContactCandidate,
   type ContactCandidateField,
-  type ContactConfidence
+  type ContactConfidence,
+  type CreateContactRequest,
+  type ExistingContactSummary
 } from "@packages/types";
 import {
   Button,
@@ -29,7 +32,9 @@ import {
   Loader2,
   RotateCcw,
   Sparkles,
-  UserPlus
+  UserPlus,
+  Users,
+  X
 } from "lucide-react";
 import VoiceCapture from "@/components/admin/VoiceCapture";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -73,6 +78,11 @@ interface ReviewCandidate {
   confidence: ContactConfidence;
   issues: string[];
   existing: boolean;
+  existingContact: ExistingContactSummary | null;
+  /** Why the server skipped this one on the last create, if it did. */
+  createError: string | null;
+  groupsBusy: boolean;
+  groupsAdded: boolean;
   showMore: boolean;
 }
 
@@ -135,6 +145,10 @@ function toReview(
     confidence: c.confidence,
     issues: c.issues ?? [],
     existing,
+    existingContact: c.existingContact ?? null,
+    createError: null,
+    groupsBusy: false,
+    groupsAdded: false,
     showMore: MORE_FIELDS.some((f) => fields[f].trim() !== "")
   };
 }
@@ -149,7 +163,8 @@ function toCandidate(c: ReviewCandidate): ContactCandidate {
     newGroupNames: c.newGroupNames,
     confidence: c.confidence,
     issues: c.issues,
-    existing: c.existing
+    existing: c.existing,
+    existingContact: c.existingContact
   };
 }
 
@@ -162,7 +177,7 @@ const CONFIDENCE_CLASSES: Record<ContactConfidence, string> = {
 const PILL =
   "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium";
 const CHIP =
-  "inline-flex min-h-9 items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-opacity";
+  "inline-flex min-h-9 items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-opacity disabled:cursor-default";
 const TILE =
   "flex min-h-[7rem] w-full flex-col items-center justify-center gap-2 rounded-xl border bg-background px-3 py-4 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground";
 /**
@@ -197,6 +212,7 @@ function Field({
   invalid = false,
   hint,
   disabled = false,
+  readOnly = false,
   textarea = false
 }: {
   label: string;
@@ -206,8 +222,10 @@ function Field({
   invalid?: boolean;
   hint?: string;
   disabled?: boolean;
+  readOnly?: boolean;
   textarea?: boolean;
 }) {
+  const muted = readOnly ? "bg-muted text-muted-foreground" : "";
   return (
     <div className="space-y-1">
       <Label className="text-xs text-muted-foreground">{label}</Label>
@@ -217,6 +235,8 @@ function Field({
           onChange={(e) => onChange(e.target.value)}
           rows={3}
           disabled={disabled}
+          readOnly={readOnly}
+          className={muted}
         />
       ) : (
         <Input
@@ -224,8 +244,9 @@ function Field({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
+          readOnly={readOnly}
           aria-invalid={invalid || undefined}
-          className={`h-10 ${invalid ? "border-destructive" : ""}`}
+          className={`h-10 ${invalid ? "border-destructive" : ""} ${muted}`}
         />
       )}
       {hint ? <p className="text-xs text-destructive">{hint}</p> : null}
@@ -243,6 +264,7 @@ interface CardProps {
   onToggleMore: () => void;
   onToggleGroup: (groupId: string) => void;
   onToggleNewGroup: (name: string) => void;
+  onAddToGroups: () => void;
 }
 
 /** Defined at module level so a re-render of the dialog does not remount the inputs. */
@@ -255,12 +277,23 @@ function CandidateCard({
   onSelect,
   onToggleMore,
   onToggleGroup,
-  onToggleNewGroup
+  onToggleNewGroup,
+  onAddToGroups
 }: CardProps) {
   const { t } = useLanguage();
   const ta = t.contactAssistant;
   const tf = t.contactForm;
   const f = c.fields;
+
+  // A contact the server already knows is shown, never edited or re-created.
+  const ex = c.existingContact;
+  const readOnly = !!ex;
+  const exName = ex ? `${ex.firstName ?? ""} ${ex.lastName ?? ""}`.trim() : "";
+  const unsubscribed = ex?.status === "unsubscribed";
+  const wantsGroups = c.groupIds.length + c.newGroupNames.length > 0;
+  const canAddToGroups = !!ex && !unsubscribed && !c.groupsAdded && wantsGroups;
+  const chipsDisabled =
+    disabled || c.groupsBusy || c.groupsAdded || unsubscribed;
 
   const emailProblem = problems.find(
     (p): p is Exclude<CandidateProblem, "existing"> => p !== "existing"
@@ -282,12 +315,13 @@ function CandidateCard({
       onChange={(v) => onField(key, v)}
       type={type}
       disabled={disabled}
+      readOnly={readOnly}
     />
   );
 
   return (
     <div
-      className={`space-y-3 rounded-xl border p-3 sm:p-4 ${c.selected ? "" : "bg-muted/30"}`}
+      className={`space-y-3 rounded-xl border p-3 sm:p-4 ${ex ? "bg-muted/40" : c.selected ? "" : "bg-muted/30"}`}
     >
       <div className="flex items-start gap-3">
         <Checkbox
@@ -300,12 +334,24 @@ function CandidateCard({
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-1.5">
             {title ? (
-              <span className="truncate font-medium">{title}</span>
+              <span
+                className={`truncate font-medium ${ex ? "text-muted-foreground" : ""}`}
+              >
+                {title}
+              </span>
             ) : null}
             <span className={`${PILL} ${CONFIDENCE_CLASSES[c.confidence]}`}>
               {ta.confidence}: {confidenceLabel}
             </span>
-            {c.existing ? (
+            {ex ? (
+              <span
+                className={`${PILL} bg-gray-100 text-gray-700 border-gray-200`}
+              >
+                {ta.alreadyInContacts}
+                {exName ? `: ${exName}` : ""}
+                {unsubscribed ? ` · ${ta.unsubscribed}` : ""}
+              </span>
+            ) : c.existing ? (
               <span
                 className={`${PILL} bg-gray-100 text-gray-700 border-gray-200`}
               >
@@ -313,8 +359,11 @@ function CandidateCard({
               </span>
             ) : null}
           </div>
-          {c.existing ? (
+          {!ex && c.existing ? (
             <p className="text-xs text-muted-foreground">{ta.existingHint}</p>
+          ) : null}
+          {c.createError ? (
+            <p className="text-xs text-destructive">{c.createError}</p>
           ) : null}
           {c.issues.map((issue, i) => (
             <p
@@ -342,6 +391,7 @@ function CandidateCard({
             invalid={!!emailProblem}
             hint={emailProblem ? ta[emailProblem] : undefined}
             disabled={disabled}
+            readOnly={readOnly}
           />
         </div>
         {text("mobilePhone", tf.mobilePhone, "tel")}
@@ -394,6 +444,7 @@ function CandidateCard({
             value={f.notes}
             onChange={(v) => onField("notes", v)}
             disabled={disabled}
+            readOnly={readOnly}
             textarea
           />
         </div>
@@ -409,7 +460,7 @@ function CandidateCard({
                 <button
                   key={g.id}
                   type="button"
-                  disabled={disabled}
+                  disabled={chipsDisabled}
                   onClick={() => onToggleGroup(g.id)}
                   className={`${CHIP} ${getGroupClasses(g.color)} ${on ? "opacity-100 ring-2 ring-current ring-offset-1" : "opacity-50"}`}
                 >
@@ -423,7 +474,7 @@ function CandidateCard({
                 <button
                   key={name}
                   type="button"
-                  disabled={disabled}
+                  disabled={chipsDisabled}
                   onClick={() => onToggleNewGroup(name)}
                   className={`${CHIP} border-dashed ${getGroupClasses("")} ${on ? "opacity-100 ring-2 ring-current ring-offset-1" : "opacity-50"}`}
                 >
@@ -435,6 +486,19 @@ function CandidateCard({
               );
             })}
           </div>
+          {canAddToGroups ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9"
+              onClick={onAddToGroups}
+              disabled={disabled || c.groupsBusy}
+            >
+              {c.groupsBusy ? <Loader2 className="animate-spin" /> : <Users />}
+              {ta.addToGroups}
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -444,9 +508,9 @@ function CandidateCard({
 /**
  * Adds contacts from a photo, a recording or a pasted text.
  *
- * One extract call, then a review step where every field is editable and nothing is created until
- * the user confirms. Candidates the server flagged as existing, or whose email is unreadable,
- * start unticked.
+ * One extract call, then a review step where every field is editable and nothing is written until
+ * the user confirms. Creation goes through the assistant's conditional endpoint only: the ordinary
+ * create and import calls replace an existing row and would re-subscribe someone who opted out.
  */
 export function ContactAssistantDialog({
   open,
@@ -461,8 +525,11 @@ export function ContactAssistantDialog({
 
   const [step, setStep] = useState<Step>("capture");
   const [source, setSource] = useState<Source>("text");
+  const [transcribing, setTranscribing] = useState(false);
   const [text, setText] = useState("");
-  const [preview, setPreview] = useState<string | null>(null);
+  /** The analysed photo and its object URL: kept across a failure so it can be sent again. */
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [sourceUrl, setSourceUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
   const [summary, setSummary] = useState("");
   const [candidates, setCandidates] = useState<ReviewCandidate[]>([]);
@@ -471,19 +538,29 @@ export function ContactAssistantDialog({
   const galleryRef = useRef<HTMLInputElement>(null);
   // Bumped on every reset so a response that arrives after the dialog closed is ignored.
   const runRef = useRef(0);
-  // Groups created in this session, so a retry after a failed contact does not create them twice.
+  // Groups created in this session, so a retry after a failure does not create them twice.
   const createdGroupsRef = useRef(new Map<string, string>());
 
-  // Revoke the thumbnail's object URL once it is replaced or the dialog unmounts.
+  // Revoke the photo's object URL once it is replaced or the dialog unmounts.
   useEffect(() => {
-    if (!preview) return;
-    return () => URL.revokeObjectURL(preview);
-  }, [preview]);
+    if (!sourceUrl) return;
+    return () => URL.revokeObjectURL(sourceUrl);
+  }, [sourceUrl]);
 
-  const backToCapture = () => {
+  /** Everything gone: the dialog closed. */
+  const reset = () => {
     setStep("capture");
     setText("");
-    setPreview(null);
+    setSourceFile(null);
+    setSourceUrl(null);
+    setTranscript(null);
+    setSummary("");
+    setCandidates([]);
+  };
+
+  /** Back to capture after a failure or Retour: the pasted text and the chosen photo stay. */
+  const goBack = () => {
+    setStep("capture");
     setTranscript(null);
     setSummary("");
     setCandidates([]);
@@ -493,20 +570,40 @@ export function ContactAssistantDialog({
     if (open) return;
     runRef.current += 1;
     createdGroupsRef.current = new Map();
-    backToCapture();
+    reset();
   }, [open]);
+
+  const dropPhoto = () => {
+    setSourceFile(null);
+    setSourceUrl(null);
+  };
+
+  /** A title in the user's language for a failed call; server messages are English. */
+  const errorTitle = (err: unknown, fallback: string) => {
+    const name = (err as { name?: unknown } | null)?.name;
+    if (name === "TimeoutError" || name === "AbortError") return ta.timeout;
+    if (/not configured/i.test(errorMessage(err))) return ta.notConfigured;
+    return fallback;
+  };
 
   const analyze = async (
     input: { file?: File; text?: string },
-    from: Source
+    from: Source,
+    opts: { keepTranscript?: boolean } = {}
   ) => {
     const run = runRef.current;
     setSource(from);
+    setTranscribing(from === "audio" && !opts.keepTranscript);
     setStep("analyzing");
+    // Only a photo pins a thumbnail above the review; a stale one would mislabel a text run.
+    if (from !== "image") dropPhoto();
     try {
       const res = await api.contacts.assistant.extract({ ...input, language });
       if (run !== runRef.current) return;
-      setTranscript(res.transcript);
+      // A re-analysis from the corrected transcript returns none; keep the user's text.
+      setTranscript(
+        (prev) => res.transcript ?? (opts.keepTranscript ? prev : null)
+      );
       setSummary(res.summary);
       setCandidates(
         res.candidates.map((c) => toReview(c, groups, existingEmails))
@@ -514,14 +611,8 @@ export function ContactAssistantDialog({
       setStep("review");
     } catch (err) {
       if (run !== runRef.current) return;
-      const msg = errorMessage(err);
-      toast({
-        title: /not configured/i.test(msg) ? ta.notConfigured : msg || ta.error,
-        variant: "destructive"
-      });
-      setStep("capture");
-    } finally {
-      if (run === runRef.current) setPreview(null);
+      toast({ title: errorTitle(err, ta.error), variant: "destructive" });
+      goBack();
     }
   };
 
@@ -535,15 +626,25 @@ export function ContactAssistantDialog({
     }
     const run = runRef.current;
     setSource("image");
+    setTranscribing(false);
     setStep("analyzing");
-    const small = await downscaleImage(file);
+    let small: File;
+    try {
+      small = await downscaleImage(file);
+    } catch {
+      if (run !== runRef.current) return;
+      toast({ title: ta.photoUnreadable, variant: "destructive" });
+      setStep("capture");
+      return;
+    }
     if (run !== runRef.current) return;
     if (small.size > MAX_ASSISTANT_UPLOAD_BYTES) {
       toast({ title: ta.photoTooLarge, variant: "destructive" });
       setStep("capture");
       return;
     }
-    setPreview(URL.createObjectURL(small));
+    setSourceFile(small);
+    setSourceUrl(URL.createObjectURL(small));
     await analyze({ file: small }, "image");
   };
 
@@ -560,6 +661,11 @@ export function ContactAssistantDialog({
     if (value) void analyze({ text: value }, "text");
   };
 
+  const reanalyze = () => {
+    const value = (transcript ?? "").trim();
+    if (value) void analyze({ text: value }, source, { keepTranscript: true });
+  };
+
   const patch = (id: string, fn: (c: ReviewCandidate) => ReviewCandidate) =>
     setCandidates((prev) => prev.map((c) => (c.id === id ? fn(c) : c)));
 
@@ -572,7 +678,7 @@ export function ContactAssistantDialog({
       const nowOk = !existing && isValidEmail(value);
       // A candidate that could not be ticked before gets ticked once its email is fixed.
       const selected = existing ? false : !wasOk && nowOk ? true : c.selected;
-      return { ...c, fields, existing, selected };
+      return { ...c, fields, existing, selected, createError: null };
     });
 
   const toggleGroup = (id: string, groupId: string) =>
@@ -609,59 +715,145 @@ export function ContactAssistantDialog({
   );
   const canCreate = selectedCount > 0 && !blocked;
 
-  const create = async () => {
-    const run = runRef.current;
-    setStep("creating");
+  /** Group ids by lowercase name: the page's groups plus the ones made in this session. */
+  const groupIndex = () => {
     const idByName = new Map<string, string>();
     for (const g of groups) idByName.set(g.name.trim().toLowerCase(), g.id);
     for (const [name, id] of createdGroupsRef.current) idByName.set(name, id);
+    return idByName;
+  };
 
-    let created = 0;
-    let touched = false;
+  const ensureGroup = async (
+    raw: string,
+    idByName: Map<string, string>
+  ): Promise<string | null> => {
+    const name = raw.trim();
+    if (!name) return null;
+    const lower = name.toLowerCase();
+    const known = idByName.get(lower);
+    if (known) return known;
+    const index = groups.length + createdGroupsRef.current.size;
+    const group = await api.groups.create({
+      name,
+      color: AUTO_COLORS[index % AUTO_COLORS.length]
+    });
+    idByName.set(lower, group.id);
+    createdGroupsRef.current.set(lower, group.id);
+    return group.id;
+  };
+
+  const create = async () => {
+    const run = runRef.current;
+    setStep("creating");
     try {
       const selected = candidates.filter((c) => c.selected);
-
-      const wanted: string[] = [];
-      for (const c of selected) {
-        for (const raw of c.newGroupNames) {
-          const name = raw.trim();
-          const lower = name.toLowerCase();
-          if (!name || idByName.has(lower)) continue;
-          if (wanted.some((w) => w.toLowerCase() === lower)) continue;
-          wanted.push(name);
-        }
-      }
-      let colorIndex = groups.length;
-      for (const name of wanted) {
-        const group = await api.groups.create({
-          name,
-          color: AUTO_COLORS[colorIndex++ % AUTO_COLORS.length]
-        });
-        idByName.set(name.toLowerCase(), group.id);
-        createdGroupsRef.current.set(name.toLowerCase(), group.id);
-        touched = true;
-      }
-
+      const idByName = groupIndex();
+      const items: CreateContactRequest[] = [];
       for (const c of selected) {
         const ids = new Set(c.groupIds);
         for (const raw of c.newGroupNames) {
-          const id = idByName.get(raw.trim().toLowerCase());
+          const id = await ensureGroup(raw, idByName);
           if (id) ids.add(id);
         }
-        await api.contacts.create(toCreatePayload(toCandidate(c), [...ids]));
-        created += 1;
-        touched = true;
-        // Done: a retry after a later failure must not create it twice.
-        patch(c.id, (x) => ({ ...x, selected: false, existing: true }));
+        items.push(toCreatePayload(toCandidate(c), [...ids]));
       }
 
-      toast({ title: `${created} ${ta.created}` });
+      const res = await api.contacts.assistant.create(items);
+
+      const createdByEmail = new Map(res.created.map((x) => [x.emailLower, x]));
+      const skipped = new Set(res.existing.map((e) => e.toLowerCase()));
+      const failed = new Map(
+        res.errors.map((e) => [e.email.toLowerCase(), e.reason])
+      );
+      if (run === runRef.current) {
+        setCandidates((prev) =>
+          prev.map((c) => {
+            const lower = c.fields.email.trim().toLowerCase();
+            const made = createdByEmail.get(lower);
+            if (made) {
+              return {
+                ...c,
+                selected: false,
+                existing: true,
+                createError: null,
+                existingContact: {
+                  firstName: made.firstName,
+                  lastName: made.lastName,
+                  status: made.status,
+                  groups: made.groups ?? []
+                },
+                // Its groups are set; the add-to-groups button has nothing left to do.
+                groupsAdded: true
+              };
+            }
+            if (skipped.has(lower)) {
+              return {
+                ...c,
+                selected: false,
+                existing: true,
+                createError: null
+              };
+            }
+            const reason = failed.get(lower);
+            return reason ? { ...c, createError: reason } : c;
+          })
+        );
+      }
+
+      const parts = [`${res.created.length} ${ta.created}`];
+      if (res.existing.length > 0) {
+        parts.push(`${res.existing.length} ${ta.alreadyPresent}`);
+      }
+      toast({ title: parts.join(", ") });
+      if (res.errors.length > 0) {
+        toast({ title: res.errors[0].reason, variant: "destructive" });
+      }
       await onCreated();
-      onOpenChange(false);
-    } catch (err) {
-      toast({ title: errorMessage(err), variant: "destructive" });
-      if (touched) await onCreated();
+      if (res.errors.length === 0) {
+        onOpenChange(false);
+        return;
+      }
       if (run === runRef.current) setStep("review");
+    } catch (err) {
+      toast({
+        title: errorTitle(err, errorMessage(err)),
+        variant: "destructive"
+      });
+      if (run === runRef.current) setStep("review");
+    }
+  };
+
+  /** Adds the ticked groups to a contact that already exists, instead of re-creating it. */
+  const addToGroups = async (c: ReviewCandidate) => {
+    const ex = c.existingContact;
+    if (!ex) return;
+    patch(c.id, (x) => ({ ...x, groupsBusy: true }));
+    try {
+      const idByName = groupIndex();
+      const ids = new Set([...ex.groups, ...c.groupIds]);
+      for (const raw of c.newGroupNames) {
+        const id = await ensureGroup(raw, idByName);
+        if (id) ids.add(id);
+      }
+      await api.contacts.update(c.fields.email.trim().toLowerCase(), {
+        groups: [...ids]
+      });
+      toast({ title: ta.addedToGroups });
+      patch(c.id, (x) => ({
+        ...x,
+        groupsBusy: false,
+        groupsAdded: true,
+        existingContact: x.existingContact
+          ? { ...x.existingContact, groups: [...ids] }
+          : null
+      }));
+      await onCreated();
+    } catch (err) {
+      toast({
+        title: errorTitle(err, errorMessage(err)),
+        variant: "destructive"
+      });
+      patch(c.id, (x) => ({ ...x, groupsBusy: false }));
     }
   };
 
@@ -670,7 +862,14 @@ export function ContactAssistantDialog({
   const title = inReview ? ta.reviewTitle : ta.title;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // Escape or an overlay tap must not drop the result of a create still in flight.
+        if (!next && creating) return;
+        onOpenChange(next);
+      }}
+    >
       <DialogContent className="flex max-h-[90dvh] flex-col gap-4 p-4 sm:max-w-3xl sm:p-6">
         <DialogHeader className="shrink-0">
           <DialogTitle className="pr-8">{title}</DialogTitle>
@@ -714,12 +913,43 @@ export function ContactAssistantDialog({
                 className="hidden"
                 onChange={(e) => void onImagePicked(e)}
               />
+              {sourceFile && sourceUrl ? (
+                <div className="flex items-center gap-3 rounded-xl border p-2">
+                  <img
+                    src={sourceUrl}
+                    alt=""
+                    className="h-14 w-14 shrink-0 rounded-lg object-cover"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                    {sourceFile.name}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9"
+                    onClick={() => void analyze({ file: sourceFile }, "image")}
+                  >
+                    <Sparkles />
+                    {ta.analyze}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={dropPhoto}
+                    aria-label={ta.cancel}
+                  >
+                    <X />
+                  </Button>
+                </div>
+              ) : null}
               <div className="space-y-2">
                 <Label>{ta.pasteText}</Label>
                 <Textarea
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   placeholder={ta.textPlaceholder}
+                  maxLength={MAX_ASSISTANT_TEXT_CHARS}
                   rows={4}
                 />
                 <div className="flex justify-end">
@@ -738,21 +968,19 @@ export function ContactAssistantDialog({
 
           {step === "analyzing" ? (
             <div className="flex flex-col items-center justify-center gap-4 py-10 text-center">
-              {preview ? (
+              {sourceUrl ? (
                 <img
-                  src={preview}
+                  src={sourceUrl}
                   alt=""
                   className="max-h-32 rounded-lg object-contain"
-                  onError={() => setPreview(null)}
+                  onError={() => setSourceUrl(null)}
                 />
               ) : null}
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
               <p className="text-sm font-medium">
-                {source === "audio"
-                  ? t.voiceCapture.transcribing
-                  : ta.analyzing}
+                {transcribing ? t.voiceCapture.transcribing : ta.analyzing}
               </p>
-              {source === "audio" ? (
+              {transcribing ? (
                 <p className="text-xs text-muted-foreground">{ta.analyzing}</p>
               ) : null}
             </div>
@@ -760,12 +988,53 @@ export function ContactAssistantDialog({
 
           {inReview ? (
             <div className="space-y-4">
-              {transcript ? (
-                <div className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+              {sourceUrl ? (
+                <div className="sticky top-0 z-10 space-y-1 bg-background pb-2">
                   <p className="text-xs font-medium text-muted-foreground">
-                    {ta.transcript}
+                    {ta.sourcePhoto}
                   </p>
-                  <p className="mt-1 whitespace-pre-wrap">{transcript}</p>
+                  <a
+                    href={sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block w-fit"
+                  >
+                    <img
+                      src={sourceUrl}
+                      alt={ta.sourcePhoto}
+                      className="max-h-40 rounded-lg border object-contain"
+                      onError={() => setSourceUrl(null)}
+                    />
+                  </a>
+                </div>
+              ) : null}
+              {transcript !== null ? (
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">
+                    {ta.transcript}
+                  </Label>
+                  <Textarea
+                    value={transcript}
+                    onChange={(e) => setTranscript(e.target.value)}
+                    maxLength={MAX_ASSISTANT_TEXT_CHARS}
+                    rows={3}
+                    disabled={creating}
+                  />
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      {ta.editTranscriptHint}
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9"
+                      onClick={reanalyze}
+                      disabled={creating || !transcript.trim()}
+                    >
+                      <RotateCcw />
+                      {ta.reanalyze}
+                    </Button>
+                  </div>
                 </div>
               ) : null}
               {summary ? (
@@ -779,11 +1048,7 @@ export function ContactAssistantDialog({
                   <p className="text-sm text-muted-foreground">
                     {ta.noneFound}
                   </p>
-                  <Button
-                    variant="outline"
-                    onClick={backToCapture}
-                    className="h-10"
-                  >
+                  <Button variant="outline" onClick={goBack} className="h-10">
                     <RotateCcw />
                     {ta.retake}
                   </Button>
@@ -805,6 +1070,7 @@ export function ContactAssistantDialog({
                     }
                     onToggleGroup={(groupId) => toggleGroup(c.id, groupId)}
                     onToggleNewGroup={(name) => toggleNewGroup(c.id, name)}
+                    onAddToGroups={() => void addToGroups(c)}
                   />
                 ))
               )}
@@ -816,7 +1082,7 @@ export function ContactAssistantDialog({
           {inReview ? (
             <Button
               variant="outline"
-              onClick={backToCapture}
+              onClick={goBack}
               disabled={creating}
               className="h-10 sm:mr-auto"
             >

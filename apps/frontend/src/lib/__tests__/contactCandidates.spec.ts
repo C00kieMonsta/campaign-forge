@@ -16,6 +16,7 @@ function candidate(
     confidence: "high",
     issues: [],
     existing: false,
+    existingContact: null,
     ...overrides
   };
 }
@@ -101,6 +102,7 @@ describe("toCreatePayload", () => {
     );
     expect(payload).toEqual({
       email: "marie.dupont@gmail.com",
+      status: "subscribed",
       firstName: "Marie",
       lastName: "Dupont",
       notes: "Rencontrée au marché"
@@ -119,6 +121,15 @@ describe("toCreatePayload", () => {
     expect(payload).not.toHaveProperty("newGroupNames");
   });
 
+  it("drops an email2 the server would refuse, keeps a readable one", () => {
+    expect(
+      toCreatePayload(candidate({ email2: "marie at home" }), [])
+    ).not.toHaveProperty("email2");
+    expect(
+      toCreatePayload(candidate({ email2: " marie@home.be " }), []).email2
+    ).toBe("marie@home.be");
+  });
+
   it("leaves groups undefined when there are none", () => {
     expect(toCreatePayload(candidate(), []).groups).toBeUndefined();
   });
@@ -132,7 +143,13 @@ describe("toCreatePayload", () => {
       }),
       []
     );
-    for (const key of ["id", "confidence", "issues", "existing"])
+    for (const key of [
+      "id",
+      "confidence",
+      "issues",
+      "existing",
+      "existingContact"
+    ])
       expect(payload).not.toHaveProperty(key);
   });
 });

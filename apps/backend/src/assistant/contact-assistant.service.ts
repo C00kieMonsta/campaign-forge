@@ -1,11 +1,18 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import {
   CONTACT_CANDIDATE_FIELDS,
+  createContactRequestSchema,
   MAX_ASSISTANT_UPLOAD_BYTES,
   type AssistantLanguage,
+  type Contact,
+  type ContactAssistantCreateResponse,
   type ContactAssistantExtractResponse,
   type ContactCandidate,
-  type ContactGroup
+  type ContactCandidateFields,
+  type ContactConfidence,
+  type ContactGroup,
+  type CreateContactRequest,
+  type ExistingContactSummary
 } from "@packages/types";
 import type OpenAI from "openai";
 import { z } from "zod";
@@ -14,15 +21,41 @@ import { GroupsService } from "../groups/groups.service";
 import { audioExtension } from "../shared/audio";
 import { MistralOcrService } from "../shared/mistral-ocr.service";
 import { OpenAiService } from "../shared/openai.service";
+import { formatZodError } from "../shared/validation";
 import { LANGUAGE_NAMES, ModelOutputError, parseModelJson } from "./model-json";
 
 /** What the vision models accept. HEIC is converted to JPEG by the browser before upload. */
-const IMAGE_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/gif"
-]);
+export type ImageType = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+
+/** The real type of the bytes, so the data URI says what they are, not what the client claimed. */
+export function sniffImageType(buf: Buffer): ImageType | null {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff)
+    return "image/jpeg";
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
+    return "image/png";
+  if (
+    buf.toString("ascii", 0, 4) === "RIFF" &&
+    buf.toString("ascii", 8, 12) === "WEBP"
+  )
+    return "image/webp";
+  if (buf.toString("ascii", 0, 4) === "GIF8") return "image/gif";
+  return null;
+}
+
+/** Model-written free text never carries a link into the address book. */
+export function stripUrls(text: string): string {
+  return text
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+const CONFIDENCE_RANK: Record<ContactConfidence, number> = {
+  low: 0,
+  medium: 1,
+  high: 2
+};
 
 export interface UploadedSource {
   buffer: Buffer;
@@ -79,6 +112,8 @@ export function normalizeSpokenEmail(raw: string): string {
     .trim()
     .toLowerCase()
     .replace(/^mailto:/, "");
+  // Already an address: leave it. "marie.point@gmail.com" has a surname in it, not a spoken dot.
+  if (isPlausibleEmail(s)) return s;
   s = s
     .replace(
       /\s*(arobase|arobas|at sign|\bat\b|apenstaartje|apestaartje)\s*/g,
@@ -179,6 +214,15 @@ export class ContactAssistantService {
       );
     }
     const kind = file ? sourceKind(file.mimetype) : "text";
+    let imageType: ImageType | null = null;
+    if (file && kind === "image") {
+      imageType = sniffImageType(file.buffer);
+      if (!imageType) {
+        throw new BadRequestException(
+          "The file does not look like a JPEG, PNG, WebP or GIF image"
+        );
+      }
+    }
     if (kind === null) {
       throw new BadRequestException(
         "Unsupported file: send a JPEG, PNG, WebP or GIF image, or an audio recording"
@@ -193,14 +237,32 @@ export class ContactAssistantService {
       const out = await this.openai.transcribe(
         file.buffer,
         `recording.${audioExtension(file.mimetype)}`,
-        file.mimetype
+        file.mimetype,
+        { timeoutMs: 60_000, maxRetries: 0 }
       );
       transcript = out.text.trim();
+      if (!transcript && !text) {
+        // Silence, a mis-tap, a muted mic. Nothing to extract from; the dialog shows the empty
+        // transcript so she can type instead of paying for a model call.
+        this.logger.log(
+          JSON.stringify({
+            action: "contactAssistantExtract",
+            source: "audio",
+            empty: true
+          })
+        );
+        return {
+          candidates: [],
+          transcript: "",
+          summary: "",
+          newGroupNames: []
+        };
+      }
     }
 
     let raw: string;
-    if (file && kind === "image") {
-      raw = await this.readImage(system, file, text);
+    if (file && imageType) {
+      raw = await this.readImage(system, file, imageType, text);
     } else {
       const sources = joinSources({
         text,
@@ -235,7 +297,7 @@ export class ContactAssistantService {
     return {
       candidates,
       transcript,
-      summary: (parsed.summary ?? "").trim(),
+      summary: stripUrls(parsed.summary ?? "").slice(0, 300),
       newGroupNames
     };
   }
@@ -248,6 +310,7 @@ export class ContactAssistantService {
   private async readImage(
     system: string,
     file: UploadedSource,
+    imageType: ImageType,
     text: string | undefined
   ): Promise<string> {
     const parts: OpenAI.Chat.ChatCompletionContentPart[] = [
@@ -260,7 +323,7 @@ export class ContactAssistantService {
       {
         type: "image_url",
         image_url: {
-          url: `data:${file.mimetype};base64,${file.buffer.toString("base64")}`,
+          url: `data:${imageType};base64,${file.buffer.toString("base64")}`,
           detail: "high"
         }
       }
@@ -280,7 +343,7 @@ export class ContactAssistantService {
       );
       const pages = await this.ocr.ocr(
         file.buffer,
-        file.mimetype,
+        imageType,
         file.originalname
       );
       const ocrText = pages.join("\n").trim();
@@ -303,7 +366,8 @@ export class ContactAssistantService {
         json: true,
         tier: "balanced",
         depth: "standard",
-        maxTokens: 4000
+        maxTokens: 4000,
+        requestOptions: { timeoutMs: 120_000, maxRetries: 0 }
       });
     const first = await call(user);
     try {
@@ -328,6 +392,81 @@ export class ContactAssistantService {
     }
   }
 
+  /**
+   * Writes the confirmed candidates, conditionally.
+   *
+   * The ordinary create and import endpoints do an unconditional put: a photographed sign-up sheet
+   * that lists a long-standing client would wipe her groups and notes, and re-subscribe someone
+   * who opted out. Here an existing row is reported and left alone.
+   */
+  async createMany(items: unknown[]): Promise<ContactAssistantCreateResponse> {
+    const created: Contact[] = [];
+    const existing: string[] = [];
+    const errors: { email: string; reason: string }[] = [];
+    const seen = new Set<string>();
+    const now = new Date().toISOString();
+
+    for (const item of items) {
+      // One by one, so a single bad row is reported and the others are still written.
+      const checked = createContactRequestSchema.safeParse(item);
+      if (!checked.success) {
+        const raw = (item as { email?: unknown } | null)?.email;
+        errors.push({
+          email: typeof raw === "string" ? raw : "",
+          reason: formatZodError(checked.error)
+        });
+        continue;
+      }
+      const data: CreateContactRequest = checked.data;
+      const email = data.email.trim();
+      const emailLower = email.toLowerCase();
+      if (seen.has(emailLower)) {
+        errors.push({ email, reason: "Listed twice in the request" });
+        continue;
+      }
+      seen.add(emailLower);
+      const { status, ...rest } = data;
+      const contact: Contact = {
+        ...rest,
+        emailLower,
+        email,
+        status: status ?? "subscribed",
+        source: "admin",
+        createdAt: now,
+        updatedAt: now
+      };
+      try {
+        await this.contacts.createConditional(contact);
+        created.push(contact);
+      } catch (err) {
+        if (isConditionalCheckFailed(err)) existing.push(emailLower);
+        else
+          errors.push({
+            email,
+            reason: err instanceof Error ? err.message : String(err)
+          });
+      }
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        action: "contactAssistantCreate",
+        requested: items.length,
+        created: created.length,
+        existing: existing.length,
+        errors: errors.length
+      })
+    );
+    return { created, existing, errors };
+  }
+
+  /**
+   * Model output into review cards: normalised, de-duplicated, checked against the address book.
+   *
+   * Two rows with the same email in one batch (a card photographed twice, a sheet listing someone
+   * twice, the model splitting one person in two) become one card with the gaps filled from the
+   * other, and an issue saying so. Lookups go out together, one per distinct email.
+   */
   private async finishCandidates(
     contacts: z.infer<typeof modelContactSchema>[],
     groups: ContactGroup[],
@@ -338,87 +477,163 @@ export class ContactAssistantService {
     );
     const msg = MESSAGES[language];
 
-    return Promise.all(
-      contacts.map(async (c, i) => {
-        const issues = [...(c.issues ?? [])]
-          .map((s) => s.trim())
-          .filter(Boolean);
-        let email = c.email ? normalizeSpokenEmail(c.email) : "";
-        if (email && !isPlausibleEmail(email)) {
-          issues.push(`${msg.invalidEmail}: ${email}`);
-        }
-        if (!email) {
-          if (!issues.some((s) => s.toLowerCase().includes("mail"))) {
-            issues.push(msg.missingEmail);
-          }
-          email = "";
-        }
+    const drafts = contacts.map((c) => {
+      const issues = (c.issues ?? [])
+        .map((s) => stripUrls(s).slice(0, 300))
+        .filter(Boolean)
+        .slice(0, 10);
+      let email = c.email ? normalizeSpokenEmail(c.email) : "";
+      if (email && !isPlausibleEmail(email)) {
+        issues.push(`${msg.invalidEmail}: ${email}`);
+      }
+      if (!email) {
+        email = "";
+        if (!issues.some((s) => /mail/i.test(s))) issues.push(msg.missingEmail);
+      }
 
-        const fields: Partial<
-          Record<(typeof CONTACT_CANDIDATE_FIELDS)[number], string>
-        > = {};
-        for (const key of CONTACT_CANDIDATE_FIELDS) {
-          const value = c[key];
-          if (typeof value === "string" && value.trim())
-            fields[key] = value.trim();
-        }
-        if (fields.email2) {
-          fields.email2 = normalizeSpokenEmail(fields.email2);
-          if (!isPlausibleEmail(fields.email2)) delete fields.email2;
-        }
-        if (fields.birthday && !/^\d{4}-\d{2}-\d{2}$/.test(fields.birthday)) {
-          delete fields.birthday;
-        }
+      const fields: ContactCandidateFields = {};
+      for (const key of CONTACT_CANDIDATE_FIELDS) {
+        const value = c[key];
+        if (typeof value === "string" && value.trim())
+          fields[key] = value.trim();
+      }
+      if (fields.notes) fields.notes = stripUrls(fields.notes).slice(0, 300);
+      if (fields.email2) {
+        fields.email2 = normalizeSpokenEmail(fields.email2);
+        if (!isPlausibleEmail(fields.email2)) delete fields.email2;
+      }
+      if (fields.birthday && !/^\d{4}-\d{2}-\d{2}$/.test(fields.birthday)) {
+        delete fields.birthday;
+      }
 
-        const groupIds: string[] = [];
-        const newGroupNames: string[] = [];
-        const seenNew = new Set<string>();
-        for (const name of c.groupNames ?? []) {
-          const clean = name.trim();
-          if (!clean) continue;
-          const id = groupByName.get(clean.toLowerCase());
-          if (id) {
-            if (!groupIds.includes(id)) groupIds.push(id);
-          } else if (!seenNew.has(clean.toLowerCase())) {
-            seenNew.add(clean.toLowerCase());
-            newGroupNames.push(clean.slice(0, 100));
-          }
+      const groupIds: string[] = [];
+      const newGroupNames: string[] = [];
+      for (const name of c.groupNames ?? []) {
+        const clean = name.trim();
+        if (!clean) continue;
+        const id = groupByName.get(clean.toLowerCase());
+        if (id) {
+          if (!groupIds.includes(id)) groupIds.push(id);
+        } else if (
+          !newGroupNames.some((n) => n.toLowerCase() === clean.toLowerCase())
+        ) {
+          newGroupNames.push(clean.slice(0, 100));
         }
+      }
 
-        const existing =
-          email && isPlausibleEmail(email)
-            ? (await this.contacts.get(email)) !== null
-            : false;
+      return {
+        fields,
+        email,
+        groupIds,
+        newGroupNames,
+        issues,
+        confidence: (c.confidence ?? "medium") as ContactConfidence,
+        times: 1
+      };
+    });
 
-        return {
-          id: `c${i + 1}`,
-          ...fields,
-          email,
-          groupIds,
-          newGroupNames,
-          confidence: c.confidence ?? "medium",
-          issues,
-          existing
-        };
-      })
-    );
+    const merged: typeof drafts = [];
+    const byEmail = new Map<string, (typeof drafts)[number]>();
+    for (const d of drafts) {
+      const prev = d.email ? byEmail.get(d.email) : undefined;
+      if (!prev) {
+        if (d.email) byEmail.set(d.email, d);
+        merged.push(d);
+        continue;
+      }
+      prev.times += 1;
+      for (const key of CONTACT_CANDIDATE_FIELDS) {
+        if (!prev.fields[key] && d.fields[key])
+          prev.fields[key] = d.fields[key];
+      }
+      for (const id of d.groupIds) {
+        if (!prev.groupIds.includes(id)) prev.groupIds.push(id);
+      }
+      for (const n of d.newGroupNames) {
+        if (
+          !prev.newGroupNames.some((x) => x.toLowerCase() === n.toLowerCase())
+        )
+          prev.newGroupNames.push(n);
+      }
+      for (const issue of d.issues) {
+        if (!prev.issues.includes(issue)) prev.issues.push(issue);
+      }
+      if (CONFIDENCE_RANK[d.confidence] < CONFIDENCE_RANK[prev.confidence]) {
+        prev.confidence = d.confidence;
+      }
+    }
+    for (const d of merged) {
+      if (d.times > 1) d.issues.push(msg.appearsTimes(d.times));
+    }
+
+    const emails = [
+      ...new Set(merged.map((d) => d.email).filter((e) => isPlausibleEmail(e)))
+    ];
+    const rows = await Promise.all(emails.map((e) => this.contacts.get(e)));
+    const existingByEmail = new Map<string, Contact>();
+    emails.forEach((e, i) => {
+      const row = rows[i];
+      if (row) existingByEmail.set(e, row);
+    });
+
+    return merged.map((d, i) => {
+      const row = d.email ? existingByEmail.get(d.email) : undefined;
+      return {
+        id: `c${i + 1}`,
+        ...d.fields,
+        email: d.email,
+        groupIds: d.groupIds,
+        newGroupNames: d.newGroupNames,
+        confidence: d.confidence,
+        issues: d.issues,
+        existing: row !== undefined,
+        existingContact: row ? summarizeExisting(row) : null
+      };
+    });
   }
 }
 
 const MESSAGES: Record<
   AssistantLanguage,
-  { invalidEmail: string; missingEmail: string }
+  {
+    invalidEmail: string;
+    missingEmail: string;
+    appearsTimes: (n: number) => string;
+  }
 > = {
-  fr: { invalidEmail: "Email à vérifier", missingEmail: "Aucun email lisible" },
+  fr: {
+    invalidEmail: "Email à vérifier",
+    missingEmail: "Aucun email lisible",
+    appearsTimes: (n) => `Apparaît ${n} fois dans la source`
+  },
   nl: {
     invalidEmail: "E-mail te controleren",
-    missingEmail: "Geen leesbaar e-mailadres"
+    missingEmail: "Geen leesbaar e-mailadres",
+    appearsTimes: (n) => `Komt ${n} keer voor in de bron`
   }
 };
 
+function summarizeExisting(row: Contact): ExistingContactSummary {
+  return {
+    firstName: row.firstName,
+    lastName: row.lastName,
+    status: row.status,
+    groups: row.groups ?? []
+  };
+}
+
+/** DynamoDB's answer to `attribute_not_exists(emailLower)` on a row that exists. */
+function isConditionalCheckFailed(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { name?: unknown }).name === "ConditionalCheckFailedException"
+  );
+}
+
 function sourceKind(mimetype: string): "image" | "audio" | null {
   const type = (mimetype || "").toLowerCase().split(";")[0].trim();
-  if (IMAGE_TYPES.has(type)) return "image";
+  if (type.startsWith("image/")) return "image";
   if (type.startsWith("audio/")) return "audio";
   return null;
 }

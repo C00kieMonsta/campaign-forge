@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import {
+  contactAssistantCreateRequestSchema,
   contactAssistantExtractFieldsSchema,
   MAX_ASSISTANT_UPLOAD_BYTES
 } from "@packages/types";
@@ -25,6 +26,15 @@ export class ContactAssistantController {
   private readonly logger = new Logger(ContactAssistantController.name);
 
   constructor(private assistant: ContactAssistantService) {}
+
+  /** The confirmed cards. Conditional writes: an existing email is reported, never replaced. */
+  @Post("create")
+  async create(@Body() body: unknown) {
+    const parsed = contactAssistantCreateRequestSchema.safeParse(body);
+    if (!parsed.success)
+      throw new BadRequestException(formatZodError(parsed.error));
+    return this.assistant.createMany(parsed.data.contacts);
+  }
 
   @Post("extract")
   @UseInterceptors(

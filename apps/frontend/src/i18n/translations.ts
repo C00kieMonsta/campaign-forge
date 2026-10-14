@@ -258,7 +258,8 @@ export const translations = {
         "Des emplacements photo sont encore vides. Vous pourrez les remplir dans l'éditeur avant l'envoi.",
       createCampaign: "Créer la campagne",
       creating: "Création…",
-      created: "Campagne créée. Vous pouvez la retoucher ici avant de l'envoyer.",
+      created:
+        "Campagne créée. Vous pouvez la retoucher ici avant de l'envoyer.",
       startOver: "Recommencer",
       startOverConfirm: "Effacer la conversation et la campagne en cours ?",
       notConfigured: "L'assistant n'est pas configuré sur ce serveur.",
@@ -308,7 +309,8 @@ export const translations = {
       cancel: "Annuler",
       retake: "Recommencer",
       photoTooLarge: "Image trop volumineuse (max 10 Mo)",
-      unsupportedFile: "Fichier non pris en charge : image ou enregistrement audio uniquement",
+      unsupportedFile:
+        "Fichier non pris en charge : image ou enregistrement audio uniquement",
       notConfigured: "L'assistant n'est pas configuré sur ce serveur.",
       error: "L'analyse a échoué. Réessayez.",
       alreadyInContacts: "Déjà dans vos contacts",
@@ -321,7 +323,8 @@ export const translations = {
       photoUnreadable:
         "Format de photo non reconnu. Sur iPad, choisissez la photo depuis l'app Photos.",
       alreadyPresent: "déjà présent(s)",
-      sourcePhoto: "Photo analysée"
+      sourcePhoto: "Photo analysée",
+      timeout: "L'assistant met trop de temps à répondre. Réessayez."
     },
     lex: {
       title: "Lex",
@@ -1179,7 +1182,8 @@ export const translations = {
         "Beschrijf de campagne die u wilt versturen. De assistent schrijft de naam, het onderwerp en de inhoud, en voorziet plaatsen voor uw foto's.",
       welcome:
         "Hallo! Beschrijf de campagne die u wilt versturen: de aanleiding, het aanbod, de toon, voor wie ze bedoeld is. Bijvoorbeeld: « Een lentenieuwsbrief met de TM7-promo en mijn recept voor aardbeientaart ».",
-      suggestion1: "Nieuwsbrief van de maand met de promo van het moment en een recept",
+      suggestion1:
+        "Nieuwsbrief van de maand met de promo van het moment en een recept",
       suggestion2: "Uitnodiging voor een kookworkshop bij mij thuis",
       suggestion3: "Eindejaarswensen met een cadeauaanbieding",
       composerPlaceholder: "Beschrijf uw campagne…",
@@ -1211,7 +1215,8 @@ export const translations = {
         "Sommige fotoplaatsen zijn nog leeg. U kunt ze in de editor invullen vóór het verzenden.",
       createCampaign: "Campagne aanmaken",
       creating: "Aanmaken…",
-      created: "Campagne aangemaakt. U kunt ze hier bijwerken vóór het verzenden.",
+      created:
+        "Campagne aangemaakt. U kunt ze hier bijwerken vóór het verzenden.",
       startOver: "Opnieuw beginnen",
       startOverConfirm: "Het gesprek en de huidige campagne wissen?",
       notConfigured: "De assistent is niet geconfigureerd op deze server.",
@@ -1261,7 +1266,8 @@ export const translations = {
       cancel: "Annuleren",
       retake: "Opnieuw",
       photoTooLarge: "Afbeelding te groot (max 10 MB)",
-      unsupportedFile: "Bestand niet ondersteund: alleen een afbeelding of een geluidsopname",
+      unsupportedFile:
+        "Bestand niet ondersteund: alleen een afbeelding of een geluidsopname",
       notConfigured: "De assistent is niet geconfigureerd op deze server.",
       error: "De analyse is mislukt. Probeer opnieuw.",
       alreadyInContacts: "Al in uw contacten",
@@ -1274,7 +1280,8 @@ export const translations = {
       photoUnreadable:
         "Fotoformaat niet herkend. Kies op iPad de foto via de app Foto's.",
       alreadyPresent: "al aanwezig",
-      sourcePhoto: "Geanalyseerde foto"
+      sourcePhoto: "Geanalyseerde foto",
+      timeout: "De assistent doet er te lang over. Probeer opnieuw."
     },
     lex: {
       title: "Lex",

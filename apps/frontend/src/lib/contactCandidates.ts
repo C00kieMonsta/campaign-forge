@@ -1,7 +1,7 @@
 import {
   CONTACT_CANDIDATE_FIELDS,
-  type Contact,
-  type ContactCandidate
+  type ContactCandidate,
+  type CreateContactRequest
 } from "@packages/types";
 
 /**
@@ -49,19 +49,25 @@ export function candidateProblems(
   return problems;
 }
 
-/** The body for api.contacts.create: the email, the non-empty fields trimmed, and the groups. */
+/**
+ * One item for api.contacts.assistant.create: the email, the non-empty fields trimmed, the groups.
+ * An email2 that is not an address is dropped: the server validates it and would refuse the batch.
+ */
 export function toCreatePayload(
   candidate: ContactCandidate,
   groupIds: string[]
-): Partial<Contact> & { email: string } {
-  const payload: Partial<Contact> & { email: string } = {
-    email: candidate.email.trim()
+): CreateContactRequest {
+  const payload: CreateContactRequest = {
+    email: candidate.email.trim(),
+    status: "subscribed"
   };
   for (const field of CONTACT_CANDIDATE_FIELDS) {
     const value = candidate[field];
     if (typeof value !== "string") continue;
     const trimmed = value.trim();
-    if (trimmed) payload[field] = trimmed;
+    if (!trimmed) continue;
+    if (field === "email2" && !isValidEmail(trimmed)) continue;
+    payload[field] = trimmed;
   }
   payload.groups = groupIds.length ? groupIds : undefined;
   return payload;

@@ -68,6 +68,7 @@ JWT_SECRET=$(ssm_get "JWT_SECRET")
 DATABASE_URL=$(ssm_get_optional "DATABASE_URL")
 OPENAI_API_KEY_SECRET_ARN=$(ssm_get_optional "OPENAI_API_KEY_SECRET_ARN")
 LEX_DOCUMENTS_BUCKET=$(ssm_get_optional "LEX_DOCUMENTS_BUCKET")
+MISTRAL_API_KEY=$(ssm_get_optional "MISTRAL_API_KEY")
 
 # ── Clone repo ────────────────────────────────────────────────────────────────
 log "Cloning repository..."
@@ -98,6 +99,7 @@ append_if_set() { if [ -n "$2" ]; then echo "$1=$2" >> "${APP_DIR}/apps/backend/
 append_if_set DATABASE_URL "$DATABASE_URL"
 append_if_set OPENAI_API_KEY_SECRET_ARN "$OPENAI_API_KEY_SECRET_ARN"
 append_if_set LEX_DOCUMENTS_BUCKET "$LEX_DOCUMENTS_BUCKET"
+append_if_set MISTRAL_API_KEY "$MISTRAL_API_KEY"
 chown "$APP_USER:$APP_USER" "${APP_DIR}/apps/backend/.env"
 chmod 600 "${APP_DIR}/apps/backend/.env"
 
@@ -122,6 +124,8 @@ env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd \
 # ── Nginx config ──────────────────────────────────────────────────────────────
 log "Configuring Nginx..."
 NGINX_DOMAIN="${DOMAIN}"
+# The assistant location block is checked in with the app; the deploy refreshes it on every run.
+install -D -m 0644 "${APP_DIR}/scripts/nginx/assistant-locations.inc" /etc/nginx/campaign-forge/assistant-locations.inc
 cat > /etc/nginx/conf.d/campaign-forge.conf <<'NGINX_EOF'
 server {
     listen 80;
@@ -189,20 +193,8 @@ server {
         chunked_transfer_encoding on;
     }
 
-    # Campaigns-app assistants. One model call per request, synchronously: a full email draft or
-    # the reading of a photographed business card takes longer than the default 60s read timeout.
-    # The extract route carries the photo or the recording itself (multipart), hence the body size.
-    location ~ ^/api/admin/(campaigns/assistant/(turn|transcribe)|contacts/assistant/extract)$ {
-        proxy_pass           http://localhost:3001;
-        proxy_http_version   1.1;
-        proxy_set_header     Host $host;
-        proxy_set_header     X-Real-IP $remote_addr;
-        proxy_set_header     X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header     X-Forwarded-Proto $scheme;
-        proxy_read_timeout   600s;
-        proxy_send_timeout   600s;
-        client_max_body_size 12m;
-    }
+    # Assistant routes (long model calls, multipart photo). One file, shared with the deploy.
+    include /etc/nginx/campaign-forge/assistant-locations.inc;
 
     location / {
         proxy_pass         http://localhost:3001;

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Campaign } from "@packages/types";
+import { countImagePlaceholders } from "@packages/types";
 import {
   Button,
   Checkbox,
@@ -224,12 +225,24 @@ export default function Campaigns() {
       minute: "2-digit"
     });
 
+  // Grey photo boxes per draft, for the chip and the send guard.
+  const placeholderCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const c of campaigns) {
+      counts[c.campaignId] = countImagePlaceholders(c.html ?? "");
+    }
+    return counts;
+  }, [campaigns]);
+
   const sentCampaignsCount = campaigns.filter((c) => c.status === "sent").length;
   const visibleCampaigns = showSent
     ? campaigns
     : campaigns.filter((c) => c.status !== "sent");
   const sendingToAllContacts =
     !sendingCampaign?.targetGroups || sendingCampaign.targetGroups.length === 0;
+  const sendingPlaceholders = sendingCampaign
+    ? countImagePlaceholders(sendingCampaign.html ?? "")
+    : 0;
 
   return (
     <div className="animate-fade-up">
@@ -249,17 +262,17 @@ export default function Campaigns() {
           )}
           <Button
             variant="outline"
+            onClick={() => navigate("/campaigns/mailings/new")}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            {t.campaigns.createBlank}
+          </Button>
+          <Button
             onClick={() => navigate("/campaigns/mailings/assistant")}
+            className="gradient-terracotta text-white hover:opacity-90"
           >
             <Sparkles className="h-4 w-4 mr-2" />
             {t.campaigns.createWithAssistant}
-          </Button>
-          <Button
-            onClick={() => navigate("/campaigns/mailings/new")}
-            className="gradient-terracotta text-white hover:opacity-90"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            {t.campaigns.create}
           </Button>
         </div>
       </div>
@@ -275,17 +288,17 @@ export default function Campaigns() {
             <div className="flex flex-wrap items-center justify-center gap-2">
               <Button
                 variant="outline"
+                onClick={() => navigate("/campaigns/mailings/new")}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                {t.campaigns.createBlank}
+              </Button>
+              <Button
                 onClick={() => navigate("/campaigns/mailings/assistant")}
+                className="gradient-terracotta text-white hover:opacity-90"
               >
                 <Sparkles className="h-4 w-4 mr-2" />
                 {t.campaigns.createWithAssistant}
-              </Button>
-              <Button
-                onClick={() => navigate("/campaigns/mailings/new")}
-                className="gradient-terracotta text-white hover:opacity-90"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                {t.campaigns.create}
               </Button>
             </div>
           </div>
@@ -295,17 +308,17 @@ export default function Campaigns() {
             <div className="flex flex-wrap items-center justify-center gap-2">
               <Button
                 variant="outline"
+                onClick={() => navigate("/campaigns/mailings/new")}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                {t.campaigns.createBlank}
+              </Button>
+              <Button
                 onClick={() => navigate("/campaigns/mailings/assistant")}
+                className="gradient-terracotta text-white hover:opacity-90"
               >
                 <Sparkles className="h-4 w-4 mr-2" />
                 {t.campaigns.createWithAssistant}
-              </Button>
-              <Button
-                onClick={() => navigate("/campaigns/mailings/new")}
-                className="gradient-terracotta text-white hover:opacity-90"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                {t.campaigns.create}
               </Button>
             </div>
           </div>
@@ -393,6 +406,12 @@ export default function Campaigns() {
                         ? t.campaigns.sending
                         : t.campaigns.draft}
                     </span>
+                    {campaign.status === "draft" &&
+                      placeholderCounts[campaign.campaignId] > 0 && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-amber-100 text-amber-700 border-amber-200 ml-1.5">
+                          {`${t.campaigns.missingPhotos} (${placeholderCounts[campaign.campaignId]})`}
+                        </span>
+                      )}
                     {campaign.sentAt && (
                       <span className="block text-xs text-muted-foreground mt-0.5">
                         {formatDate(campaign.sentAt)}
@@ -505,6 +524,12 @@ export default function Campaigns() {
                 <span>{t.campaignForm.sendConfirmAllWarning}</span>
               </div>
             )}
+            {sendingPlaceholders > 0 && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>{t.campaignForm.placeholdersBlockSend}</span>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendDialogOpen(false)} disabled={isSending}>
@@ -512,7 +537,7 @@ export default function Campaigns() {
             </Button>
             <Button
               onClick={handleSendCampaign}
-              disabled={isSending}
+              disabled={isSending || sendingPlaceholders > 0}
               className="gradient-terracotta text-white hover:opacity-90"
             >
               {isSending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}

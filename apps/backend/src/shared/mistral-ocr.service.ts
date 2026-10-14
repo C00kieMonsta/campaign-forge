@@ -121,7 +121,9 @@ export class MistralOcrService {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`
         },
-        body
+        body,
+        // Bounded: the contact assistant falls back to this while a person waits.
+        signal: AbortSignal.timeout(60_000)
       });
     } catch (err) {
       return {

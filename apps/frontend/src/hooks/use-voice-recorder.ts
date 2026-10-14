@@ -98,6 +98,9 @@ export function useVoiceRecorder(
   // Set when stop() is awaiting the recorder's final dataavailable/stop events.
   const settleRef = useRef<((file: File | null) => void) | null>(null);
 
+  /** Set by the unmount effect, so a getUserMedia that resolves afterwards releases its stream. */
+  const unmountedRef = useRef(false);
+
   const teardown = useCallback(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -109,11 +112,22 @@ export function useVoiceRecorder(
     setIsRecording(false);
   }, []);
 
-  useEffect(() => teardown, [teardown]);
+  useEffect(
+    () => () => {
+      unmountedRef.current = true;
+      teardown();
+    },
+    [teardown]
+  );
 
   const start = useCallback(async () => {
     if (recorderRef.current) return;
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (unmountedRef.current) {
+      // The dialog closed while the permission prompt was up. Nothing is listening any more.
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
     const mimeType = pickMimeType();
     const recorder = new MediaRecorder(
       stream,
@@ -184,6 +198,18 @@ export function useVoiceRecorder(
 
   const stop = useCallback(() => {
     const recorder = recorderRef.current;
+    if (
+      recorder &&
+      recorder.state === "inactive" &&
+      cappedRef.current &&
+      !stoppedAtRef.current
+    ) {
+      // The cap just stopped the recorder and its onstop has not fired yet. Settle from there,
+      // so the caller gets the capped audio rather than "nothing recorded" followed by onAutoStop.
+      return new Promise<File | null>((resolve) => {
+        settleRef.current = resolve;
+      });
+    }
     if (!recorder || recorder.state === "inactive") {
       teardown();
       return Promise.resolve(null);

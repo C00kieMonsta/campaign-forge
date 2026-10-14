@@ -63,7 +63,7 @@ describe("slotStates", () => {
     expect(states[1]).toMatchObject({ id: "recipe", filled: false });
   });
 
-  it("counts a slot whose image was deleted as empty with no src", () => {
+  it("counts a declared slot whose image was deleted as empty with no src", () => {
     const withoutRecipe = html.replace(
       `<img data-slot="recipe" src="${PLACEHOLDER}" alt="La recette">`,
       ""
@@ -77,8 +77,41 @@ describe("slotStates", () => {
     });
   });
 
-  it("returns nothing for no slots", () => {
-    expect(slotStates(html, [])).toEqual([]);
+  it("appends slots the html carries but the draft did not declare", () => {
+    // Only hero is declared; recipe exists in the html alone.
+    const states = slotStates(html, [slots[0]]);
+    expect(states.map((s) => s.id)).toEqual(["hero", "recipe"]);
+    expect(states[1]).toEqual({
+      id: "recipe",
+      label: "recipe",
+      description: undefined,
+      filled: false,
+      src: PLACEHOLDER
+    });
+  });
+
+  it("reads an undeclared slot that already holds an upload as filled", () => {
+    const states = slotStates(replaceSlotImage(html, "recipe", PHOTO), [
+      slots[0]
+    ]);
+    expect(states[1]).toMatchObject({
+      id: "recipe",
+      label: "recipe",
+      filled: true,
+      src: PHOTO
+    });
+  });
+
+  it("keeps the declared order and labels ahead of the html extras", () => {
+    const reversed = [slots[1], slots[0]];
+    expect(slotStates(html, reversed).map((s) => s.label)).toEqual([
+      "La recette",
+      "Photo principale"
+    ]);
+  });
+
+  it("returns nothing when neither the draft nor the html has a slot", () => {
+    expect(slotStates("<p>no images</p>", [])).toEqual([]);
   });
 });
 
@@ -129,6 +162,11 @@ describe("emptySlotCount", () => {
     );
     expect(emptySlotCount(bothFilled, slots)).toBe(0);
     expect(emptySlotCount("<p>no images</p>", slots)).toBe(2);
-    expect(emptySlotCount(html, [])).toBe(0);
+  });
+
+  it("counts placeholders the draft never declared", () => {
+    expect(emptySlotCount(html, [])).toBe(2);
+    expect(emptySlotCount(html, [slots[0]])).toBe(2);
+    expect(emptySlotCount("<p>no images</p>", [])).toBe(0);
   });
 });

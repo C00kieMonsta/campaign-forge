@@ -1,4 +1,4 @@
-import { jpegName, targetSize } from "../imageDownscale";
+import { downscaleImage, jpegName, targetSize } from "../imageDownscale";
 
 describe("targetSize", () => {
   it("leaves an image within the cap untouched", () => {
@@ -45,5 +45,42 @@ describe("jpegName", () => {
 
   it("falls back to a name when the original is only an extension", () => {
     expect(jpegName(".heic")).toBe("photo.jpg");
+  });
+});
+
+describe("downscaleImage when nothing can decode the file", () => {
+  const RealImage = globalThis.Image;
+  const realCreate = URL.createObjectURL;
+  const realRevoke = URL.revokeObjectURL;
+
+  beforeEach(() => {
+    // jsdom never loads an image, so this stand-in fails every decode on the next tick.
+    class FailingImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        setTimeout(() => this.onerror?.(), 0);
+      }
+    }
+    (globalThis as any).Image = FailingImage;
+    URL.createObjectURL = jest.fn(() => "blob:test");
+    URL.revokeObjectURL = jest.fn();
+  });
+
+  afterEach(() => {
+    globalThis.Image = RealImage;
+    URL.createObjectURL = realCreate;
+    URL.revokeObjectURL = realRevoke;
+  });
+
+  it("rejects a type the server could not read either", async () => {
+    const heic = new File(["x"], "IMG_0042.HEIC", { type: "image/heic" });
+    await expect(downscaleImage(heic)).rejects.toThrow("undecodable");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test");
+  });
+
+  it("hands a JPEG over untouched so the server can still try", async () => {
+    const jpeg = new File(["x"], "card.jpg", { type: "image/jpeg" });
+    await expect(downscaleImage(jpeg)).resolves.toBe(jpeg);
   });
 });

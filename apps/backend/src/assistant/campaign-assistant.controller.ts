@@ -76,7 +76,9 @@ export class CampaignAssistantController {
       const out = await this.openai.transcribe(
         file.buffer,
         `brief.${audioExtension(file.mimetype)}`,
-        file.mimetype
+        file.mimetype,
+        // A person is waiting; the SDK's ten minutes and two retries are for background jobs.
+        { timeoutMs: 60_000, maxRetries: 0 }
       );
       return { text: out.text.trim(), durationSeconds: out.durationSeconds };
     } catch (err) {

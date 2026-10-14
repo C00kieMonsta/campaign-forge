@@ -163,6 +163,11 @@
   border-radius: 4px;
   transition: outline 0.15s;
 }
+.tiptap-editor .ProseMirror img[src^="data:image/svg+xml"] {
+  outline: 2px dashed hsl(var(--primary) / 0.6);
+  outline-offset: 2px;
+  cursor: pointer;
+}
 .tiptap-editor .ProseMirror img.ProseMirror-selectednode {
   outline: 2px solid hsl(var(--primary));
   outline-offset: 2px;

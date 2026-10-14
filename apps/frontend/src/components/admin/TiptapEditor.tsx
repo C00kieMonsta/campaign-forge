@@ -1,13 +1,26 @@
 import { forwardRef, useCallback, useImperativeHandle, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
-import { Extension } from "@tiptap/core";
+import { Extension, type Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import TextAlign from "@tiptap/extension-text-align";
 import Color from "@tiptap/extension-color";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Image from "@tiptap/extension-image";
 import { AlignCenter, AlignLeft, AlignRight, Bold, Image as ImageIcon, ImageUp, Italic, Link2, List, ListOrdered, Paperclip } from "lucide-react";
+import { isImagePlaceholderSrc } from "@packages/types";
+import { useLanguage } from "@/contexts/LanguageContext";
+import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import { errorMessage } from "@/lib/errorMessage";
+import { downscaleImage } from "@/lib/imageDownscale";
+
+/**
+ * A phone photo is 5 to 12 MB and the upload route stops at 10; subscribers would receive the full
+ * file otherwise. Longest edge 1600px as JPEG is plenty for a 600px-wide email.
+ */
+async function prepareImage(file: File): Promise<File> {
+  return downscaleImage(file);
+}
 
 const ResizableImage = Image.extend({
   addAttributes() {
@@ -20,6 +33,12 @@ const ResizableImage = Image.extend({
           if (!attrs.width) return {};
           return { width: attrs.width, style: `width: ${attrs.width}` };
         },
+      },
+      // The assistant's photo slot id. Kept so a slot can still be found after editing.
+      "data-slot": {
+        default: null,
+        parseHTML: (el) => el.getAttribute("data-slot"),
+        renderHTML: (attrs) => (attrs["data-slot"] ? { "data-slot": attrs["data-slot"] } : {}),
       },
     };
   },
@@ -79,6 +98,16 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
   const attachInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const uploadingRef = useRef(false);
+  const editorInstanceRef = useRef<Editor | null>(null);
+  // The placeholder that was clicked, so the upload lands there even if the selection moved.
+  const pendingReplacePosRef = useRef<number | null>(null);
+  const { t } = useLanguage();
+  const { toast } = useToast();
+
+  const uploadErrorTitle = (err: unknown) =>
+    err instanceof Error && err.message === "undecodable"
+      ? t.contactAssistant.photoUnreadable
+      : errorMessage(err);
 
   const editor = useEditor({
     extensions: [
@@ -87,12 +116,27 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
       TextStyle,
       FontSize,
       Color,
-      ResizableImage.configure({ inline: false }),
+      ResizableImage.configure({ inline: false, allowBase64: true }),
     ],
     content,
     editable: !readonly,
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
+    editorProps: {
+      // A click on a grey placeholder opens the file picker for it.
+      handleClickOn: (_view, _pos, node, nodePos) => {
+        if (readonly) return false;
+        if (node.type.name === "image" && isImagePlaceholderSrc(node.attrs.src)) {
+          // Returning true skips ProseMirror's own click selection, so select the node here.
+          pendingReplacePosRef.current = nodePos;
+          editorInstanceRef.current?.commands.setNodeSelection(nodePos);
+          replaceInputRef.current?.click();
+          return true;
+        }
+        return false;
+      },
+    },
   });
+  editorInstanceRef.current = editor;
 
   useImperativeHandle(ref, () => ({
     insertContent: (text) => {
@@ -109,10 +153,11 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
     if (uploadingRef.current) return;
     uploadingRef.current = true;
     try {
-      const { url } = await api.campaigns.upload(file);
+      const { url } = await api.campaigns.upload(await prepareImage(file));
       editor?.chain().focus().setImage({ src: url }).run();
     } catch (err) {
       console.log(JSON.stringify({ event: "TiptapEditor:uploadError", error: String(err) }));
+      toast({ title: uploadErrorTitle(err), variant: "destructive" });
     } finally {
       uploadingRef.current = false;
     }
@@ -123,11 +168,18 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
     if (uploadingRef.current) return;
     uploadingRef.current = true;
     try {
-      const { url } = await api.campaigns.upload(file);
-      editor?.chain().focus().updateAttributes("image", { src: url }).run();
+      const { url } = await api.campaigns.upload(await prepareImage(file));
+      const pos = pendingReplacePosRef.current;
+      if (pos !== null) {
+        editor?.chain().focus().setNodeSelection(pos).updateAttributes("image", { src: url }).run();
+      } else {
+        editor?.chain().focus().updateAttributes("image", { src: url }).run();
+      }
     } catch (err) {
       console.log(JSON.stringify({ event: "TiptapEditor:replaceImageError", error: String(err) }));
+      toast({ title: uploadErrorTitle(err), variant: "destructive" });
     } finally {
+      pendingReplacePosRef.current = null;
       uploadingRef.current = false;
     }
   };
@@ -337,7 +389,14 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(({ content, onChange,
                 <span className="text-[10px] font-semibold">{w.label}</span>
               </ToolbarBtn>
             ))}
-            <ToolbarBtn onClick={() => replaceInputRef.current?.click()} title="Remplacer l'image">
+            <ToolbarBtn
+              onClick={() => {
+                // From the toolbar the selected image is the target, not a remembered click.
+                pendingReplacePosRef.current = null;
+                replaceInputRef.current?.click();
+              }}
+              title={t.campaignForm.replaceImage}
+            >
               <ImageUp className="h-3.5 w-3.5" />
             </ToolbarBtn>
           </>

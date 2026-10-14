@@ -190,3 +190,84 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("none yet");
   });
 });
+
+/** Review regressions. */
+describe("carryUploadedImages (attribute order)", () => {
+  it("restores an upload written with data-slot before src", () => {
+    const prev = '<img data-slot="hero" src="https://x/y.jpg" />';
+    const next =
+      '<img src="data:image/svg+xml;base64,QUJD" alt="Hero" data-slot="hero" />';
+    expect(carryUploadedImages(prev, next)).toContain('src="https://x/y.jpg"');
+  });
+});
+
+describe("CampaignAssistantService.turn (review)", () => {
+  it("keeps the previous slot labels when a revision omits imageSlots", async () => {
+    const { svc } = service([
+      JSON.stringify({
+        reply: "Plus court.",
+        draft: {
+          name: "n",
+          subject: "s",
+          html: '<p>court</p><img src="{{image:recette}}" alt="r" />'
+        }
+      })
+    ]);
+    const out = await svc.turn({
+      messages: [{ role: "user", content: "plus court" }],
+      draft: {
+        name: "n",
+        subject: "s",
+        html: '<p>long</p><img src="data:image/svg+xml;base64,QUJD" alt="Photo de la recette" data-slot="recette" />',
+        targetGroupIds: [],
+        imageSlots: [
+          {
+            id: "recette",
+            label: "Photo de la recette",
+            description: "Le plat fini"
+          }
+        ]
+      },
+      language: "fr"
+    });
+    expect(out.draft!.imageSlots).toEqual([
+      {
+        id: "recette",
+        label: "Photo de la recette",
+        description: "Le plat fini"
+      }
+    ]);
+    expect(out.draft!.html).toContain('alt="Photo de la recette"');
+  });
+
+  it("retries when the draft is unusable after cleaning, then reports it", async () => {
+    const empty = JSON.stringify({
+      reply: "ok",
+      draft: { name: "n", subject: "s", html: "<script>x()</script>" }
+    });
+    const { svc, complete } = service([empty, empty]);
+    await expect(
+      svc.turn({ messages: [{ role: "user", content: "x" }], language: "fr" })
+    ).rejects.toBeInstanceOf(ModelOutputError);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[0][0].requestOptions).toEqual({
+      timeoutMs: 120_000,
+      maxRetries: 0
+    });
+  });
+
+  it("uses low effort for a revision and medium for a first draft", async () => {
+    const { svc, complete } = service([GOOD, GOOD]);
+    const first = await svc.turn({
+      messages: [{ role: "user", content: "x" }],
+      language: "fr"
+    });
+    await svc.turn({
+      messages: [{ role: "user", content: "y" }],
+      draft: first.draft,
+      language: "fr"
+    });
+    expect(complete.mock.calls[0][0].depth).toBe("standard");
+    expect(complete.mock.calls[1][0].depth).toBe("quick");
+  });
+});
