@@ -13,6 +13,8 @@ import type {
   CreateConversationRequest,
   CreateTaskRequest,
   CreateWorkspaceRequest,
+  DataSnapshotDownloadTicket,
+  DataSnapshotInventory,
   LexArchivedScope,
   LexArtifact,
   LexArtifactVersion,
@@ -438,6 +440,27 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ email, firstName, lastName })
       });
+    }
+  },
+  /**
+   * Full data snapshot, for moving to another AWS account. Shell-level: it covers both apps.
+   *
+   * The zip can run to gigabytes, so it is not read into a blob like the pièces bundle: the browser
+   * is sent to the download URL and streams it to disk itself. A navigation carries no bearer
+   * header, hence the short-lived ticket in the query string.
+   */
+  snapshot: {
+    inventory() {
+      return request<DataSnapshotInventory>("/admin/snapshot/inventory");
+    },
+    downloadTicket() {
+      return request<DataSnapshotDownloadTicket>(
+        "/admin/snapshot/download-ticket",
+        { method: "POST" }
+      );
+    },
+    downloadUrl(token: string) {
+      return `${API_BASE}/admin/snapshot/download?token=${encodeURIComponent(token)}`;
     }
   },
   // Lex legal-RAG app. Chat streaming lives in ./lexStream.ts (this client is Promise-only).

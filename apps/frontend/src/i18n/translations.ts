@@ -952,7 +952,31 @@ export const translations = {
       pageIndexNone: "Tous les documents sont déjà indexés",
       pageIndexBlockedHint:
         "Ces documents n'ont pas pu être indexés gratuitement. Le motif est indiqué sous chaque fichier : le plus souvent parce que leur texte n'existe que via une OCR ou une transcription, qui nécessite un nouveau traitement complet et payant.",
-      pageIndexBlockedTruncated: "Seuls les 50 premiers fichiers sont listés."
+      pageIndexBlockedTruncated: "Seuls les 50 premiers fichiers sont listés.",
+      snapshot: "Sauvegarde complète",
+      snapshotHint:
+        "Télécharge une archive zip de toutes les données de l'application : contacts, groupes et campagnes, la base de données Lex, et chaque fichier stocké (pièces jointes des campagnes, documents Lex). Prévue pour un changement de compte AWS : l'archive contient tout ce qu'il faut pour repartir ailleurs.",
+      snapshotTables: {
+        contacts: "contacts",
+        campaigns: "campagnes",
+        groups: "groupes"
+      },
+      snapshotLexRows: "lignes Lex",
+      snapshotLexNotConfigured: "Lex non configuré",
+      snapshotFiles: "fichiers",
+      snapshotBuckets: {
+        "campaign-attachments": "pièces jointes",
+        "lex-documents": "documents Lex"
+      },
+      snapshotRecheck: "Revérifier",
+      snapshotDownload: "Télécharger la sauvegarde",
+      snapshotStarted:
+        "Téléchargement lancé. L'archive se construit pendant le transfert, ce qui peut prendre plusieurs minutes.",
+      snapshotBlocked: "Sauvegarde impossible : une source est inaccessible.",
+      snapshotErrorsHint:
+        "Ces sources ne peuvent pas être lues, le plus souvent faute d'une permission IAM (dynamodb:Scan, s3:ListBucket, s3:GetObject). Corrigez puis revérifiez : la sauvegarde est refusée tant qu'une source manque.",
+      snapshotQuiet:
+        "L'archive reflète l'état au moment du téléchargement. Évitez d'ajouter des documents ou d'envoyer une campagne pendant qu'elle se construit."
     },
     logout: "Déconnexion"
   },
@@ -1892,7 +1916,31 @@ export const translations = {
       pageIndexBlockedHint:
         "Deze documenten konden niet gratis geïndexeerd worden. De reden staat onder elk bestand: meestal omdat hun tekst alleen via OCR of transcriptie bestaat, wat een volledige, betaalde herverwerking vereist.",
       pageIndexBlockedTruncated:
-        "Alleen de eerste 50 bestanden worden weergegeven."
+        "Alleen de eerste 50 bestanden worden weergegeven.",
+      snapshot: "Volledige back-up",
+      snapshotHint:
+        "Downloadt een zip-archief met alle gegevens van de applicatie: contacten, groepen en campagnes, de Lex-database en elk opgeslagen bestand (campagnebijlagen, Lex-documenten). Bedoeld voor een overstap naar een ander AWS-account: het archief bevat alles om elders opnieuw te beginnen.",
+      snapshotTables: {
+        contacts: "contacten",
+        campaigns: "campagnes",
+        groups: "groepen"
+      },
+      snapshotLexRows: "Lex-rijen",
+      snapshotLexNotConfigured: "Lex niet geconfigureerd",
+      snapshotFiles: "bestanden",
+      snapshotBuckets: {
+        "campaign-attachments": "bijlagen",
+        "lex-documents": "Lex-documenten"
+      },
+      snapshotRecheck: "Opnieuw controleren",
+      snapshotDownload: "Back-up downloaden",
+      snapshotStarted:
+        "Download gestart. Het archief wordt tijdens de overdracht opgebouwd, wat enkele minuten kan duren.",
+      snapshotBlocked: "Back-up niet mogelijk: een bron is onbereikbaar.",
+      snapshotErrorsHint:
+        "Deze bronnen kunnen niet gelezen worden, meestal door een ontbrekende IAM-machtiging (dynamodb:Scan, s3:ListBucket, s3:GetObject). Los het op en controleer opnieuw: de back-up wordt geweigerd zolang een bron ontbreekt.",
+      snapshotQuiet:
+        "Het archief weerspiegelt de toestand op het moment van de download. Voeg geen documenten toe en verstuur geen campagne terwijl het wordt opgebouwd."
     },
     logout: "Uitloggen"
   }

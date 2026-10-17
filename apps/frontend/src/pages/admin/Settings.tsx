@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import type { LexPageIndexStatus } from "@packages/types";
+import type {
+  DataSnapshotInventory,
+  LexPageIndexStatus
+} from "@packages/types";
 import { Button } from "@packages/ui";
 import {
   Check,
+  HardDriveDownload,
   Languages,
   ListOrdered,
   Loader2,
@@ -12,6 +16,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import type { Language } from "@/i18n/translations";
 import { api } from "@/lib/api";
+import { errorMessage } from "@/lib/errorMessage";
 
 const LANGUAGES: { value: Language; label: string }[] = [
   { value: "fr", label: "Français" },
@@ -20,6 +25,12 @@ const LANGUAGES: { value: Language; label: string }[] = [
 
 const PILL =
   "text-[10px] px-2 py-0.5 rounded-full inline-flex items-center gap-1";
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
 
 /**
  * Settings. One pinned language drives the interface AND the assistant: the backend reads it to
@@ -32,6 +43,11 @@ export default function Settings() {
   const [resummarizing, setResummarizing] = useState(false);
   const [pageIndex, setPageIndex] = useState<LexPageIndexStatus | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
+  const [inventory, setInventory] = useState<DataSnapshotInventory | null>(
+    null
+  );
+  const [checking, setChecking] = useState(false);
+  const [preparing, setPreparing] = useState(false);
 
   const loadPageIndex = useCallback(async () => {
     try {
@@ -44,6 +60,53 @@ export default function Settings() {
   useEffect(() => {
     void loadPageIndex();
   }, [loadPageIndex]);
+
+  const loadInventory = useCallback(async () => {
+    setChecking(true);
+    try {
+      setInventory(await api.snapshot.inventory());
+    } catch (err) {
+      toast({ title: errorMessage(err), variant: "destructive" });
+    } finally {
+      setChecking(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void loadInventory();
+  }, [loadInventory]);
+
+  // Re-counted right before the ticket, not taken from the page: the server refuses a download
+  // while a source is unreadable, and on a navigation that refusal would land as a bare JSON page
+  // in place of the app. Checking here keeps it a toast.
+  const handleDownloadSnapshot = async () => {
+    setPreparing(true);
+    try {
+      const fresh = await api.snapshot.inventory();
+      setInventory(fresh);
+      if (fresh.errors.length > 0) {
+        toast({ title: t.settings.snapshotBlocked, variant: "destructive" });
+        return;
+      }
+      const { token } = await api.snapshot.downloadTicket();
+      // A navigation, not a fetch: the browser streams the zip to disk, however large it is.
+      const anchor = document.createElement("a");
+      anchor.href = api.snapshot.downloadUrl(token);
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      toast({ title: t.settings.snapshotStarted });
+    } catch (err) {
+      toast({ title: errorMessage(err), variant: "destructive" });
+    } finally {
+      setPreparing(false);
+    }
+  };
+
+  const lexRows = inventory
+    ? inventory.postgres.tables.reduce((sum, table) => sum + table.rows, 0)
+    : 0;
 
   // The rebuild is drained by the ingestion worker, so the counts move well after the click.
   // Poll on `queued` — jobs actually in flight — NOT on `pending`, which counts un-indexed
@@ -251,6 +314,112 @@ export default function Settings() {
             ) : null}
           </div>
         ) : null}
+      </section>
+
+      <section className="rounded-xl border bg-card p-5 space-y-3">
+        <div className="flex items-start gap-3">
+          <HardDriveDownload className="h-5 w-5 mt-0.5 shrink-0 text-muted-foreground" />
+          <div className="min-w-0">
+            <h2 className="font-medium">{t.settings.snapshot}</h2>
+            <p className="text-sm text-muted-foreground">
+              {t.settings.snapshotHint}
+            </p>
+          </div>
+        </div>
+
+        {inventory ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {inventory.dynamodb.map((table) => (
+              <span
+                key={table.tableName}
+                className={`${PILL} bg-muted text-foreground`}
+                title={table.tableName}
+              >
+                {table.items} · {t.settings.snapshotTables[table.logicalName]}
+              </span>
+            ))}
+            {inventory.postgres.configured ? (
+              <span
+                className={`${PILL} bg-muted text-foreground`}
+                title={inventory.postgres.tables
+                  .map((table) => `${table.name}: ${table.rows}`)
+                  .join("\n")}
+              >
+                {lexRows} · {t.settings.snapshotLexRows}
+              </span>
+            ) : (
+              <span className={`${PILL} bg-muted text-muted-foreground`}>
+                {t.settings.snapshotLexNotConfigured}
+              </span>
+            )}
+            {inventory.s3.map((bucket) => (
+              <span
+                key={bucket.bucket}
+                className={`${PILL} bg-muted text-foreground`}
+                title={bucket.bucket}
+              >
+                {bucket.objects} {t.settings.snapshotFiles} ·{" "}
+                {formatBytes(bucket.bytes)} ·{" "}
+                {t.settings.snapshotBuckets[bucket.logicalName]}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {inventory && inventory.errors.length > 0 ? (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-2">
+            <p className="text-xs text-muted-foreground">
+              {t.settings.snapshotErrorsHint}
+            </p>
+            <ul className="space-y-1">
+              {inventory.errors.map((error) => (
+                <li key={error.source} className="text-xs min-w-0">
+                  <span className="font-medium">{error.source}</span>{" "}
+                  <span className="text-destructive break-words">
+                    {error.message}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void loadInventory()}
+            disabled={checking || preparing}
+          >
+            {checking ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-2" />
+            )}
+            {t.settings.snapshotRecheck}
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void handleDownloadSnapshot()}
+            disabled={
+              preparing ||
+              checking ||
+              inventory === null ||
+              inventory.errors.length > 0
+            }
+          >
+            {preparing ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <HardDriveDownload className="h-4 w-4 mr-2" />
+            )}
+            {t.settings.snapshotDownload}
+          </Button>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          {t.settings.snapshotQuiet}
+        </p>
       </section>
     </div>
   );

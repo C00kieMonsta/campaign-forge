@@ -9,6 +9,7 @@ import { HealthController } from "./health.controller";
 import { LexModule } from "./lex/lex.module";
 import { PublicModule } from "./public/public.module";
 import { SharedModule } from "./shared/shared.module";
+import { SnapshotModule } from "./snapshot/snapshot.module";
 
 @Module({
   imports: [
@@ -22,7 +23,8 @@ import { SharedModule } from "./shared/shared.module";
     GroupsModule,
     PublicModule,
     AuthModule,
-    LexModule
+    LexModule,
+    SnapshotModule
   ],
   controllers: [HealthController]
 })

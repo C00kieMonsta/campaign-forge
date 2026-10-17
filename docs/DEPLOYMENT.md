@@ -218,6 +218,44 @@ aws dynamodb create-table \
 
 ---
 
+## Moving to another AWS account (data snapshot)
+
+**Settings → Sauvegarde complète** downloads one zip with everything the app stores:
+
+- the three DynamoDB tables (contacts, campaigns, groups), one item per line;
+- the Lex Postgres database, every table as NDJSON plus `schema.json` and the applied migrations;
+- every object of the campaign attachments bucket and of the Lex documents bucket.
+
+The page counts each source first and refuses the download while any source cannot be read, so a
+missing permission shows up as a line on the page rather than as a silently incomplete archive.
+`manifest.json` inside the zip lists what was written; its `failures` list must be empty before
+the archive is trusted. The zip's `README.md` describes the layout and the restore order.
+
+The download is a navigation (the archive can run to gigabytes), authorised by a two-minute token
+in the query string. It needs the dedicated nginx location in `scripts/nginx/assistant-locations.inc`,
+which the deploy installs; without it nginx buffers the whole zip to disk first.
+
+### Permissions the runtime credentials need
+
+The backend's IAM user (behind `AWS_ACCESS_KEY_ID` in SSM) must be allowed to:
+
+| Source | Actions |
+|---|---|
+| each DynamoDB table | `dynamodb:Scan` (already used by the contact search and the groups list) |
+| `S3_BUCKET` | `s3:ListBucket` on the bucket, `s3:GetObject` on its objects |
+| `LEX_DOCUMENTS_BUCKET` | `s3:ListBucket`, `s3:GetObject` (granted by the `cf-lex-<stage>-runtime-access` policy) |
+
+### Restore outline
+
+1. Create the DynamoDB tables (section 7) and write the `dynamodb/*.ndjson` items back.
+2. Deploy `LexDataStack` in the new account, run `pnpm migrate`, then load `postgres/*.ndjson`
+   skipping `pgmigrations` and any column marked `generated` in `schema.json`.
+3. Upload `s3/<bucket>/...` under the keys listed in `manifest.json`, then null or refresh
+   `s3_version_id` in `lex_documents`, `lex_authorities` and `lex_message_audio`.
+4. Run `scripts/setup-ssm-params.sh` against the new account and deploy.
+
+---
+
 ## Triggering Deployments
 
 **Automatic:** Every push to `main` deploys all three apps.

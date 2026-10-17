@@ -15,6 +15,11 @@ export class PgService implements OnModuleDestroy {
 
   constructor(private config: ConfigService) {}
 
+  /** False on a Campaigns-only deployment: no Lex database to query or export. */
+  isConfigured(): boolean {
+    return Boolean(this.config.get("DATABASE_URL"));
+  }
+
   private getPool(): Pool {
     if (this.pool) return this.pool;
 

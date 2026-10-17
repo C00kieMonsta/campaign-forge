@@ -3,6 +3,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client
 } from "@aws-sdk/client-s3";
@@ -36,6 +37,36 @@ export class LexS3Service {
         "LEX_DOCUMENTS_BUCKET is not configured — Lex document storage is unavailable"
       );
     return bucket;
+  }
+
+  /** False on a Campaigns-only deployment, where there is no Lex bucket to read or export. */
+  isConfigured(): boolean {
+    return Boolean(this.config.get("LEX_DOCUMENTS_BUCKET"));
+  }
+
+  get bucketName(): string {
+    return this.getBucket();
+  }
+
+  /**
+   * Every current object, a page of up to 1000 keys at a time. The bucket is versioned, and this
+   * lists current versions only: a deleted document is gone from here even though its old
+   * versions still exist.
+   */
+  async *list(): AsyncGenerator<{ key: string; size: number }> {
+    let token: string | undefined;
+    do {
+      const res = await this.getClient().send(
+        new ListObjectsV2Command({
+          Bucket: this.getBucket(),
+          ContinuationToken: token
+        })
+      );
+      for (const obj of res.Contents ?? []) {
+        if (obj.Key !== undefined) yield { key: obj.Key, size: obj.Size ?? 0 };
+      }
+      token = res.IsTruncated ? res.NextContinuationToken : undefined;
+    } while (token);
   }
 
   /** Uploads an object and returns the S3 version id (bucket versioning is expected to be on). */
@@ -76,7 +107,7 @@ export class LexS3Service {
   async get(
     key: string,
     versionId?: string
-  ): Promise<{ body: Buffer; contentType: string }> {
+  ): Promise<{ body: Buffer; contentType: string; versionId?: string }> {
     const res = await this.getClient().send(
       new GetObjectCommand({
         Bucket: this.getBucket(),
@@ -85,7 +116,11 @@ export class LexS3Service {
       })
     );
     const body = Buffer.from(await res.Body!.transformToByteArray());
-    return { body, contentType: res.ContentType ?? "application/octet-stream" };
+    return {
+      body,
+      contentType: res.ContentType ?? "application/octet-stream",
+      versionId: res.VersionId
+    };
   }
 
   async delete(key: string): Promise<void> {
