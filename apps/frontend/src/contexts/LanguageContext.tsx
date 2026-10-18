@@ -28,8 +28,22 @@ const LanguageContext = createContext<LanguageContextType | undefined>(
 const STORAGE_KEY = "lex_language";
 const TOKEN_KEY = "admin_token";
 
+/** Storage can be full or blocked; the language still applies for this page view. */
+function rememberLanguage(lang: Language): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, lang);
+  } catch {
+    // The server copy is the source of truth on the next load.
+  }
+}
+
 function storedLanguage(): Language {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch {
+    // Storage blocked: French until the server answers.
+  }
   return raw === "fr" || raw === "nl" ? raw : "fr";
 }
 
@@ -55,7 +69,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       .then(({ settings }) => {
         if (cancelled) return;
         setLanguageState(settings.language);
-        localStorage.setItem(STORAGE_KEY, settings.language);
+        rememberLanguage(settings.language);
       })
       .catch(() => {
         /* Lex not configured, or offline — the local value stands. */
@@ -68,7 +82,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   const setLanguage = useCallback((lang: Language) => {
     // Apply locally first so the UI switches instantly, then persist.
     setLanguageState(lang);
-    localStorage.setItem(STORAGE_KEY, lang);
+    rememberLanguage(lang);
     if (!sessionStorage.getItem(TOKEN_KEY)) return;
     void api.lex.settings.update(lang).catch(() => {
       /* best-effort: the UI language still changed for this session */

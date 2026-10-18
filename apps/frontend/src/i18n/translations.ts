@@ -117,7 +117,7 @@ export const translations = {
       resumeList: "Reprendre",
       abandonList: "Abandonner",
       resumed: "Liste reprise là où vous l'aviez laissée, sauvegardée le",
-      droppedSince: "déjà importé(s) entre-temps, retiré(s) de la liste",
+      droppedSince: "déjà présent(s) entre-temps, retiré(s) de la liste",
       autoSaved:
         "Vos cases cochées et les noms saisis sont sauvegardés automatiquement jusqu'à l'import.",
       notSaved:
@@ -1142,7 +1142,7 @@ export const translations = {
       resumeList: "Hervatten",
       abandonList: "Weggooien",
       resumed: "Lijst hervat waar u gebleven was, bewaard op",
-      droppedSince: "intussen al geïmporteerd en uit de lijst gehaald",
+      droppedSince: "intussen al aanwezig en uit de lijst gehaald",
       autoSaved:
         "Uw vinkjes en ingevulde namen worden automatisch bewaard tot de import.",
       notSaved:

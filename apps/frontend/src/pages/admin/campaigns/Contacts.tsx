@@ -21,7 +21,12 @@ import { useSearchParams } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
-import { hasImportSession as hasSavedImportSession } from "@/lib/importSession";
+import {
+  clearImportSession,
+  hasImportSession as hasSavedImportSession,
+  loadImportSession,
+  restoreRows
+} from "@/lib/importSession";
 import { emptyForm, getGroupClasses } from "./contacts/constants";
 import { ContactAssistantDialog } from "./contacts/ContactAssistantDialog";
 import { ContactFormDialog } from "./contacts/ContactFormDialog";
@@ -102,15 +107,22 @@ export default function Contacts() {
     null
   );
 
-  // Import dialog (archive, zip or CSV); the button says so when a saved list is waiting.
+  // Import dialog (archive, zip or CSV); the button says so when a saved row is still missing from the list.
   const [importOpen, setImportOpen] = useState(false);
   const [hasImportSession, setHasImportSession] = useState(() =>
     hasSavedImportSession()
   );
-  const onImportOpenChange = (next: boolean) => {
-    setImportOpen(next);
-    if (!next) setHasImportSession(hasSavedImportSession());
-  };
+  const refreshImportSession = useCallback(() => {
+    const session = loadImportSession();
+    if (!session) {
+      setHasImportSession(false);
+      return;
+    }
+    const { rows } = restoreRows(session.rows, existingEmails);
+    // Every saved row was written meanwhile: nothing to resume.
+    if (rows.length === 0) clearImportSession();
+    setHasImportSession(rows.length > 0);
+  }, [existingEmails]);
 
   // ─── Data loading ──────────────────────────────────────────────────────────
 
@@ -142,6 +154,11 @@ export default function Contacts() {
   useEffect(() => {
     loadContacts();
   }, [loadContacts]);
+
+  // Once contacts are known and whenever they change, while the dialog does not own the list.
+  useEffect(() => {
+    if (!loading && !importOpen) refreshImportSession();
+  }, [loading, importOpen, refreshImportSession]);
 
   // Close batch group popover on outside click
   useEffect(() => {
@@ -645,7 +662,7 @@ export default function Contacts() {
       {/* Import Dialog */}
       <ImportDialog
         open={importOpen}
-        onOpenChange={onImportOpenChange}
+        onOpenChange={setImportOpen}
         groups={groups}
         existingEmails={existingEmails}
         onImported={loadContacts}

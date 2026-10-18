@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
+import { clearImportSession } from "@/lib/importSession";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
 const TOKEN_KEY = "admin_token";
@@ -13,14 +14,16 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => sessionStorage.getItem(TOKEN_KEY));
+  const [token, setToken] = useState<string | null>(() =>
+    sessionStorage.getItem(TOKEN_KEY)
+  );
 
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
       const res = await fetch(`${API_BASE}/admin/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password })
       });
 
       if (!res.ok) return false;
@@ -38,11 +41,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     sessionStorage.removeItem(TOKEN_KEY);
+    // A review list holds contact data; it does not outlive the login.
+    clearImportSession();
     setToken(null);
   };
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated: !!token, token, login, logout }}>
+    <AuthContext.Provider
+      value={{ isAuthenticated: !!token, token, login, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );

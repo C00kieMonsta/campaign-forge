@@ -117,11 +117,16 @@ interface Tallies {
 const PAGE_SIZE = 100;
 /** The server accepts at most 100 contacts per create call. */
 const BATCH_SIZE = 100;
+/** A change is written this long after the last one, and never later than SAVE_MAX_WAIT after the first unsaved one. */
+const SAVE_DEBOUNCE = 400;
+const SAVE_MAX_WAIT = 2000;
 
 const PILL =
   "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium";
 const TILE =
   "flex min-h-[7rem] w-full flex-col items-center justify-center gap-2 rounded-xl border bg-background px-3 py-4 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground";
+
+type SessionArgs = Omit<ImportSession, "version" | "savedAt">;
 
 const emptyTallies = (): Tallies => ({
   created: 0,
@@ -129,6 +134,40 @@ const emptyTallies = (): Tallies => ({
   existing: [],
   errors: []
 });
+
+/** The saved form of a review list. */
+const toSessionArgs = (
+  summary: Summary,
+  rows: Row[],
+  page: number,
+  focusIndex: number
+): SessionArgs => ({
+  source: summary.source,
+  summary: {
+    alreadyPresent: summary.alreadyPresent,
+    withoutEmail: summary.withoutEmail,
+    duplicatesInFile: summary.duplicatesInFile,
+    newGroupNames: summary.newGroupNames
+  },
+  rows,
+  page,
+  focusIndex
+});
+
+/** Rows still to send: written and existing ones gone, refused ones ticked with their reason. */
+const afterTallies = (list: Row[], tally: Tallies): Row[] => {
+  const gone = new Set<string>(tally.createdLower);
+  for (const email of tally.existing) gone.add(email.toLowerCase());
+  const failed = new Map(
+    tally.errors.map((e) => [e.email.toLowerCase(), e.reason])
+  );
+  return list
+    .filter((r) => !gone.has(r.c.email.toLowerCase()))
+    .map((r) => {
+      const reason = failed.get(r.c.email.toLowerCase());
+      return reason ? { ...r, selected: true, serverError: reason } : r;
+    });
+};
 
 function Tile({
   icon: Icon,
@@ -290,10 +329,26 @@ export function ImportDialog({
   const batchesRef = useRef<CreateContactRequest[][]>([]);
   const failedBatchRef = useRef(0);
   const talliesRef = useRef<Tallies>(emptyTallies());
+  // The list behind the Reprendre row, kept in memory so Retour then Reprendre works when storage is full.
+  const pendingRef = useRef<ImportSession | null>(null);
+  // The payload a flush writes; null outside the review step.
+  const saveArgsRef = useRef<SessionArgs | null>(null);
+  // When the first unsaved change happened; the debounce never waits past SAVE_MAX_WAIT from it.
+  const dirtySinceRef = useRef<number | null>(null);
+
+  /** Writes the review list now; a no-op outside the review step. */
+  const flushSave = useCallback(() => {
+    const args = saveArgsRef.current;
+    if (!args) return;
+    dirtySinceRef.current = null;
+    setPersisted(saveImportSession(args));
+  }, []);
 
   const reset = () => {
     setFocusIndex(0);
     pendingFocusRef.current = null;
+    pendingRef.current = null;
+    dirtySinceRef.current = null;
     setPersisted(null);
     setResumed(null);
     setPending(null);
@@ -312,10 +367,15 @@ export function ImportDialog({
 
   useEffect(() => {
     if (open) return;
+    // Annuler, Escape and the overlay keep the list; what the debounce still holds is written first.
+    flushSave();
     runRef.current += 1;
     createdGroupsRef.current = new Map();
     reset();
   }, [open]);
+
+  // Leaving the page with the dialog open (browser back) writes what the debounce still holds.
+  useEffect(() => () => flushSave(), [flushSave]);
 
   const summaryOf = (session: ImportSession, dropped: number): Summary => {
     const known = new Set(groups.map((g) => g.name.trim().toLowerCase()));
@@ -335,6 +395,7 @@ export function ImportDialog({
     const { rows: kept, dropped } = restoreRows(session.rows, existingEmails);
     if (kept.length === 0) {
       clearImportSession();
+      toast({ title: `${session.rows.length} ${ti.droppedSince}` });
       return false;
     }
     const focus = Math.max(0, Math.min(kept.length - 1, session.focusIndex));
@@ -362,13 +423,17 @@ export function ImportDialog({
     if (session) applySession(session);
   }, [open]);
 
+  /** Takes the list behind the Reprendre row up again; the in-memory copy wins over storage. */
   const resumePending = () => {
-    const session = loadImportSession();
+    const session = pendingRef.current ?? loadImportSession();
+    pendingRef.current = null;
     if (!session || !applySession(session)) setPending(null);
   };
 
   const abandonPending = () => {
     clearImportSession();
+    pendingRef.current = null;
+    setPersisted(null);
     setPending(null);
   };
 
@@ -385,6 +450,8 @@ export function ImportDialog({
 
   /** Reads whatever was dropped or picked and builds the review list. */
   const intake = async (load: () => Promise<Intake>) => {
+    // A saved list must be taken up or abandoned before another file replaces it.
+    if (pending) return;
     const run = runRef.current;
     setPickError(null);
     setProgress(null);
@@ -443,16 +510,14 @@ export function ImportDialog({
       pendingFocusRef.current = candidates[0]?.id ?? null;
       setResumed(null);
       setPending(null);
+      pendingRef.current = null;
+      dirtySinceRef.current = null;
+      // A new list replaces whatever was saved; a failed save must not leave the old one behind.
+      clearImportSession();
       // Saved at once: a refresh a moment after the read must not cost the parse.
       setPersisted(
         nextRows.length > 0
-          ? saveImportSession({
-              source: nextSummary.source,
-              summary: nextSummary,
-              rows: nextRows,
-              page: 1,
-              focusIndex: 0
-            })
+          ? saveImportSession(toSessionArgs(nextSummary, nextRows, 1, 0))
           : null
       );
       setStep("review");
@@ -501,17 +566,20 @@ export function ImportDialog({
 
   /** Back to the pick step; the list stays saved and can be taken up again from there. */
   const goBack = () => {
+    dirtySinceRef.current = null;
     if (summary && rows.length > 0) {
-      saveImportSession({
-        source: summary.source,
-        summary,
-        rows,
-        page: currentPage,
-        focusIndex
-      });
+      const args = toSessionArgs(summary, rows, currentPage, focusIndex);
+      setPersisted(saveImportSession(args));
+      pendingRef.current = {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        ...args
+      };
       setPending({ count: rows.length });
     } else {
       clearImportSession();
+      pendingRef.current = null;
+      setPersisted(null);
       setPending(null);
     }
     setResumed(null);
@@ -645,31 +713,37 @@ export function ImportDialog({
     [rows, currentPage]
   );
 
+  saveArgsRef.current =
+    step === "review" && summary && rows.length > 0
+      ? toSessionArgs(summary, rows, currentPage, focusIndex)
+      : null;
+
   // Every tick, typed name and page turn is saved shortly after it happens, until the import is done.
   useEffect(() => {
-    if (step !== "review" || !summary) return;
-    if (rows.length === 0) {
-      clearImportSession();
-      return;
-    }
-    const timer = setTimeout(() => {
-      setPersisted(
-        saveImportSession({
-          source: summary.source,
-          summary: {
-            alreadyPresent: summary.alreadyPresent,
-            withoutEmail: summary.withoutEmail,
-            duplicatesInFile: summary.duplicatesInFile,
-            newGroupNames: summary.newGroupNames
-          },
-          rows,
-          page: currentPage,
-          focusIndex
-        })
-      );
-    }, 400);
+    if (step !== "review" || !summary || rows.length === 0) return;
+    const now = Date.now();
+    if (dirtySinceRef.current === null) dirtySinceRef.current = now;
+    const delay = Math.min(
+      SAVE_DEBOUNCE,
+      Math.max(0, dirtySinceRef.current + SAVE_MAX_WAIT - now)
+    );
+    const timer = setTimeout(flushSave, delay);
     return () => clearTimeout(timer);
-  }, [rows, currentPage, focusIndex, step, summary]);
+  }, [rows, currentPage, focusIndex, step, summary, flushSave]);
+
+  // A refresh, a closed tab or a backgrounded page writes what the debounce still holds.
+  useEffect(() => {
+    if (step !== "review") return;
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flushSave();
+    };
+    window.addEventListener("pagehide", flushSave);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", flushSave);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  }, [step, flushSave]);
 
   // The row Tab lands on: the keyboard's row, or the first of the page when that row is elsewhere.
   const keyboardId =
@@ -728,21 +802,25 @@ export function ImportDialog({
       await onImported();
       return;
     }
-    const gone = new Set<string>(tally.createdLower);
-    for (const email of tally.existing) gone.add(email.toLowerCase());
-    const failed = new Map(
-      tally.errors.map((e) => [e.email.toLowerCase(), e.reason])
-    );
-    setRows((prev) =>
-      prev
-        .filter((r) => !gone.has(r.c.email.toLowerCase()))
-        .map((r) => {
-          const reason = failed.get(r.c.email.toLowerCase());
-          return reason ? { ...r, selected: true, serverError: reason } : r;
-        })
-    );
+    setRows((prev) => afterTallies(prev, tally));
     setStep("review");
     await onImported();
+  };
+
+  /** A stopped import is saved at once, so Fermer or a closed tab keeps the refused rows' reasons. */
+  const stopImport = (stopped: ImportStop) => {
+    if (summary) {
+      const left = afterTallies(rowsRef.current, talliesRef.current);
+      if (left.length > 0) {
+        saveImportSession(
+          toSessionArgs(summary, left, currentPage, focusIndex)
+        );
+      } else {
+        clearImportSession();
+      }
+    }
+    setStop(stopped);
+    setStep("importError");
   };
 
   /** Sends the batches from the given index; a thrown batch stops here and can be resumed. */
@@ -766,12 +844,11 @@ export function ImportDialog({
       } catch (err) {
         if (run !== runRef.current) return;
         failedBatchRef.current = i;
-        setStop({
+        stopImport({
           created: talliesRef.current.created,
           remaining: total - done,
           message: stopMessage(err)
         });
-        setStep("importError");
         return;
       }
     }
@@ -780,6 +857,8 @@ export function ImportDialog({
 
   /** Creates the missing groups, builds the batches, then sends them from the first one. */
   const startImport = async () => {
+    // Written now, so a batch that fails and Fermer bring the list back as it was sent.
+    flushSave();
     const run = runRef.current;
     const selected = rows.filter((r) => r.selected).map((r) => r.c);
     talliesRef.current = emptyTallies();
@@ -817,12 +896,11 @@ export function ImportDialog({
       batchesRef.current = batches;
     } catch (err) {
       if (run !== runRef.current) return;
-      setStop({
+      stopImport({
         created: 0,
         remaining: selected.length,
         message: errorMessage(err)
       });
-      setStep("importError");
       return;
     }
     await sendFrom(0, run);
@@ -880,54 +958,65 @@ export function ImportDialog({
         >
           {step === "pick" ? (
             <div className="space-y-4">
-              <div
-                onDragEnter={onDragOver}
-                onDragOver={onDragOver}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={onDrop}
-                className={`flex min-h-[11rem] flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-4 py-8 text-center transition-colors ${dragOver ? "border-primary bg-accent" : "border-border bg-muted/30"}`}
-              >
-                <Upload className="pointer-events-none h-8 w-8 text-muted-foreground" />
-                <p className="pointer-events-none text-sm font-medium">
-                  {ti.dropHere}
-                </p>
-              </div>
+              {pending ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 p-3 text-sm">
+                    <span className="flex-1">
+                      {ti.pendingList} {pending.count} {ti.pendingListTail}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9"
+                      onClick={resumePending}
+                    >
+                      <RotateCcw />
+                      {ti.resumeList}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-9 text-destructive hover:text-destructive"
+                      onClick={abandonPending}
+                    >
+                      {ti.abandonList}
+                    </Button>
+                  </div>
+                  {persisted === false ? (
+                    <p className="flex items-start gap-1.5 text-xs text-destructive">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>{ti.notSaved}</span>
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <div
+                  onDragEnter={onDragOver}
+                  onDragOver={onDragOver}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={onDrop}
+                  className={`flex min-h-[11rem] flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-4 py-8 text-center transition-colors ${dragOver ? "border-primary bg-accent" : "border-border bg-muted/30"}`}
+                >
+                  <Upload className="pointer-events-none h-8 w-8 text-muted-foreground" />
+                  <p className="pointer-events-none text-sm font-medium">
+                    {ti.dropHere}
+                  </p>
+                </div>
+              )}
               {pickError ? (
                 <p className="flex items-start gap-1.5 text-sm text-destructive">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>{pickError}</span>
                 </p>
               ) : null}
-              {pending ? (
-                <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 p-3 text-sm">
-                  <span className="flex-1">
-                    {ti.pendingList} {pending.count} {ti.pendingListTail}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-9"
-                    onClick={resumePending}
-                  >
-                    <RotateCcw />
-                    {ti.resumeList}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-9 text-destructive hover:text-destructive"
-                    onClick={abandonPending}
-                  >
-                    {ti.abandonList}
-                  </Button>
-                </div>
-              ) : null}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Tile
-                  icon={FileUp}
-                  label={ti.chooseFile}
-                  onClick={() => fileRef.current?.click()}
-                />
+                {pending ? null : (
+                  <Tile
+                    icon={FileUp}
+                    label={ti.chooseFile}
+                    onClick={() => fileRef.current?.click()}
+                  />
+                )}
                 <Tile
                   icon={Camera}
                   label={t.contacts.addWithAssistant}

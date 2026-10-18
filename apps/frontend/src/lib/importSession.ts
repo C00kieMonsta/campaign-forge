@@ -1,4 +1,4 @@
-import type { ImportCandidate } from "./importCandidates";
+import { cleanEmail, type ImportCandidate } from "./importCandidates";
 
 /**
  * The review step of a contact import, kept in localStorage so a page refresh or a closed tab
@@ -7,6 +7,13 @@ import type { ImportCandidate } from "./importCandidates";
 
 export const IMPORT_SESSION_KEY = "contact_import_session";
 const VERSION = 1;
+/** A forgotten list is dropped after this long. */
+const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Serialized size budget in UTF-16 units: 4 MB in storage, under the 5 MB origin quota with room
+ * for the other keys. The owner's whole 6373-record archive serializes to 1.6 million characters.
+ */
+export const MAX_SESSION_CHARS = 2_000_000;
 
 export interface ImportSessionRow {
   c: ImportCandidate;
@@ -75,22 +82,29 @@ function isSession(value: unknown): value is ImportSession {
   );
 }
 
-/** The saved session, or null when there is none or it is unreadable. */
+/** The saved session, or null when there is none, it is unreadable or it is older than MAX_AGE_MS. */
 export function loadImportSession(
-  store: SessionStore | null = defaultStore()
+  store: SessionStore | null = defaultStore(),
+  now: Date = new Date()
 ): ImportSession | null {
   if (!store) return null;
   try {
     const raw = store.getItem(IMPORT_SESSION_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    return isSession(parsed) ? parsed : null;
+    if (!isSession(parsed)) return null;
+    const age = now.getTime() - Date.parse(parsed.savedAt);
+    if (Number.isNaN(age) || age > MAX_AGE_MS) {
+      store.removeItem(IMPORT_SESSION_KEY);
+      return null;
+    }
+    return parsed;
   } catch {
     return null;
   }
 }
 
-/** Writes the session; false when storage is unavailable or full. */
+/** Writes the session; false when storage is unavailable or full, or the list is over MAX_SESSION_CHARS. */
 export function saveImportSession(
   session: Omit<ImportSession, "version" | "savedAt">,
   store: SessionStore | null = defaultStore(),
@@ -102,8 +116,16 @@ export function saveImportSession(
     savedAt: now.toISOString(),
     ...session
   };
+  let json: string;
   try {
-    store.setItem(IMPORT_SESSION_KEY, JSON.stringify(full));
+    json = JSON.stringify(full);
+  } catch {
+    return false;
+  }
+  // Too big to store: the last good write stays and the dialog shows notSaved.
+  if (json.length > MAX_SESSION_CHARS) return false;
+  try {
+    store.setItem(IMPORT_SESSION_KEY, json);
     return true;
   } catch {
     return false;
@@ -127,13 +149,18 @@ export function hasImportSession(
 }
 
 /**
- * The rows still worth reviewing: a contact written before the refresh now exists in the list and
- * is dropped, so a resumed import never offers it again.
+ * The rows still worth reviewing: a row whose primary or second address now exists in the list
+ * is dropped, as buildBatch would have counted it, so a resumed import never offers it again.
  */
 export function restoreRows(
   rows: ImportSessionRow[],
   existingEmails: Set<string>
 ): { rows: ImportSessionRow[]; dropped: number } {
-  const kept = rows.filter((r) => !existingEmails.has(r.c.email.toLowerCase()));
+  const known = (r: ImportSessionRow): boolean => {
+    if (existingEmails.has(r.c.email.toLowerCase())) return true;
+    const second = r.c.fields.email2 ? cleanEmail(r.c.fields.email2) : null;
+    return second !== null && existingEmails.has(second.toLowerCase());
+  };
+  const kept = rows.filter((r) => !known(r));
   return { rows: kept, dropped: rows.length - kept.length };
 }

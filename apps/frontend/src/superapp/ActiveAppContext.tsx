@@ -36,8 +36,22 @@ const STORAGE_KEY = "superapp_active_app";
  * the right app with no flash of the other one.
  */
 function storedAppId(): AppId {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch {
+    // Storage blocked: the URL or the default app decides.
+  }
   return isAppId(raw) ? raw : DEFAULT_APP.id;
+}
+
+/** Storage can be full or blocked; the choice still holds for this page view. */
+function rememberAppId(id: AppId): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, id);
+  } catch {
+    // The next load falls back to the URL or the default app.
+  }
 }
 
 /**
@@ -59,13 +73,13 @@ export function ActiveAppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!appFromUrl || appFromUrl.id === rememberedId) return;
     setRememberedId(appFromUrl.id);
-    localStorage.setItem(STORAGE_KEY, appFromUrl.id);
+    rememberAppId(appFromUrl.id);
   }, [appFromUrl, rememberedId]);
 
   const switchTo = useCallback(
     (id: AppId) => {
       setRememberedId(id);
-      localStorage.setItem(STORAGE_KEY, id);
+      rememberAppId(id);
       navigate(appById(id).basePath);
     },
     [navigate]
