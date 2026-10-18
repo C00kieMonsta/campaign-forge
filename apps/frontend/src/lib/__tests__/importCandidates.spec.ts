@@ -5,6 +5,7 @@ import {
   csvToRawCandidates,
   isComplete,
   nameFromEmail,
+  sortCandidates,
   toCreateRequest,
   type ImportCandidate,
   type RawCandidate
@@ -263,6 +264,51 @@ describe("buildBatch", () => {
     batch([first, second]);
     expect(first.fields).toEqual({ firstName: "Jean" });
     expect(second.fields).toEqual({ lastName: "Dupont" });
+  });
+});
+
+describe("sortCandidates", () => {
+  it("files rows by last name, then first name, accents and case ignored, nameless last", () => {
+    const rows = [
+      candidate({ id: "only-email-b", email: "zz@x.be", fields: {} }),
+      candidate({
+        id: "dupont-marie",
+        fields: { firstName: "Marie", lastName: "dupont" }
+      }),
+      candidate({
+        id: "company",
+        fields: { organization: "Boulangerie" },
+        isCompany: true
+      }),
+      candidate({ id: "only-email-a", email: "aa@x.be", fields: {} }),
+      candidate({ id: "elodie", fields: { firstName: "Élodie" } }),
+      candidate({
+        id: "dupont-jean",
+        fields: { firstName: "Jean", lastName: "Dupont" }
+      }),
+      candidate({
+        id: "eric",
+        fields: { firstName: "Eric", lastName: "Aerts" }
+      })
+    ];
+    expect(sortCandidates(rows).map((c) => c.id)).toEqual([
+      "eric",
+      "company",
+      "dupont-jean",
+      "dupont-marie",
+      "elodie",
+      "only-email-a",
+      "only-email-b"
+    ]);
+  });
+
+  it("does not touch the given array", () => {
+    const rows = [
+      candidate({ id: "b", fields: { lastName: "B" } }),
+      candidate({ id: "a", fields: { lastName: "A" } })
+    ];
+    sortCandidates(rows);
+    expect(rows.map((c) => c.id)).toEqual(["b", "a"]);
   });
 });
 

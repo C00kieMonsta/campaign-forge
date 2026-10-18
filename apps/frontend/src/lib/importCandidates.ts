@@ -269,6 +269,40 @@ export function buildBatch(
   };
 }
 
+const collator = new Intl.Collator("fr", { sensitivity: "base" });
+
+/** The name a phone book would file the row under: last name, else first name, else organization. */
+function fileUnder(c: ImportCandidate): string {
+  const f = c.fields;
+  return (
+    (f.lastName ?? "").trim() ||
+    (f.firstName ?? "").trim() ||
+    (f.organization ?? "").trim()
+  );
+}
+
+/**
+ * Alphabetical order for the review list, accents and case ignored. Rows with no name at all
+ * come last, by address. Meant to run once when the list is built, so later edits never move rows.
+ */
+export function sortCandidates(
+  candidates: ImportCandidate[]
+): ImportCandidate[] {
+  return [...candidates].sort((a, b) => {
+    const ka = fileUnder(a);
+    const kb = fileUnder(b);
+    if (!ka !== !kb) return ka ? -1 : 1;
+    return (
+      collator.compare(ka, kb) ||
+      collator.compare(
+        (a.fields.firstName ?? "").trim(),
+        (b.fields.firstName ?? "").trim()
+      ) ||
+      collator.compare(a.email, b.email)
+    );
+  });
+}
+
 /** First and last name both present. */
 export function isComplete(c: { fields: ContactCandidateFields }): boolean {
   return !isBlank(c.fields.firstName) && !isBlank(c.fields.lastName);
