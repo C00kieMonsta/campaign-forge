@@ -1,5 +1,8 @@
 import { BadRequestException } from "@nestjs/common";
-import type { ContactGroup } from "@packages/types";
+import {
+  contactAssistantCreateRequestSchema,
+  type ContactGroup
+} from "@packages/types";
 import type { ContactsService } from "../../contacts/contacts.service";
 import type { GroupsService } from "../../groups/groups.service";
 import type { MistralOcrService } from "../../shared/mistral-ocr.service";
@@ -393,6 +396,57 @@ describe("ContactAssistantService.createMany", () => {
     ]);
     // Never an unconditional put: the existing row is untouched.
     expect(createConditional).toHaveBeenCalledTimes(2);
+  });
+
+  it("stores the given source on every created row", async () => {
+    const { svc, createConditional } = build({});
+    const out = await svc.createMany(
+      [
+        { email: "a@x.be", firstName: "A" },
+        { email: "b@x.be", firstName: "B" }
+      ],
+      "import"
+    );
+    expect(out.created.map((c) => c.source)).toEqual(["import", "import"]);
+    expect(createConditional.mock.calls[0][0]).toMatchObject({
+      emailLower: "a@x.be",
+      source: "import"
+    });
+  });
+
+  it("defaults the source to admin when none is given", async () => {
+    const { svc } = build({});
+    const out = await svc.createMany([{ email: "a@x.be", firstName: "A" }]);
+    expect(out.created[0].source).toBe("admin");
+  });
+});
+
+describe("contactAssistantCreateRequestSchema", () => {
+  it("defaults source to admin when the field is omitted", () => {
+    const parsed = contactAssistantCreateRequestSchema.safeParse({
+      contacts: [{ email: "a@x.be" }]
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.source).toBe("admin");
+  });
+
+  it("accepts import as a source", () => {
+    const parsed = contactAssistantCreateRequestSchema.safeParse({
+      contacts: [{ email: "a@x.be" }],
+      source: "import"
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.source).toBe("import");
+  });
+
+  it("rejects any other source", () => {
+    for (const source of ["landing", "csv", "", 1, null]) {
+      const parsed = contactAssistantCreateRequestSchema.safeParse({
+        contacts: [{ email: "a@x.be" }],
+        source
+      });
+      expect(parsed.success).toBe(false);
+    }
   });
 });
 

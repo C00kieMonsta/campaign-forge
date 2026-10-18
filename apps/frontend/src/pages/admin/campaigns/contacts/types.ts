@@ -67,10 +67,3 @@ export interface ContactFormErrors {
   lastName?: string;
   email?: string;
 }
-
-export interface ImportPreview {
-  toImport: { contact: Partial<Contact>; groupNames: string[] }[];
-  skipped: number;
-  duplicates: number;
-  newGroupNames: string[];
-}

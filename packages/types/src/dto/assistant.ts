@@ -158,7 +158,9 @@ export type ContactAssistantExtractFields = z.infer<
 export const contactAssistantCreateRequestSchema = z.object({
   // Items are validated one by one server-side (createContactRequestSchema), so one bad row is
   // reported in `errors` instead of rejecting the whole batch.
-  contacts: z.array(z.unknown()).min(1).max(100)
+  contacts: z.array(z.unknown()).min(1).max(100),
+  /** "admin" from the assistant dialog, "import" from the archive and CSV import. */
+  source: z.enum(["admin", "import"]).default("admin")
 });
 export type ContactAssistantCreateRequest = z.infer<
   typeof contactAssistantCreateRequestSchema

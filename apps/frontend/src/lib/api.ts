@@ -404,12 +404,22 @@ export const api = {
       /**
        * The confirmed candidates, written conditionally. An email that already has a contact is
        * reported in `existing` and left untouched; the ordinary create and import endpoints would
-       * replace the row and re-subscribe it.
+       * replace the row and re-subscribe it. `source` tags the rows ("admin" when omitted). One
+       * batch of 100 conditional writes gets 60 s, so a stalled batch fails instead of waiting for
+       * nginx's 600 s.
        */
-      create(contacts: CreateContactRequest[]) {
+      create(contacts: CreateContactRequest[], source?: "admin" | "import") {
+        const signal =
+          typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+            ? AbortSignal.timeout(60_000)
+            : undefined;
         return request<ContactAssistantCreateResponse>(
           "/admin/contacts/assistant/create",
-          { method: "POST", body: JSON.stringify({ contacts }) }
+          {
+            method: "POST",
+            body: JSON.stringify({ contacts, source }),
+            signal
+          }
         );
       }
     }

@@ -25,6 +25,7 @@
     "@tiptap/starter-kit": "3.20.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "fflate": "0.8.3",
     "lucide-react": "^0.462.0",
     "pdfjs-dist": "6.2.108",
     "react": "^18.3.1",

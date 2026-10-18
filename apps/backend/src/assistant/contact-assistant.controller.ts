@@ -33,7 +33,7 @@ export class ContactAssistantController {
     const parsed = contactAssistantCreateRequestSchema.safeParse(body);
     if (!parsed.success)
       throw new BadRequestException(formatZodError(parsed.error));
-    return this.assistant.createMany(parsed.data.contacts);
+    return this.assistant.createMany(parsed.data.contacts, parsed.data.source);
   }
 
   @Post("extract")

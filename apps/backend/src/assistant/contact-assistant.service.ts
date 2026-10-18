@@ -398,8 +398,14 @@ export class ContactAssistantService {
    * The ordinary create and import endpoints do an unconditional put: a photographed sign-up sheet
    * that lists a long-standing client would wipe her groups and notes, and re-subscribe someone
    * who opted out. Here an existing row is reported and left alone.
+   *
+   * `source` is stored on every created row: "admin" for the assistant dialog, "import" for the
+   * archive and CSV import.
    */
-  async createMany(items: unknown[]): Promise<ContactAssistantCreateResponse> {
+  async createMany(
+    items: unknown[],
+    source: "admin" | "import" = "admin"
+  ): Promise<ContactAssistantCreateResponse> {
     const created: Contact[] = [];
     const existing: string[] = [];
     const errors: { email: string; reason: string }[] = [];
@@ -431,7 +437,7 @@ export class ContactAssistantService {
         emailLower,
         email,
         status: status ?? "subscribed",
-        source: "admin",
+        source,
         createdAt: now,
         updatedAt: now
       };
