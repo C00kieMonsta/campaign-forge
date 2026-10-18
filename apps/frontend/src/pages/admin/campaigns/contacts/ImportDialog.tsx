@@ -6,7 +6,8 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type DragEvent
+  type DragEvent,
+  type KeyboardEvent
 } from "react";
 import type { CreateContactRequest } from "@packages/types";
 import {
@@ -139,12 +140,23 @@ function Tile({
 
 interface RowProps {
   row: Row;
+  /** The one row that Tab reaches; the arrow keys move it. */
+  focused: boolean;
   onSelect: (id: string, selected: boolean) => void;
   onName: (id: string, key: NameKey, value: string) => void;
+  onFocusRow: (id: string) => void;
+  registerRef: (id: string, el: HTMLDivElement | null) => void;
 }
 
 /** Memoized at module level so a re-render of the dialog does not remount the inputs. */
-const ImportRow = memo(function ImportRow({ row, onSelect, onName }: RowProps) {
+const ImportRow = memo(function ImportRow({
+  row,
+  focused,
+  onSelect,
+  onName,
+  onFocusRow,
+  registerRef
+}: RowProps) {
   const { t } = useLanguage();
   const ti = t.contactImport;
   const tf = t.contactForm;
@@ -156,7 +168,11 @@ const ImportRow = memo(function ImportRow({ row, onSelect, onName }: RowProps) {
 
   return (
     <div
-      className={`flex items-start gap-3 rounded-xl border p-3 ${row.selected ? "" : "bg-muted/30"}`}
+      ref={(el) => registerRef(c.id, el)}
+      data-row-id={c.id}
+      tabIndex={focused ? 0 : -1}
+      onFocus={() => onFocusRow(c.id)}
+      className={`flex items-start gap-3 rounded-xl border p-3 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 ${row.selected ? "" : "bg-muted/30"}`}
     >
       <Checkbox
         className="mt-0.5 size-5"
@@ -234,6 +250,11 @@ export function ImportDialog({
   const [summary, setSummary] = useState<Summary | null>(null);
   const [page, setPage] = useState(1);
   const [stop, setStop] = useState<ImportStop | null>(null);
+  // Index into rows of the row the keyboard is on; only that row is in the Tab order.
+  const [focusIndex, setFocusIndex] = useState(0);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  // A row to focus once its page is on screen (arrow keys across a page break, first review paint).
+  const pendingFocusRef = useRef<string | null>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -246,6 +267,8 @@ export function ImportDialog({
   const talliesRef = useRef<Tallies>(emptyTallies());
 
   const reset = () => {
+    setFocusIndex(0);
+    pendingFocusRef.current = null;
     setStep("pick");
     setDragOver(false);
     setPickError(null);
@@ -322,6 +345,8 @@ export function ImportDialog({
         newGroupNames: batch.newGroupNames
       });
       setPage(1);
+      setFocusIndex(0);
+      pendingFocusRef.current = batch.candidates[0]?.id ?? null;
       setStep("review");
     } catch (err) {
       if (run !== runRef.current) return;
@@ -367,6 +392,8 @@ export function ImportDialog({
   };
 
   const goBack = () => {
+    setFocusIndex(0);
+    pendingFocusRef.current = null;
     setRows([]);
     setSummary(null);
     setPage(1);
@@ -389,6 +416,72 @@ export function ImportDialog({
       )
     );
   }, []);
+
+  const registerRef = useCallback((id: string, el: HTMLDivElement | null) => {
+    if (el) rowRefs.current.set(id, el);
+    else rowRefs.current.delete(id);
+  }, []);
+
+  // The current rows, readable from the stable callbacks the memoized rows receive.
+  const rowsRef = useRef<Row[]>([]);
+  rowsRef.current = rows;
+
+  const rowIndex = (id: string) => rows.findIndex((r) => r.c.id === id);
+
+  const onFocusRow = useCallback((id: string) => {
+    const index = rowsRef.current.findIndex((r) => r.c.id === id);
+    if (index >= 0) setFocusIndex(index);
+  }, []);
+
+  /** Moves the keyboard to a row, turning the page first when it is not on screen. */
+  const focusRow = (index: number) => {
+    const bounded = Math.max(0, Math.min(rows.length - 1, index));
+    const id = rows[bounded]?.c.id;
+    if (!id) return;
+    setFocusIndex(bounded);
+    const el = rowRefs.current.get(id);
+    if (el) {
+      el.focus({ preventScroll: true });
+      el.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    pendingFocusRef.current = id;
+    setPage(Math.floor(bounded / PAGE_SIZE) + 1);
+  };
+
+  // Focus the row a page turn or the first review paint asked for, once it exists.
+  useEffect(() => {
+    const id = pendingFocusRef.current;
+    if (!id) return;
+    const el = rowRefs.current.get(id);
+    if (!el) return;
+    pendingFocusRef.current = null;
+    el.focus({ preventScroll: true });
+    el.scrollIntoView({ block: "nearest" });
+  });
+
+  /** Arrows move between rows, Enter ticks or unticks; nothing here starts the import. */
+  const onListKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    const rowEl = target.closest<HTMLElement>("[data-row-id]");
+    const id = rowEl?.dataset.rowId;
+    if (!rowEl || !id) return;
+    const index = rowIndex(id);
+    if (index < 0) return;
+    const inText = target.tagName === "INPUT";
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      focusRow(index + (e.key === "ArrowDown" ? 1 : -1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      // Enter in a name field leaves the field; a second Enter then ticks the row.
+      if (inText) rowEl.focus();
+      else setSelected(id, !rows[index].selected);
+    } else if (e.key === " " && target === rowEl) {
+      e.preventDefault();
+      setSelected(id, !rows[index].selected);
+    }
+  };
 
   const selectAll = (selected: boolean) =>
     setRows((prev) =>
@@ -576,6 +669,12 @@ export function ImportDialog({
     await onImported();
   };
 
+  // The row Tab lands on: the keyboard's row, or the first of the page when that row is elsewhere.
+  const keyboardId =
+    rows[Math.min(focusIndex, Math.max(0, rows.length - 1))]?.c.id ?? null;
+  const focusedId = pageRows.some((r) => r.c.id === keyboardId)
+    ? keyboardId
+    : (pageRows[0]?.c.id ?? null);
   const importing = step === "importing";
   const inReview = step === "review" || importing || step === "importError";
   const title = inReview ? ti.reviewTitle : ti.title;
@@ -716,6 +815,9 @@ export function ImportDialog({
                       {selectedCount} {t.contacts.selected}
                     </span>
                   </div>
+                  <p className="hidden text-xs text-muted-foreground [@media(hover:hover)]:block">
+                    {ti.keyboardHint}
+                  </p>
 
                   {incompleteSelected > 0 ? (
                     <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -735,13 +837,16 @@ export function ImportDialog({
                     </div>
                   ) : null}
 
-                  <div className="space-y-2">
+                  <div className="space-y-2" onKeyDown={onListKeyDown}>
                     {pageRows.map((row) => (
                       <ImportRow
                         key={row.c.id}
                         row={row}
+                        focused={row.c.id === focusedId}
                         onSelect={setSelected}
                         onName={setName}
+                        onFocusRow={onFocusRow}
+                        registerRef={registerRef}
                       />
                     ))}
                   </div>

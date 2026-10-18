@@ -96,6 +96,8 @@ export const translations = {
       noName: "sans nom",
       missingNames: "contacts sélectionnés n'ont pas de nom.",
       autofill: "Compléter automatiquement",
+      keyboardHint:
+        "Flèches ↑ ↓ pour passer d'un contact à l'autre, Entrée pour cocher ou décocher.",
       salutation: "Madame, Monsieur",
       back: "Retour",
       cancel: "Annuler",
@@ -1108,6 +1110,8 @@ export const translations = {
       noName: "zonder naam",
       missingNames: "geselecteerde contacten hebben geen naam.",
       autofill: "Automatisch aanvullen",
+      keyboardHint:
+        "Pijltjes ↑ ↓ om van contact te wisselen, Enter om aan of uit te vinken.",
       salutation: "Mevrouw, Mijnheer",
       back: "Terug",
       cancel: "Annuleren",
