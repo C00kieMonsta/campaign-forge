@@ -110,7 +110,18 @@ export const translations = {
       stopped: "L'import s'est arrêté :",
       timeout: "Le serveur met trop de temps à répondre. Réessayez.",
       retry: "Réessayer",
-      close: "Fermer"
+      close: "Fermer",
+      resume: "Reprendre l'import",
+      pendingList: "Une liste de",
+      pendingListTail: "contacts est en cours de vérification.",
+      resumeList: "Reprendre",
+      abandonList: "Abandonner",
+      resumed: "Liste reprise là où vous l'aviez laissée, sauvegardée le",
+      droppedSince: "déjà importé(s) entre-temps, retiré(s) de la liste",
+      autoSaved:
+        "Vos cases cochées et les noms saisis sont sauvegardés automatiquement jusqu'à l'import.",
+      notSaved:
+        "La liste n'a pas pu être sauvegardée : un rechargement de la page la perdrait."
     },
     contactForm: {
       title: "Nouveau contact",
@@ -1124,7 +1135,18 @@ export const translations = {
       stopped: "De import is gestopt:",
       timeout: "De server doet er te lang over. Probeer opnieuw.",
       retry: "Opnieuw proberen",
-      close: "Sluiten"
+      close: "Sluiten",
+      resume: "Import hervatten",
+      pendingList: "Een lijst van",
+      pendingListTail: "contacten wordt nog gecontroleerd.",
+      resumeList: "Hervatten",
+      abandonList: "Weggooien",
+      resumed: "Lijst hervat waar u gebleven was, bewaard op",
+      droppedSince: "intussen al geïmporteerd en uit de lijst gehaald",
+      autoSaved:
+        "Uw vinkjes en ingevulde namen worden automatisch bewaard tot de import.",
+      notSaved:
+        "De lijst kon niet bewaard worden: bij het herladen van de pagina gaat ze verloren."
     },
     contactForm: {
       title: "Nieuw contact",

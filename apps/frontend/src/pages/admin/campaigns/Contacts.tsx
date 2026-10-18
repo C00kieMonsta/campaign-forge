@@ -21,6 +21,7 @@ import { useSearchParams } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import { hasImportSession as hasSavedImportSession } from "@/lib/importSession";
 import { emptyForm, getGroupClasses } from "./contacts/constants";
 import { ContactAssistantDialog } from "./contacts/ContactAssistantDialog";
 import { ContactFormDialog } from "./contacts/ContactFormDialog";
@@ -101,8 +102,15 @@ export default function Contacts() {
     null
   );
 
-  // Import dialog (archive, zip or CSV)
+  // Import dialog (archive, zip or CSV); the button says so when a saved list is waiting.
   const [importOpen, setImportOpen] = useState(false);
+  const [hasImportSession, setHasImportSession] = useState(() =>
+    hasSavedImportSession()
+  );
+  const onImportOpenChange = (next: boolean) => {
+    setImportOpen(next);
+    if (!next) setHasImportSession(hasSavedImportSession());
+  };
 
   // ─── Data loading ──────────────────────────────────────────────────────────
 
@@ -479,9 +487,13 @@ export default function Contacts() {
           {t.contacts.title}
         </h1>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setImportOpen(true)}>
+          <Button
+            variant="outline"
+            onClick={() => setImportOpen(true)}
+            disabled={loading}
+          >
             <Upload className="h-4 w-4 mr-2" />
-            {t.contactImport.button}
+            {hasImportSession ? t.contactImport.resume : t.contactImport.button}
           </Button>
           <Button
             onClick={openCreate}
@@ -633,7 +645,7 @@ export default function Contacts() {
       {/* Import Dialog */}
       <ImportDialog
         open={importOpen}
-        onOpenChange={setImportOpen}
+        onOpenChange={onImportOpenChange}
         groups={groups}
         existingEmails={existingEmails}
         onImported={loadContacts}

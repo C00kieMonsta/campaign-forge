@@ -51,10 +51,18 @@ import {
   buildBatch,
   csvToRawCandidates,
   isComplete,
+  sortCandidates,
   toCreateRequest,
   type ImportCandidate,
   type RawCandidate
 } from "@/lib/importCandidates";
+import {
+  clearImportSession,
+  loadImportSession,
+  restoreRows,
+  saveImportSession,
+  type ImportSession
+} from "@/lib/importSession";
 import { AUTO_COLORS } from "./constants";
 import type { ContactGroup } from "./types";
 
@@ -245,11 +253,20 @@ export function ImportDialog({
   onImported,
   onOpenAssistant
 }: Props) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { toast } = useToast();
   const ti = t.contactImport;
 
   const [step, setStep] = useState<Step>("pick");
+  // Whether the last save of the review list succeeded; null before any save.
+  const [persisted, setPersisted] = useState<boolean | null>(null);
+  // Set when the list on screen came back from storage.
+  const [resumed, setResumed] = useState<{
+    savedAt: string;
+    dropped: number;
+  } | null>(null);
+  // A saved list the pick step can take up again or abandon.
+  const [pending, setPending] = useState<{ count: number } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -277,6 +294,9 @@ export function ImportDialog({
   const reset = () => {
     setFocusIndex(0);
     pendingFocusRef.current = null;
+    setPersisted(null);
+    setResumed(null);
+    setPending(null);
     setStep("pick");
     setDragOver(false);
     setPickError(null);
@@ -296,6 +316,67 @@ export function ImportDialog({
     createdGroupsRef.current = new Map();
     reset();
   }, [open]);
+
+  const summaryOf = (session: ImportSession, dropped: number): Summary => {
+    const known = new Set(groups.map((g) => g.name.trim().toLowerCase()));
+    return {
+      source: session.source,
+      alreadyPresent: session.summary.alreadyPresent + dropped,
+      withoutEmail: session.summary.withoutEmail,
+      duplicatesInFile: session.summary.duplicatesInFile,
+      newGroupNames: session.summary.newGroupNames.filter(
+        (n) => !known.has(n.trim().toLowerCase())
+      )
+    };
+  };
+
+  /** Puts a saved list back on screen; false when nothing of it is left to review. */
+  const applySession = (session: ImportSession): boolean => {
+    const { rows: kept, dropped } = restoreRows(session.rows, existingEmails);
+    if (kept.length === 0) {
+      clearImportSession();
+      return false;
+    }
+    const focus = Math.max(0, Math.min(kept.length - 1, session.focusIndex));
+    const pages = Math.max(1, Math.ceil(kept.length / PAGE_SIZE));
+    const page = Math.max(1, Math.min(pages, session.page));
+    // Back on the page that was open; the keyboard lands on its row there, else on the page's first.
+    const onPage = Math.floor(focus / PAGE_SIZE) + 1 === page;
+    setRows(kept);
+    setSummary(summaryOf(session, dropped));
+    setFocusIndex(focus);
+    setPage(page);
+    pendingFocusRef.current =
+      (onPage ? kept[focus] : kept[(page - 1) * PAGE_SIZE])?.c.id ?? null;
+    setResumed({ savedAt: session.savedAt, dropped });
+    setPending(null);
+    setPickError(null);
+    setStep("review");
+    return true;
+  };
+
+  // A list saved before a refresh or a closed tab comes straight back when the dialog opens.
+  useEffect(() => {
+    if (!open) return;
+    const session = loadImportSession();
+    if (session) applySession(session);
+  }, [open]);
+
+  const resumePending = () => {
+    const session = loadImportSession();
+    if (!session || !applySession(session)) setPending(null);
+  };
+
+  const abandonPending = () => {
+    clearImportSession();
+    setPending(null);
+  };
+
+  const savedAtLabel = (iso: string) =>
+    new Date(iso).toLocaleString(language === "nl" ? "nl-BE" : "fr-BE", {
+      dateStyle: "short",
+      timeStyle: "short"
+    });
 
   const fail = (message: string) => {
     setPickError(message);
@@ -342,19 +423,38 @@ export function ImportDialog({
         groups.map((g) => g.name.trim().toLowerCase())
       );
       const batch = buildBatch(raw, existingEmails, groupNamesLower);
-      setRows(
-        batch.candidates.map((c) => ({ c, selected: true, serverError: null }))
-      );
-      setSummary({
+      const candidates = sortCandidates(batch.candidates);
+      const nextRows = candidates.map((c) => ({
+        c,
+        selected: true,
+        serverError: null
+      }));
+      const nextSummary: Summary = {
         source: result.kind,
         alreadyPresent: batch.alreadyPresent,
         withoutEmail: batch.withoutEmail,
         duplicatesInFile: batch.duplicatesInFile,
         newGroupNames: batch.newGroupNames
-      });
+      };
+      setRows(nextRows);
+      setSummary(nextSummary);
       setPage(1);
       setFocusIndex(0);
-      pendingFocusRef.current = batch.candidates[0]?.id ?? null;
+      pendingFocusRef.current = candidates[0]?.id ?? null;
+      setResumed(null);
+      setPending(null);
+      // Saved at once: a refresh a moment after the read must not cost the parse.
+      setPersisted(
+        nextRows.length > 0
+          ? saveImportSession({
+              source: nextSummary.source,
+              summary: nextSummary,
+              rows: nextRows,
+              page: 1,
+              focusIndex: 0
+            })
+          : null
+      );
       setStep("review");
     } catch (err) {
       if (run !== runRef.current) return;
@@ -399,7 +499,22 @@ export function ImportDialog({
     onOpenAssistant();
   };
 
+  /** Back to the pick step; the list stays saved and can be taken up again from there. */
   const goBack = () => {
+    if (summary && rows.length > 0) {
+      saveImportSession({
+        source: summary.source,
+        summary,
+        rows,
+        page: currentPage,
+        focusIndex
+      });
+      setPending({ count: rows.length });
+    } else {
+      clearImportSession();
+      setPending(null);
+    }
+    setResumed(null);
     setFocusIndex(0);
     pendingFocusRef.current = null;
     setRows([]);
@@ -530,6 +645,32 @@ export function ImportDialog({
     [rows, currentPage]
   );
 
+  // Every tick, typed name and page turn is saved shortly after it happens, until the import is done.
+  useEffect(() => {
+    if (step !== "review" || !summary) return;
+    if (rows.length === 0) {
+      clearImportSession();
+      return;
+    }
+    const timer = setTimeout(() => {
+      setPersisted(
+        saveImportSession({
+          source: summary.source,
+          summary: {
+            alreadyPresent: summary.alreadyPresent,
+            withoutEmail: summary.withoutEmail,
+            duplicatesInFile: summary.duplicatesInFile,
+            newGroupNames: summary.newGroupNames
+          },
+          rows,
+          page: currentPage,
+          focusIndex
+        })
+      );
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [rows, currentPage, focusIndex, step, summary]);
+
   // The row Tab lands on: the keyboard's row, or the first of the page when that row is elsewhere.
   const keyboardId =
     rows[Math.min(focusIndex, Math.max(0, rows.length - 1))]?.c.id ?? null;
@@ -581,6 +722,8 @@ export function ImportDialog({
     const tally = talliesRef.current;
     resultToast(tally);
     if (tally.errors.length === 0) {
+      // The creation is confirmed, so there is nothing left to come back to.
+      clearImportSession();
       onOpenChange(false);
       await onImported();
       return;
@@ -755,6 +898,30 @@ export function ImportDialog({
                   <span>{pickError}</span>
                 </p>
               ) : null}
+              {pending ? (
+                <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 p-3 text-sm">
+                  <span className="flex-1">
+                    {ti.pendingList} {pending.count} {ti.pendingListTail}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9"
+                    onClick={resumePending}
+                  >
+                    <RotateCcw />
+                    {ti.resumeList}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-9 text-destructive hover:text-destructive"
+                    onClick={abandonPending}
+                  >
+                    {ti.abandonList}
+                  </Button>
+                </div>
+              ) : null}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Tile
                   icon={FileUp}
@@ -849,6 +1016,24 @@ export function ImportDialog({
                   >
                     {ti.keyboardHint}
                   </p>
+                  {resumed ? (
+                    <p className="text-xs text-muted-foreground">
+                      {ti.resumed} {savedAtLabel(resumed.savedAt)}
+                      {resumed.dropped > 0
+                        ? ` · ${resumed.dropped} ${ti.droppedSince}`
+                        : ""}
+                    </p>
+                  ) : null}
+                  {persisted === false ? (
+                    <p className="flex items-start gap-1.5 text-xs text-destructive">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>{ti.notSaved}</span>
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      {ti.autoSaved}
+                    </p>
+                  )}
 
                   {incompleteSelected > 0 ? (
                     <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
