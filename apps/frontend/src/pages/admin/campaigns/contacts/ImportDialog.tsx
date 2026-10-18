@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -140,8 +141,10 @@ function Tile({
 
 interface RowProps {
   row: Row;
-  /** The one row that Tab reaches; the arrow keys move it. */
+  /** The row whose checkbox and inputs Tab reaches; the arrow keys move it. */
   focused: boolean;
+  /** Id of the keyboard hint, read out as the checkbox description. */
+  hintId: string;
   onSelect: (id: string, selected: boolean) => void;
   onName: (id: string, key: NameKey, value: string) => void;
   onFocusRow: (id: string) => void;
@@ -152,6 +155,7 @@ interface RowProps {
 const ImportRow = memo(function ImportRow({
   row,
   focused,
+  hintId,
   onSelect,
   onName,
   onFocusRow,
@@ -170,21 +174,23 @@ const ImportRow = memo(function ImportRow({
     <div
       ref={(el) => registerRef(c.id, el)}
       data-row-id={c.id}
-      tabIndex={focused ? 0 : -1}
       onFocus={() => onFocusRow(c.id)}
-      className={`flex items-start gap-3 rounded-xl border p-3 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 ${row.selected ? "" : "bg-muted/30"}`}
+      className={`flex items-start gap-3 rounded-xl border p-3 has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-ring/50 ${row.selected ? "" : "bg-muted/30"}`}
     >
       <Checkbox
         className="mt-0.5 size-5"
+        tabIndex={focused ? 0 : -1}
         checked={row.selected}
         onCheckedChange={(v) => onSelect(c.id, v === true)}
         aria-label={c.email}
+        aria-describedby={hintId}
       />
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex flex-wrap items-center gap-2">
           {c.needsName ? (
             <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:max-w-md">
               <Input
+                tabIndex={focused ? 0 : -1}
                 value={f.firstName ?? ""}
                 onChange={(e) => onName(c.id, "firstName", e.target.value)}
                 placeholder={tf.firstName}
@@ -192,6 +198,7 @@ const ImportRow = memo(function ImportRow({
                 className="h-10"
               />
               <Input
+                tabIndex={focused ? 0 : -1}
                 value={f.lastName ?? ""}
                 onChange={(e) => onName(c.id, "lastName", e.target.value)}
                 placeholder={tf.lastName}
@@ -250,8 +257,9 @@ export function ImportDialog({
   const [summary, setSummary] = useState<Summary | null>(null);
   const [page, setPage] = useState(1);
   const [stop, setStop] = useState<ImportStop | null>(null);
-  // Index into rows of the row the keyboard is on; only that row is in the Tab order.
+  // Index into rows of the row the keyboard is on; only its checkbox and inputs are Tab stops.
   const [focusIndex, setFocusIndex] = useState(0);
+  const hintId = useId();
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   // A row to focus once its page is on screen (arrow keys across a page break, first review paint).
   const pendingFocusRef = useRef<string | null>(null);
@@ -433,6 +441,15 @@ export function ImportDialog({
     if (index >= 0) setFocusIndex(index);
   }, []);
 
+  // The checkbox is the focus target, so a screen reader announces the row by its email and state.
+  const checkboxOf = (rowEl: HTMLElement) =>
+    rowEl.querySelector<HTMLElement>('[role="checkbox"]');
+
+  const focusRowEl = (el: HTMLElement) => {
+    checkboxOf(el)?.focus({ preventScroll: true });
+    el.scrollIntoView({ block: "nearest" });
+  };
+
   /** Moves the keyboard to a row, turning the page first when it is not on screen. */
   const focusRow = (index: number) => {
     const bounded = Math.max(0, Math.min(rows.length - 1, index));
@@ -441,8 +458,7 @@ export function ImportDialog({
     setFocusIndex(bounded);
     const el = rowRefs.current.get(id);
     if (el) {
-      el.focus({ preventScroll: true });
-      el.scrollIntoView({ block: "nearest" });
+      focusRowEl(el);
       return;
     }
     pendingFocusRef.current = id;
@@ -456,30 +472,38 @@ export function ImportDialog({
     const el = rowRefs.current.get(id);
     if (!el) return;
     pendingFocusRef.current = null;
-    el.focus({ preventScroll: true });
-    el.scrollIntoView({ block: "nearest" });
+    focusRowEl(el);
   });
 
   /** Arrows move between rows, Enter ticks or unticks; nothing here starts the import. */
   const onListKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // IME commits (keyCode 229 on Safari) and modifier shortcuts stay with the browser.
+    if (
+      e.nativeEvent.isComposing ||
+      e.keyCode === 229 ||
+      e.altKey ||
+      e.ctrlKey ||
+      e.metaKey ||
+      e.shiftKey
+    ) {
+      return;
+    }
     const target = e.target as HTMLElement;
     const rowEl = target.closest<HTMLElement>("[data-row-id]");
     const id = rowEl?.dataset.rowId;
     if (!rowEl || !id) return;
     const index = rowIndex(id);
     if (index < 0) return;
-    const inText = target.tagName === "INPUT";
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       focusRow(index + (e.key === "ArrowDown" ? 1 : -1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      // Enter in a name field leaves the field; a second Enter then ticks the row.
-      if (inText) rowEl.focus();
+      // A held key must not flip the tick on every repeat.
+      if (e.repeat) return;
+      // Enter in a name field moves to the checkbox; a second Enter then ticks the row.
+      if (target.tagName === "INPUT") checkboxOf(rowEl)?.focus();
       else setSelected(id, !rows[index].selected);
-    } else if (e.key === " " && target === rowEl) {
-      e.preventDefault();
-      setSelected(id, !rows[index].selected);
     }
   };
 
@@ -487,18 +511,6 @@ export function ImportDialog({
     setRows((prev) =>
       prev.map((r) => (r.selected === selected ? r : { ...r, selected }))
     );
-
-  /** Fills the blank names of every ticked row; the inputs stay editable afterwards. */
-  const autofill = () => {
-    const salutation = ti.salutation;
-    setRows((prev) =>
-      prev.map((r) =>
-        r.selected && !isComplete(r.c)
-          ? { ...r, c: autofillNames(r.c, salutation) }
-          : r
-      )
-    );
-  };
 
   const { selectedCount, incompleteSelected } = useMemo(() => {
     let selected = 0;
@@ -517,6 +529,28 @@ export function ImportDialog({
     () => rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
     [rows, currentPage]
   );
+
+  // The row Tab lands on: the keyboard's row, or the first of the page when that row is elsewhere.
+  const keyboardId =
+    rows[Math.min(focusIndex, Math.max(0, rows.length - 1))]?.c.id ?? null;
+  const focusedId = pageRows.some((r) => r.c.id === keyboardId)
+    ? keyboardId
+    : (pageRows[0]?.c.id ?? null);
+
+  /** Fills the blank names of every ticked row; the inputs stay editable afterwards. */
+  const autofill = () => {
+    // The button unmounts with its block once every name is filled, so move the keyboard to its row first.
+    const el = focusedId ? rowRefs.current.get(focusedId) : undefined;
+    if (el) checkboxOf(el)?.focus({ preventScroll: true });
+    const salutation = ti.salutation;
+    setRows((prev) =>
+      prev.map((r) =>
+        r.selected && !isComplete(r.c)
+          ? { ...r, c: autofillNames(r.c, salutation) }
+          : r
+      )
+    );
+  };
 
   const goToPage = (next: number) => {
     setPage(next);
@@ -669,12 +703,6 @@ export function ImportDialog({
     await onImported();
   };
 
-  // The row Tab lands on: the keyboard's row, or the first of the page when that row is elsewhere.
-  const keyboardId =
-    rows[Math.min(focusIndex, Math.max(0, rows.length - 1))]?.c.id ?? null;
-  const focusedId = pageRows.some((r) => r.c.id === keyboardId)
-    ? keyboardId
-    : (pageRows[0]?.c.id ?? null);
   const importing = step === "importing";
   const inReview = step === "review" || importing || step === "importError";
   const title = inReview ? ti.reviewTitle : ti.title;
@@ -815,7 +843,10 @@ export function ImportDialog({
                       {selectedCount} {t.contacts.selected}
                     </span>
                   </div>
-                  <p className="hidden text-xs text-muted-foreground [@media(hover:hover)]:block">
+                  <p
+                    id={hintId}
+                    className="hidden text-xs text-muted-foreground [@media(hover:hover)]:block"
+                  >
                     {ti.keyboardHint}
                   </p>
 
@@ -843,6 +874,7 @@ export function ImportDialog({
                         key={row.c.id}
                         row={row}
                         focused={row.c.id === focusedId}
+                        hintId={hintId}
                         onSelect={setSelected}
                         onName={setName}
                         onFocusRow={onFocusRow}
