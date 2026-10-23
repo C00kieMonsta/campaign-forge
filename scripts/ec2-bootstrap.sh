@@ -42,7 +42,8 @@ dnf install -y git nginx
 # Install a supported runtime. The deploy also checks the minimum security version.
 log "Installing Node.js 24..."
 curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -
-dnf install -y nodejs
+dnf clean metadata
+dnf --refresh install -y --setopt=nodesource-nodejs.priority=1 'nodejs-24.*'
 node -e 'const [major, minor, patch] = process.versions.node.split(".").map(Number); if (major !== 24 || minor < 22 || (minor === 22 && patch < 1)) process.exit(1)'
 
 # ── pnpm ─────────────────────────────────────────────────────────────────────

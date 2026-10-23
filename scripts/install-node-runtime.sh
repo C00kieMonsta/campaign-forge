@@ -15,7 +15,9 @@ if ! is_patched; then
   curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120 \
     https://rpm.nodesource.com/setup_24.x -o "$setup_script"
   bash "$setup_script"
-  dnf install -y nodejs
+  # The repository ID stays the same across Node majors. Cached metadata can still select 20.x.
+  dnf clean metadata
+  dnf --refresh install -y --setopt=nodesource-nodejs.priority=1 'nodejs-24.*'
 fi
 
 if ! is_patched; then

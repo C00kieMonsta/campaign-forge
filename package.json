@@ -24,7 +24,7 @@
     "format:check": "prettier --check .",
     "clean-install": "find . -name 'node_modules' -type d -prune -exec rm -rf '{}' + && pnpm install",
     "audit:backend": "node scripts/audit-backend.cjs",
-    "test:security": "node --test scripts/__tests__/audit-backend.test.cjs",
+    "test:security": "node --test scripts/__tests__/audit-backend.test.cjs scripts/__tests__/node-runtime.test.cjs",
     "test:backend-http": "node --test scripts/__tests__/backend-http.test.cjs"
   },
   "lint-staged": {

@@ -50,7 +50,10 @@ test("fails closed when the registry fails or the report format changes", () => 
     { error: { message: "unavailable" }, ...report() },
     { metadata: { dependencies: 10 } },
     report({ a: { severity: "high" } }),
-    report({ a: advisory("apps__backend>dependency", "unknown") })
+    report({ a: advisory("apps__backend>dependency", "unknown") }),
+    report({ a: advisory("apps__backend>dependency", "toString") }),
+    report({ a: { severity: "high", findings: [], url: "test" } }),
+    { metadata: { dependencies: 0 }, advisories: {} }
   ]) {
     assert.throws(() => backendAdvisories(invalid));
   }

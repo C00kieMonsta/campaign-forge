@@ -8,6 +8,7 @@ function backendAdvisories(report) {
     report.error ||
     !report.metadata ||
     !Number.isInteger(report.metadata.dependencies) ||
+    report.metadata.dependencies <= 0 ||
     !report.advisories ||
     typeof report.advisories !== "object" ||
     Array.isArray(report.advisories)
@@ -16,7 +17,12 @@ function backendAdvisories(report) {
   }
   const matches = new Map();
   for (const advisory of Object.values(report.advisories)) {
-    if (!Array.isArray(advisory.findings) || !(advisory.severity in levels)) {
+    if (
+      !Array.isArray(advisory.findings) ||
+      advisory.findings.length === 0 ||
+      !Object.hasOwn(levels, advisory.severity) ||
+      typeof advisory.url !== "string"
+    ) {
       throw new Error("The registry returned an invalid advisory");
     }
     const paths = advisory.findings.flatMap((finding) => finding.paths);

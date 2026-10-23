@@ -79,7 +79,8 @@ export class BackendStack extends cdk.Stack {
     userData.addCommands(
       "yum update -y",
       "curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -",
-      "yum install -y nodejs git",
+      "dnf clean metadata",
+      "dnf --refresh install -y --setopt=nodesource-nodejs.priority=1 'nodejs-24.*' git",
       "npm install -g pnpm@10",
       "mkdir -p /opt/campaign-forge",
       `cat > /opt/campaign-forge/.env << 'ENVEOF'`,
