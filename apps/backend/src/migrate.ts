@@ -16,6 +16,9 @@ async function migrate() {
     }),
     dir: join(__dirname, "..", "migrations"),
     migrationsTable: "pgmigrations",
+    schema: "public",
+    checkOrder: true,
+    singleTransaction: true,
     direction,
     count: direction === "down" ? 1 : undefined
   });

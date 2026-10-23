@@ -14,15 +14,24 @@ export function databaseConfig(
 
   // pg-connection-string otherwise replaces the explicit ssl object with URL settings.
   for (const key of [
-    "ssl", "sslmode", "sslcert", "sslkey", "sslrootcert", "uselibpqcompat"
+    "ssl",
+    "sslmode",
+    "sslcert",
+    "sslkey",
+    "sslrootcert",
+    "sslnegotiation",
+    "uselibpqcompat"
   ]) {
     url.searchParams.delete(key);
   }
 
   if (options.ssl === "false") {
-    const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    const host = url.searchParams.get("host") || url.hostname;
+    const local = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(host);
     if (process.env.NODE_ENV === "production" || !local) {
-      throw new Error("DATABASE_SSL=false is only allowed for local development");
+      throw new Error(
+        "DATABASE_SSL=false is only allowed for local development"
+      );
     }
     return { connectionString: url.toString(), ssl: false };
   }

@@ -235,7 +235,16 @@ jobs:
   # Summary job
   pr-checks-complete:
     name: PR Checks Complete
-    needs: [changes, test-packages, test-backend, test-migrations, test-frontend, test-landing, validate-infra]
+    needs:
+      [
+        changes,
+        test-packages,
+        test-backend,
+        test-migrations,
+        test-frontend,
+        test-landing,
+        validate-infra
+      ]
     if: always()
     runs-on: ubuntu-latest
     steps:

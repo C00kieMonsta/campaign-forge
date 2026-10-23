@@ -23,7 +23,9 @@ function backendAdvisories(report) {
     if (!paths.every((entry) => typeof entry === "string")) {
       throw new Error("The registry returned invalid dependency paths");
     }
-    const backendPaths = paths.filter((entry) => entry.startsWith("apps__backend>"));
+    const backendPaths = paths.filter((entry) =>
+      entry.startsWith("apps__backend>")
+    );
     if (backendPaths.length && levels[advisory.severity] >= levels.moderate) {
       matches.set(advisory.url, { ...advisory, paths: backendPaths });
     }
@@ -40,18 +42,26 @@ function main() {
     maxBuffer: 16 * 1024 * 1024
   });
   if (result.error || result.signal || ![0, 1].includes(result.status)) {
-    throw new Error(`pnpm audit failed: ${result.error?.message || result.stderr || result.status}`);
+    throw new Error(
+      `pnpm audit failed: ${result.error?.message || result.stderr || result.status}`
+    );
   }
   const matches = backendAdvisories(JSON.parse(result.stdout));
   for (const advisory of matches) {
-    console.error(`${advisory.severity}: ${advisory.module_name}: ${advisory.title}`);
+    console.error(
+      `${advisory.severity}: ${advisory.module_name}: ${advisory.title}`
+    );
     console.error(`  ${advisory.url}\n  ${advisory.paths[0]}`);
   }
   if (matches.length) {
-    console.error(`${matches.length} backend production advisories at moderate severity or above`);
+    console.error(
+      `${matches.length} backend production advisories at moderate severity or above`
+    );
     process.exitCode = 1;
   } else {
-    console.log("No backend production advisories at moderate severity or above");
+    console.log(
+      "No backend production advisories at moderate severity or above"
+    );
   }
 }
 

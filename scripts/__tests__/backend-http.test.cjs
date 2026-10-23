@@ -19,34 +19,51 @@ before(async () => {
   const port = reservation.address().port;
   await new Promise((resolve) => reservation.close(resolve));
   base = `http://127.0.0.1:${port}`;
-  temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "campaign-forge-http-"));
+  temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "campaign-forge-http-")
+  );
   // An empty working directory prevents dotenv from loading development or production secrets.
-  child = spawn(process.execPath, [path.resolve(__dirname, "../../apps/backend/dist/main.js")], {
-    cwd: temporaryDirectory,
-    env: {
-      PATH: process.env.PATH,
-      NODE_ENV: "test",
-      PORT: String(port),
-      AWS_REGION: "eu-north-1",
-      AWS_ACCESS_KEY_ID: "test",
-      AWS_SECRET_ACCESS_KEY: "test",
-      AWS_EC2_METADATA_DISABLED: "true",
-      CONTACTS_TABLE: "test-contacts",
-      CAMPAIGNS_TABLE: "test-campaigns",
-      GROUPS_TABLE: "test-groups",
-      S3_BUCKET: "test-attachments",
-      SES_FROM_EMAIL: "test@example.com",
-      UNSUBSCRIBE_SECRET: "u".repeat(32),
-      JWT_SECRET: "j".repeat(32),
-      ADMIN_CREDENTIALS: JSON.stringify([{ email: "admin@example.com", hash: "test" }]),
-      PUBLIC_BASE_URL: "https://example.com/api"
-    },
-    stdio: ["ignore", "pipe", "pipe"]
-  });
+  child = spawn(
+    process.execPath,
+    [path.resolve(__dirname, "../../apps/backend/dist/main.js")],
+    {
+      cwd: temporaryDirectory,
+      env: {
+        PATH: process.env.PATH,
+        NODE_ENV: "test",
+        PORT: String(port),
+        AWS_REGION: "eu-north-1",
+        AWS_ACCESS_KEY_ID: "test",
+        AWS_SECRET_ACCESS_KEY: "test",
+        AWS_EC2_METADATA_DISABLED: "true",
+        CONTACTS_TABLE: "test-contacts",
+        CAMPAIGNS_TABLE: "test-campaigns",
+        GROUPS_TABLE: "test-groups",
+        S3_BUCKET: "test-attachments",
+        SES_FROM_EMAIL: "test@example.com",
+        UNSUBSCRIBE_SECRET: "u".repeat(32),
+        JWT_SECRET: "j".repeat(32),
+        ADMIN_CREDENTIALS: JSON.stringify([
+          { email: "admin@example.com", hash: "test" }
+        ]),
+        PUBLIC_BASE_URL: "https://example.com/api"
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    }
+  );
   await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Backend did not start: ${output}`)), 20_000);
-    child.once("error", (error) => { clearTimeout(timeout); reject(error); });
-    child.once("exit", (code) => { clearTimeout(timeout); reject(new Error(`Backend exited ${code}: ${output}`)); });
+    const timeout = setTimeout(
+      () => reject(new Error(`Backend did not start: ${output}`)),
+      20_000
+    );
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Backend exited ${code}: ${output}`));
+    });
     for (const stream of [child.stdout, child.stderr]) {
       stream.on("data", (chunk) => {
         output = (output + chunk).slice(-16_000);
@@ -65,7 +82,8 @@ after(async () => {
     child.kill("SIGTERM");
     await exited;
   }
-  if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
+  if (temporaryDirectory)
+    await rm(temporaryDirectory, { recursive: true, force: true });
 });
 
 test("the compiled backend starts and serves health outside the API prefix", async () => {
