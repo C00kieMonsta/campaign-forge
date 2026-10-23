@@ -47,4 +47,3 @@ jobs:
           base: ${{ github.event.pull_request.base.sha || 'HEAD~1' }}
           head: ${{ github.event.pull_request.head.sha || 'HEAD' }}
           extra_args: --only-verified
-

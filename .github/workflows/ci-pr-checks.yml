@@ -121,6 +121,12 @@ jobs:
       - name: Run backend tests
         run: pnpm --filter @apps/backend test
 
+      - name: Build backend
+        run: pnpm build:backend
+
+      - name: Check backend HTTP startup and authentication
+        run: pnpm test:backend-http
+
   test-migrations:
     name: Validate Migrations (if changed)
     needs: changes
