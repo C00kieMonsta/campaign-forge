@@ -39,7 +39,7 @@ export function parseModelJson<S extends ZodTypeAny>(
   const result = schema.safeParse(parsed);
   if (!result.success) {
     throw new ModelOutputError(
-      `The assistant's answer had the wrong shape: ${result.error.errors
+      `The assistant's answer had the wrong shape: ${result.error.issues
         .slice(0, 3)
         .map((e) => `${e.path.join(".")}: ${e.message}`)
         .join("; ")}`,

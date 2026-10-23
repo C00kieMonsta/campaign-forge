@@ -39,14 +39,15 @@ log "Installing system packages..."
 dnf update -y
 dnf install -y git nginx
 
-# ── Node.js 20 via NodeSource ─────────────────────────────────────────────────
-log "Installing Node.js 20..."
-curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+# Install a supported runtime. The deploy also checks the minimum security version.
+log "Installing Node.js 24..."
+curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -
 dnf install -y nodejs
+node -e 'const [major, minor, patch] = process.versions.node.split(".").map(Number); if (major !== 24 || minor < 22 || (minor === 22 && patch < 1)) process.exit(1)'
 
 # ── pnpm ─────────────────────────────────────────────────────────────────────
 log "Installing pnpm..."
-npm install -g pnpm@latest
+npm install -g pnpm@10.8.0
 
 # ── PM2 ──────────────────────────────────────────────────────────────────────
 log "Installing PM2..."

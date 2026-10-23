@@ -113,7 +113,7 @@ export class CampaignsController {
     const parsed = listCampaignsQuerySchema.safeParse(query);
     if (!parsed.success)
       throw new BadRequestException(
-        parsed.error.errors.map((e) => e.message).join(", ")
+        parsed.error.issues.map((e) => e.message).join(", ")
       );
 
     const result = await this.campaigns.list(
@@ -138,7 +138,7 @@ export class CampaignsController {
     const parsed = createCampaignRequestSchema.safeParse(body);
     if (!parsed.success)
       throw new BadRequestException(
-        parsed.error.errors.map((e) => e.message).join(", ")
+        parsed.error.issues.map((e) => e.message).join(", ")
       );
     const campaign = await this.campaigns.create(parsed.data);
     return { ok: true, campaign };
@@ -149,7 +149,7 @@ export class CampaignsController {
     const parsed = updateCampaignRequestSchema.safeParse(body);
     if (!parsed.success)
       throw new BadRequestException(
-        parsed.error.errors.map((e) => e.message).join(", ")
+        parsed.error.issues.map((e) => e.message).join(", ")
       );
 
     const existing = await this.campaigns.getOrFail(id);
@@ -187,7 +187,7 @@ export class CampaignsController {
     const parsed = directTestSendSchema.safeParse(body);
     if (!parsed.success)
       throw new BadRequestException(
-        parsed.error.errors.map((e) => e.message).join(", ")
+        parsed.error.issues.map((e) => e.message).join(", ")
       );
 
     const html = this.token.appendFooter(
@@ -207,7 +207,7 @@ export class CampaignsController {
     const parsed = sendTestRequestSchema.safeParse(body);
     if (!parsed.success)
       throw new BadRequestException(
-        parsed.error.errors.map((e) => e.message).join(", ")
+        parsed.error.issues.map((e) => e.message).join(", ")
       );
 
     const campaign = await this.campaigns.getOrFail(id);

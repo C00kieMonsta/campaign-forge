@@ -78,7 +78,7 @@ export class BackendStack extends cdk.Stack {
     const userData = ec2.UserData.forLinux();
     userData.addCommands(
       "yum update -y",
-      "curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -",
+      "curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -",
       "yum install -y nodejs git",
       "npm install -g pnpm@10",
       "mkdir -p /opt/campaign-forge",

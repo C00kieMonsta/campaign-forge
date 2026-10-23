@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.8.0",
   "engines": {
-    "node": ">=20.0.0 <21.0.0",
+    "node": ">=24.22.1 <25",
     "pnpm": ">=9.0.0"
   },
   "scripts": {
@@ -22,7 +22,9 @@
     "lint:fix": "eslint . --ext .ts,.tsx,.js,.jsx --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "clean-install": "find . -name 'node_modules' -type d -prune -exec rm -rf '{}' + && pnpm install"
+    "clean-install": "find . -name 'node_modules' -type d -prune -exec rm -rf '{}' + && pnpm install",
+    "audit:backend": "node scripts/audit-backend.cjs",
+    "test:security": "node --test scripts/__tests__/audit-backend.test.cjs"
   },
   "lint-staged": {
     "**/*.{js,ts,tsx}": [
@@ -43,11 +45,25 @@
       "@types/react-dom": "18.3.1",
       "@types/node": "20.11.5",
       "sharp": "0.33.5",
-      "zod": "^3.24.4",
+      "zod": "4.6.7",
       "@expo/config-plugins": "~9.0.0",
       "react": "18.3.1",
       "react-dom": "18.3.1",
-      "react-test-renderer": "18.3.1"
+      "react-test-renderer": "18.3.1",
+      "glob@10": "^10.5.0",
+      "glob@11": "^11.1.0",
+      "minimatch@9": "^9.0.7",
+      "brace-expansion@2": "^2.1.7",
+      "brace-expansion@5": "^5.0.12",
+      "lodash": "^4.18.0",
+      "fflate": "^0.8.3",
+      "form-data@4": "^4.0.6",
+      "ws@8": "^8.21.0",
+      "uuid@9": "^11.1.1",
+      "@xmldom/xmldom@0.8": "^0.8.15",
+      "fast-xml-parser@5": "^5.7.0",
+      "proxy-addr@2": "^2.0.8",
+      "qs@6": "^6.16.1"
     }
   },
   "devDependencies": {
@@ -69,7 +85,5 @@
     "ts-jest": "^29.1.0"
   },
   "version": "1.0.0",
-  "dependencies": {
-    "zod-to-json-schema": "^3.24.6"
-  }
+  "dependencies": {}
 }

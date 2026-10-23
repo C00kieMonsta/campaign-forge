@@ -28,7 +28,7 @@ export class PublicController {
   @Post("subscribe")
   async subscribe(@Body() body: unknown) {
     const parsed = subscribeRequestSchema.safeParse(body);
-    if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues.map((e) => e.message).join(", "));
 
     const { email, firstName, lastName } = parsed.data;
     const emailLower = email.toLowerCase().trim();

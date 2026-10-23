@@ -178,6 +178,9 @@ jobs:
       - name: Build backend
         run: pnpm --filter @apps/backend build
 
+      - name: Audit backend production dependencies
+        run: pnpm audit:backend
+
       - name: Backup current backend on EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -207,7 +210,7 @@ jobs:
           # apps/frontend/package.json on the box fails the install the moment a frontend
           # dependency changes (ERR_PNPM_OUTDATED_LOCKFILE) — even though the backend does not
           # use it. apps/backend/migrations/ ships so schema changes can be applied on the box.
-          source: "apps/backend/dist/,apps/backend/package.json,apps/backend/migrations/,scripts/nginx/,apps/frontend/package.json,apps/landing/package.json,packages/types/dist/,packages/types/package.json,packages/ui/package.json,packages/utils/package.json,infrastructure/package.json,package.json,pnpm-lock.yaml,pnpm-workspace.yaml"
+          source: "apps/backend/dist/,apps/backend/package.json,apps/backend/migrations/,scripts/nginx/,scripts/install-node-runtime.sh,.nvmrc,apps/frontend/package.json,apps/landing/package.json,packages/types/dist/,packages/types/package.json,packages/ui/package.json,packages/utils/package.json,infrastructure/package.json,package.json,pnpm-lock.yaml,pnpm-workspace.yaml"
           target: "/home/ec2-user/campaign-forge/"
           tar_dereference: true
           overwrite: true
@@ -224,6 +227,9 @@ jobs:
             REGION="eu-north-1"
             PREFIX="/campaign-forge/production"
             APP_DIR="/home/ec2-user/campaign-forge"
+
+            echo "Checking the backend Node.js security version..."
+            sudo bash "${APP_DIR}/scripts/install-node-runtime.sh"
 
             echo "🔑 Refreshing secrets from SSM..."
             ssm_get() {
@@ -301,7 +307,7 @@ jobs:
             if [ -n "$DB_URL" ]; then
               echo "🗄️ Applying database migrations..."
               cd "${APP_DIR}/apps/backend"
-              DATABASE_URL="$DB_URL" pnpm exec node-pg-migrate up
+              DATABASE_URL="$DB_URL" NODE_ENV=production node dist/migrate.js up
               cd "${APP_DIR}"
               echo "✅ Migrations applied"
             else
@@ -309,9 +315,10 @@ jobs:
             fi
 
             echo "♻️ Restarting backend with PM2..."
-            pm2 restart campaign-forge-api || pm2 start ${APP_DIR}/apps/backend/dist/main.js \
+            pm2 restart campaign-forge-api --interpreter "$(command -v node)" --update-env || pm2 start ${APP_DIR}/apps/backend/dist/main.js \
               --name campaign-forge-api \
               --cwd "${APP_DIR}/apps/backend" \
+              --interpreter "$(command -v node)" \
               --env production
             pm2 save
 

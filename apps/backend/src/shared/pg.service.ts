@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
 import { ConfigService } from "../config/config.service";
+import { databaseConfig } from "./database-config";
 
 /**
  * Thin wrapper around a single `pg` connection pool for the Lex PostgreSQL (RDS + pgvector)
@@ -30,16 +31,14 @@ export class PgService implements OnModuleDestroy {
       );
     }
 
-    // RDS terminates TLS with an AWS-managed cert. `rejectUnauthorized: false` accepts it
-    // without bundling the RDS CA yet; Phase 1 should pin the RDS CA bundle for verification.
-    const sslDisabled = this.config.get("DATABASE_SSL") === "false";
-
     this.pool = new Pool({
-      connectionString,
+      ...databaseConfig(connectionString, {
+        ssl: this.config.get("DATABASE_SSL"),
+        caFile: this.config.get("DATABASE_SSL_CA_FILE")
+      }),
       max: 8,
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
-      ssl: sslDisabled ? undefined : { rejectUnauthorized: false }
+      connectionTimeoutMillis: 10_000
     });
 
     // Never let a background pool error crash the process.

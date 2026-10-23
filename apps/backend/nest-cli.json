@@ -3,6 +3,7 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
+    "assets": ["shared/certs/*.pem"],
     "builder": "swc",
     "typeCheck": true
   }

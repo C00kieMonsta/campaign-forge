@@ -82,6 +82,8 @@ Thumbs.db
 *.tmp
 *.temp
 *.pem
+!apps/backend/src/shared/certs/eu-north-1-bundle.pem
+!apps/backend/.env.example
 
 # Vercel
 .vercel

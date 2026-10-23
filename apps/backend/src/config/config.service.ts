@@ -32,6 +32,7 @@ const schema = z.object({
   // on first use, and simply return an error to Lex callers if unconfigured.
   DATABASE_URL: emptyAsUndefined(z.string().url().optional()),
   DATABASE_SSL: emptyAsUndefined(z.string().default("true")),
+  DATABASE_SSL_CA_FILE: emptyAsUndefined(z.string().optional()),
   OPENAI_API_KEY: emptyAsUndefined(z.string().optional()),
   OPENAI_API_KEY_SECRET_ARN: emptyAsUndefined(z.string().optional()),
   // No chat-model keys here on purpose: the roster lives in @packages/types/models, where the

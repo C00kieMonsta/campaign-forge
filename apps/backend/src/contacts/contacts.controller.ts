@@ -32,7 +32,7 @@ export class ContactsController {
   @Get()
   async list(@Query() query: Record<string, string>) {
     const parsed = listContactsQuerySchema.safeParse(query);
-    if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues.map((e) => e.message).join(", "));
     return this.contacts.list(parsed.data);
   }
 
@@ -62,7 +62,7 @@ export class ContactsController {
   @Post()
   async create(@Body() body: unknown) {
     const parsed = createContactRequestSchema.safeParse(body);
-    if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues.map((e) => e.message).join(", "));
     const contact = await this.contacts.create(parsed.data);
     return { ok: true, contact };
   }
@@ -70,7 +70,7 @@ export class ContactsController {
   @Patch(":emailLower")
   async update(@Param("emailLower") emailLower: string, @Body() body: unknown) {
     const parsed = updateContactRequestSchema.safeParse(body);
-    if (!parsed.success) throw new BadRequestException(parsed.error.errors.map((e) => e.message).join(", "));
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues.map((e) => e.message).join(", "));
 
     const existing = await this.contacts.getOrFail(decodeURIComponent(emailLower));
     const { status, ...rest } = parsed.data;

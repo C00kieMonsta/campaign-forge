@@ -310,7 +310,7 @@ export class CampaignAssistantService {
     });
     if (!finished.success) {
       throw new ModelOutputError(
-        `The draft is not usable after cleaning: ${finished.error.errors
+        `The draft is not usable after cleaning: ${finished.error.issues
           .slice(0, 3)
           .map((e) => `${e.path.join(".")}: ${e.message}`)
           .join("; ")}`,
